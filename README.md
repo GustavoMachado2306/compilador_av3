@@ -27,11 +27,11 @@ Análise Semântica
 ## 2. Subconjunto da Linguagem
 
 - **Tipos**: `int`, `String`
-- **Literais**: Números inteiros (ex.: `10`) e strings delimitadas por aspas duplas (ex.: `"Gustavo"`).
+- **Literais**: Números inteiros (ex.: `10`) e strings delimitadas por aspas duplas (ex.: `"João"`).
 - **Identificadores**: Iniciam com letra ou `_`, seguidos de letras, dígitos ou `_`.
 - **Comandos**:
   - Declaração simples: `int x;`, `String nome;`
-  - Declaração com inicialização: `int x = 10;`, `String nome = "Gustavo";`
+  - Declaração com inicialização: `int x = 10;`, `String nome = "João";`
   - Atribuição: `x = 20;`, `nome = "Maria";`
 - **Expressões**: Literais, identificadores, parênteses `( )` e operadores aritméticos numéricos `+` e `-`.
 
