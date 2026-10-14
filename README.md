@@ -1,6 +1,6 @@
 # compilador_av3
 
-Compilador e analisador didático desenvolvido em Python para a avaliação AV3 da disciplina de Compiladores. O projeto implementa um subconjunto restrito, previsível e robusto de uma linguagem imperativa inspirada em Java/C.
+Compilador e analisador didático desenvolvido em Python para a avaliação AV3 da disciplina de Compiladores. O projeto implementa um subconjunto restrito, previsível e robusto de uma linguagem imperativa inspirada em Java.
 
 ---
 
