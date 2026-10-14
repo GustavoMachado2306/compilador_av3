@@ -110,8 +110,6 @@ Para iniciar a aplicação visual do compilador:
 python -m src.gui
 ```
 
-> **Apresentação**: A interface inicia com o editor completamente **vazio**. O usuário deve abrir o arquivo `.java` ou `.c` fornecido externamente pelo professor (via botão **Abrir** / `Ctrl+O`) ou digitar/colar o código no editor, e em seguida pressionar **Analisar** (`F5`). O projeto é independente de arquivos de exemplo fixos.
-
 #### Recursos da Interface Gráfica:
 - **Editor de Código**: Área de texto monoespaçada com numeração de linhas, rolagem bidirecional, suporte a abrir e salvar arquivos `.java`, `.c` e `.txt`.
 - **Pipeline de Análise**: Execução integrada sobre o código carregado sem travar a interface e com isolamento total de estado entre execuções.
