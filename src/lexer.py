@@ -5,8 +5,71 @@ reconhecendo comentários, delimitadores, operadores, palavras-chave,
 literais booleanos/nulos, números inteiros/reais e literais de texto/char.
 """
 
+import re
 from typing import List, Optional
 from .token import Token, TokenType
+
+# =============================================================================
+# EXPRESSÕES REGULARES DE LITERAIS NUMÉRICOS JAVA
+# A regra de validação de hexadecimal (HEX_INT_REGEX) é definida e executada
+# ANTES da regra de float/double para garantir que sufixos/dígitos como 'F'/'f'
+# ou 'D'/'d' (ex: '0x0F', '0xFF') não acionem a tipagem de ponto flutuante por engano.
+# =============================================================================
+
+# Regra 1: Literais inteiros hexadecimais (iniciam com 0x ou 0X, seguidos de 0-9 e a-f/A-F)
+HEX_INT_REGEX = re.compile(
+    r"^0[xX][0-9a-fA-F]+(?:_[0-9a-fA-F]+)*[lL]?$"
+)
+HEX_REGEX = HEX_INT_REGEX
+HEX_INTEGER_REGEX = HEX_INT_REGEX
+HEXADECIMAL_REGEX = HEX_INT_REGEX
+
+# Regra 2: Literais de ponto flutuante (float / double)
+FLOAT_DOUBLE_REGEX = re.compile(
+    r"""
+    ^ (
+        # Formato decimal com ponto (ex: 3.1415, 2.0, 10.)
+        \d+(?:_\d+)* \. (?:\d+(?:_\d+)*)? (?:[eE][+-]?\d+(?:_\d+)*)? [fFdD]?
+        |
+        # Formato iniciado diretamente por ponto (ex: .5, .5f, .5e-3)
+        \. \d+(?:_\d+)* (?:[eE][+-]?\d+(?:_\d+)*)? [fFdD]?
+        |
+        # Notação científica sem ponto (ex: 1e10, 2E+5)
+        \d+(?:_\d+)* [eE][+-]?\d+(?:_\d+)* [fFdD]?
+        |
+        # Inteiro com sufixo explícito float/double (ex: 10f, 10d)
+        \d+(?:_\d+)* [fFdD]
+        |
+        # Hexadecimal de ponto flutuante com expoente binário obrigatório (ex: 0x1.0p0, 0x1p-2, 0x1.fp3f)
+        0[xX] (?:
+            [0-9a-fA-F]+(?:_[0-9a-fA-F]+)* \. (?:[0-9a-fA-F]+(?:_[0-9a-fA-F]+)*)?
+            |
+            [0-9a-fA-F]+(?:_[0-9a-fA-F]+)*
+            |
+            \. [0-9a-fA-F]+(?:_[0-9a-fA-F]+)*
+        ) [pP][+-]?\d+(?:_\d+)* [fFdD]?
+    ) $
+    """,
+    re.VERBOSE
+)
+FLOAT_REGEX = FLOAT_DOUBLE_REGEX
+DOUBLE_REGEX = FLOAT_DOUBLE_REGEX
+
+
+def classify_number(lexeme: str) -> TokenType:
+    """
+    Classifica um lexema numérico de acordo com a precedência estrita de regras Java.
+    A validação da regra de hexadecimal (HEX_INT_REGEX) ocorre ANTES da regra de float/double,
+    assegurando que literais como '0x0F' sejam tipados como INT e não como float.
+    """
+    # 1. Regra de Hexadecimal Inteiro ANTES de float/double
+    if HEX_INT_REGEX.match(lexeme):
+        return TokenType.INT
+    # 2. Regra de Ponto Flutuante (Float / Double)
+    if FLOAT_DOUBLE_REGEX.match(lexeme):
+        return TokenType.FLOAT if lexeme.endswith(('f', 'F')) else TokenType.DOUBLE
+    # 3. Demais inteiros (decimais, binários, octais)
+    return TokenType.INT
 
 # =============================================================================
 # SEÇÃO 1: MAPEAMENTO DE PALAVRAS-CHAVE E LITERAIS JAVA
@@ -93,6 +156,25 @@ class LexicalError(Exception):
     def _format_message(self) -> str:
         return f"[ERRO LÉXICO]\nLinha {self.line}, coluna {self.column}:\n{self.message}"
 
+    def __getitem__(self, key: str):
+        if key in ("line", "column", "character", "message", "tokens"):
+            return getattr(self, key)
+        raise KeyError(key)
+
+    def keys(self):
+        return ("line", "column", "character", "message", "tokens")
+
+    def __iter__(self):
+        yield from ("line", "column", "character", "message", "tokens")
+
+    def to_dict(self):
+        return {
+            "line": self.line,
+            "column": self.column,
+            "character": self.character,
+            "message": self.message,
+        }
+
 
 # =============================================================================
 # SEÇÃO 3: CLASSE PRINCIPAL DO ANALISADOR LÉXICO (LEXER)
@@ -102,13 +184,19 @@ class Lexer:
     Analisador léxico para Java incremental (Fase A).
     Suporta espaços, quebras de linha (CRLF e LF), comentários de linha, bloco e Javadoc,
     delimitadores, operadores de tamanho variável (longest match), números e textos.
+    Possui recuperação e tolerância a falhas para caracteres inválidos.
     """
+    HEX_INT_REGEX = HEX_INT_REGEX
+    FLOAT_DOUBLE_REGEX = FLOAT_DOUBLE_REGEX
+    classify_number = staticmethod(classify_number)
+
     def __init__(self, source: str):
         self.source = source if source is not None else ""
         self.pos = 0          # Posição absoluta do ponteiro no texto
         self.line = 1         # Linha atual (inicia em 1)
         self.column = 1       # Coluna atual (inicia em 1)
         self.tokens = []      # Lista de tokens acumulados
+        self.errors = []      # Lista de erros léxicos acumulados
 
     # -------------------------------------------------------------------------
     # 3.1 MÉTODOS AUXILIARES DE NAVEGAÇÃO E INSPEÇÃO
@@ -144,10 +232,14 @@ class Lexer:
     # -------------------------------------------------------------------------
     def tokenize(self) -> List[Token]:
         """
-        Executa a varredura completa da entrada e retorna a lista de tokens.
-        Lança LexicalError imediatamente ao encontrar qualquer caractere ou literal inválido.
+        Executa a varredura completa da entrada e retorna a lista de tokens até EOF.
+        Ao esbarrar em um caractere inválido, salva o erro (com linha, coluna
+        e o caractere problemático), avança o ponteiro ignorando o caractere inválido
+        e continua processando o restante do código até o final (EOF).
         """
         tokens = []
+        self.errors = []
+        self.tokens = []
 
         while not self._is_at_end():
             c = self._peek()
@@ -236,14 +328,14 @@ class Lexer:
                 continue
 
             # -----------------------------------------------------------------
-            # 3.2.5 Identificadores e Palavras-chave
+            # 3.2.5 Identificadores e Palavras-chave (permite '$' e '_')
             # -----------------------------------------------------------------
-            if c.isalpha() or c == '_':
+            if c.isalpha() or c in ('_', '$'):
                 start_line = self.line
                 start_col = self.column
                 start_pos = self.pos
 
-                while not self._is_at_end() and (self._peek().isalnum() or self._peek() == '_'):
+                while not self._is_at_end() and (self._peek().isalnum() or self._peek() in ('_', '$')):
                     self.pos += 1
                     self.column += 1
 
@@ -376,24 +468,31 @@ class Lexer:
                 continue
 
             # -----------------------------------------------------------------
-            # 3.2.10 Caractere Inválido (Erro Léxico Estruturado)
+            # 3.2.10 Caractere Inválido (Tolerância a Falhas / Recuperação de Erro)
             # -----------------------------------------------------------------
             col = self.column
+            problem_char = c
             self.pos += 1
             self.column += 1
-            self.tokens = list(tokens)
-            raise LexicalError(
-                f"Caractere inválido: {c!r}.",
+
+            err = LexicalError(
+                f"Caractere inválido: {problem_char!r}.",
                 self.line,
                 col,
-                character=c,
-                tokens=tokens
+                character=problem_char,
+                tokens=list(tokens)
             )
+            self.errors.append(err)
+            continue
 
         # Token final de encerramento do arquivo
         tokens.append(Token(TokenType.EOF, "", self.line, self.column))
         self.tokens = tokens
         return tokens
+
+    def get_errors(self) -> List[LexicalError]:
+        """Retorna a lista de erros léxicos acumulados durante a varredura."""
+        return self.errors
 
     # -------------------------------------------------------------------------
     # 3.3 RECONHECIMENTO DE NÚMEROS E VALIDAÇÃO DE SUFIXOS E UNDERSCORES
@@ -424,6 +523,9 @@ class Lexer:
 
             hex_digits = 0
             last_was_underscore = False
+            has_hex_dot = False
+            has_hex_p = False
+
             while not self._is_at_end():
                 ch = self._peek()
                 if ch in "0123456789abcdefABCDEF":
@@ -435,6 +537,57 @@ class Lexer:
                     last_was_underscore = True
                     self.pos += 1
                     self.column += 1
+                elif ch == '.' and not has_hex_dot and not has_hex_p:
+                    if self._peek(1) == '.' and self._peek(2) == '.':
+                        break
+                    if last_was_underscore:
+                        self.tokens = list(current_tokens)
+                        raise LexicalError(
+                            "Underscore não permitido antes do ponto decimal.",
+                            start_line,
+                            self.column - 1,
+                            tokens=current_tokens
+                        )
+                    has_hex_dot = True
+                    self.pos += 1
+                    self.column += 1
+                    if self._peek() == '_':
+                        self.tokens = list(current_tokens)
+                        raise LexicalError(
+                            "Underscore não permitido após o ponto decimal.",
+                            start_line,
+                            self.column,
+                            tokens=current_tokens
+                        )
+                elif ch in ('p', 'P') and not has_hex_p:
+                    if last_was_underscore:
+                        self.tokens = list(current_tokens)
+                        raise LexicalError(
+                            "Underscore não permitido antes do indicador de expoente 'p'.",
+                            start_line,
+                            self.column - 1,
+                            tokens=current_tokens
+                        )
+                    has_hex_p = True
+                    self.pos += 1
+                    self.column += 1
+                    if self._peek() in ('+', '-'):
+                        self.pos += 1
+                        self.column += 1
+                    exp_digits = 0
+                    while not self._is_at_end() and self._peek().isdigit():
+                        exp_digits += 1
+                        self.pos += 1
+                        self.column += 1
+                    if exp_digits == 0:
+                        self.tokens = list(current_tokens)
+                        raise LexicalError(
+                            "Notação científica malformada: esperado ao menos um dígito no expoente.",
+                            start_line,
+                            self.column,
+                            tokens=current_tokens
+                        )
+                    break
                 else:
                     break
 
@@ -456,13 +609,48 @@ class Lexer:
                     tokens=current_tokens
                 )
 
-            # Sufixo opcional de Long (L ou l)
-            if self._peek() in ('L', 'l'):
-                self.pos += 1
-                self.column += 1
+            if has_hex_dot and not has_hex_p:
+                self.tokens = list(current_tokens)
+                raise LexicalError(
+                    "Ponto flutuante hexadecimal deve conter expoente binário 'p' ou 'P'.",
+                    start_line,
+                    start_col,
+                    tokens=current_tokens
+                )
+
+            if has_hex_p:
+                if self._peek() in ('f', 'F', 'd', 'D'):
+                    self.pos += 1
+                    self.column += 1
+                elif self._peek() in ('l', 'L'):
+                    self.tokens = list(current_tokens)
+                    raise LexicalError(
+                        "Sufixo 'L' não é permitido em literais de ponto flutuante.",
+                        start_line,
+                        self.column,
+                        tokens=current_tokens
+                    )
+            else:
+                # Sufixo opcional de Long (L ou l)
+                if self._peek() in ('L', 'l'):
+                    self.pos += 1
+                    self.column += 1
 
             lexeme = self.source[start_pos:self.pos]
-            return Token(TokenType.NUMBER, lexeme, start_line, start_col)
+
+            # -----------------------------------------------------------------
+            # REGRA 1: Validação de Hexadecimal Inteiro ANTES de Float/Double.
+            # Garante que '0x0F', '0xFF', etc. sejam classificados como INT,
+            # impedindo que o dígito ou sufixo 'F'/'f' acione tipagem float por engano.
+            # -----------------------------------------------------------------
+            if HEX_INT_REGEX.match(lexeme):
+                return Token(TokenType.INT, lexeme, start_line, start_col)
+
+            if has_hex_p or FLOAT_DOUBLE_REGEX.match(lexeme):
+                tok_type = TokenType.FLOAT if lexeme.endswith(('f', 'F')) else TokenType.DOUBLE
+                return Token(tok_type, lexeme, start_line, start_col)
+
+            return Token(TokenType.INT, lexeme, start_line, start_col)
 
         # Caso 2: Binário (0b / 0B)
         if self._peek() == '0' and self._peek(1) in ('b', 'B'):
@@ -519,7 +707,7 @@ class Lexer:
                 self.column += 1
 
             lexeme = self.source[start_pos:self.pos]
-            return Token(TokenType.NUMBER, lexeme, start_line, start_col)
+            return Token(TokenType.INT, lexeme, start_line, start_col)
 
         # Caso 3: Decimal, Octal ou Ponto Flutuante
         has_dot = False
@@ -633,13 +821,14 @@ class Lexer:
 
         lexeme = self.source[start_pos:self.pos]
 
-        # Validação de literais octais inválidos (ex: 088 sem ponto ou expoente)
+        # Validação de literais octais inválidos (ex: 088 ou 088L sem ponto ou expoente)
+        clean_lexeme = lexeme.rstrip('lL')
+        is_float = has_dot or has_exp or lexeme.endswith(('f', 'F', 'd', 'D'))
         if (
-            not has_dot and not has_exp
-            and len(lexeme) > 1
-            and lexeme.startswith('0')
-            and not lexeme.endswith(('f', 'F', 'd', 'D', 'l', 'L'))
-            and any(c in ('8', '9') for c in lexeme)
+            not is_float
+            and len(clean_lexeme) > 1
+            and clean_lexeme.startswith('0')
+            and any(c in ('8', '9') for c in clean_lexeme)
         ):
             self.tokens = list(current_tokens)
             raise LexicalError(
@@ -649,7 +838,20 @@ class Lexer:
                 tokens=current_tokens
             )
 
-        return Token(TokenType.NUMBER, lexeme, start_line, start_col)
+        # -----------------------------------------------------------------
+        # REGRA 1: Validação de Hexadecimal Inteiro ANTES de Float/Double
+        # -----------------------------------------------------------------
+        if HEX_INT_REGEX.match(lexeme):
+            return Token(TokenType.INT, lexeme, start_line, start_col)
+
+        # -----------------------------------------------------------------
+        # REGRA 2: Ponto Flutuante (Float / Double)
+        # -----------------------------------------------------------------
+        if is_float or FLOAT_DOUBLE_REGEX.match(lexeme):
+            tok_type = TokenType.FLOAT if lexeme.endswith(('f', 'F')) else TokenType.DOUBLE
+            return Token(tok_type, lexeme, start_line, start_col)
+
+        return Token(TokenType.INT, lexeme, start_line, start_col)
 
     # -------------------------------------------------------------------------
     # 3.4 RECONHECIMENTO DE STRINGS COM ESCAPES
@@ -684,6 +886,20 @@ class Lexer:
                     chars.append(escape_map[next_ch])
                     self.pos += 1
                     self.column += 1
+                    continue
+                elif next_ch in "01234567":
+                    octal_digits = [next_ch]
+                    self.pos += 1
+                    self.column += 1
+                    max_extra = 2 if next_ch in "0123" else 1
+                    for _ in range(max_extra):
+                        if not self._is_at_end() and self._peek() in "01234567":
+                            octal_digits.append(self._peek())
+                            self.pos += 1
+                            self.column += 1
+                        else:
+                            break
+                    chars.append(chr(int("".join(octal_digits), 8)))
                     continue
                 elif next_ch == 'u':
                     # Suporte a escape Unicode \uXXXX
@@ -797,6 +1013,19 @@ class Lexer:
                 char_val = escape_map[next_ch]
                 self.pos += 1
                 self.column += 1
+            elif next_ch in "01234567":
+                octal_digits = [next_ch]
+                self.pos += 1
+                self.column += 1
+                max_extra = 2 if next_ch in "0123" else 1
+                for _ in range(max_extra):
+                    if not self._is_at_end() and self._peek() in "01234567":
+                        octal_digits.append(self._peek())
+                        self.pos += 1
+                        self.column += 1
+                    else:
+                        break
+                char_val = chr(int("".join(octal_digits), 8))
             elif next_ch == 'u':
                 self.pos += 1
                 self.column += 1
@@ -813,10 +1042,6 @@ class Lexer:
                         esc_col,
                         tokens=current_tokens
                     )
-            elif next_ch == '0':
-                char_val = '\0'
-                self.pos += 1
-                self.column += 1
             else:
                 self.tokens = list(current_tokens)
                 raise LexicalError(

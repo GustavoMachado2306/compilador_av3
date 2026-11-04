@@ -19,13 +19,14 @@ class AnalysisResult:
     ast: Optional[Program] = None
     symbol_table: Optional[SymbolTable] = None
     lexical_error: Optional[LexicalError] = None
+    lexical_errors: List[LexicalError] = field(default_factory=list)
     syntactic_error: Optional[SyntacticError] = None
     semantic_errors: List[str] = field(default_factory=list)
     success: bool = False
 
     @property
     def has_errors(self) -> bool:
-        return bool(self.lexical_error or self.syntactic_error or self.semantic_errors)
+        return bool(self.lexical_error or self.lexical_errors or self.syntactic_error or self.semantic_errors)
 
 
 def analyze_source(source: str) -> AnalysisResult:
@@ -40,7 +41,13 @@ def analyze_source(source: str) -> AnalysisResult:
         result.tokens = lexer.tokenize()
     except LexicalError as err:
         result.lexical_error = err
+        result.lexical_errors = [err]
         result.tokens = err.tokens or getattr(lexer, "tokens", [])
+        return result
+
+    if lexer.errors:
+        result.lexical_error = lexer.errors[0]
+        result.lexical_errors = list(lexer.errors)
         return result
 
     # 2. Análise Sintática
@@ -118,7 +125,11 @@ def run_file(path):
     print("\n=== ANÁLISE LÉXICA ===")
     for token in result.tokens:
         print(token)
-    if result.lexical_error:
+    if result.lexical_errors:
+        for err in result.lexical_errors:
+            print(f"\n{err}")
+        return 1
+    elif result.lexical_error:
         print(f"\n{result.lexical_error}")
         return 1
 

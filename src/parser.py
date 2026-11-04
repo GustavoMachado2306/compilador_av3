@@ -1056,7 +1056,7 @@ class Parser:
     # -------------------------------------------------------------------------
     def statement(self) -> ASTNode:
         """Processa declarações e atribuições didáticas de nível superior."""
-        if self.check(TokenType.KEYWORD_INT) or (
+        if self.peek().type in PRIMITIVE_TYPE_TOKENS or (
             self.check(TokenType.IDENTIFIER) and self._is_local_declaration()
         ):
             return self.declaration()
@@ -1461,7 +1461,8 @@ class Parser:
                 if idx + 1 < len(self.tokens):
                     after = self.tokens[idx + 1]
                     valid_cast_starters = {
-                        TokenType.IDENTIFIER, TokenType.NUMBER, TokenType.STRING_LITERAL,
+                        TokenType.IDENTIFIER, TokenType.INT, TokenType.NUMBER, TokenType.DOUBLE, TokenType.FLOAT,
+                        TokenType.STRING_LITERAL,
                         TokenType.CHAR_LITERAL, TokenType.BOOLEAN_LITERAL, TokenType.NULL_LITERAL,
                         TokenType.KEYWORD_THIS, TokenType.KEYWORD_SUPER, TokenType.KEYWORD_NEW,
                         TokenType.LPAREN, TokenType.LOGICAL_NOT, TokenType.BITWISE_NOT,
@@ -1585,10 +1586,18 @@ class Parser:
             tok = self.advance()
             return Identifier(tok.lexeme, line=tok.line, column=tok.column)
 
-        # 4. Literais numéricos, string, caractere, booleano e nulo
-        if self.check(TokenType.NUMBER):
+        # 4. Literais numéricos (inteiros, double, float), string, caractere, booleano e nulo
+        if self.check(TokenType.INT) or self.check(TokenType.NUMBER):
             tok = self.advance()
             return Literal(tok.lexeme, "NUM", line=tok.line, column=tok.column)
+
+        if self.check(TokenType.DOUBLE):
+            tok = self.advance()
+            return Literal(tok.lexeme, "DOUBLE", line=tok.line, column=tok.column)
+
+        if self.check(TokenType.FLOAT):
+            tok = self.advance()
+            return Literal(tok.lexeme, "FLOAT", line=tok.line, column=tok.column)
 
         if self.check(TokenType.STRING_LITERAL):
             tok = self.advance()

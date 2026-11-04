@@ -74,7 +74,10 @@ class TokenType(Enum):
     # SEÇÃO 3: IDENTIFICADORES E LITERAIS
     # =========================================================================
     IDENTIFIER = auto()           # Nomes de variáveis, métodos, classes
-    NUMBER = auto()               # Números decimais, hex, bin, oct, ponto flutuante
+    INT = auto()                  # Literal inteiro (decimal, hex, bin, oct)
+    NUMBER = INT                  # Alias para retrocompatibilidade com subconjunto didático
+    DOUBLE = auto()               # Literais de ponto flutuante double (ex: 3.1415, 2.0)
+    FLOAT = auto()                # Literais de ponto flutuante float (ex: 1.23f)
     STRING_LITERAL = auto()       # Texto delimitado por aspas duplas: "..."
     CHAR_LITERAL = auto()         # Caractere delimitado por aspas simples: '...'
     BOOLEAN_LITERAL = auto()      # Literais booleanos: 'true', 'false'
@@ -160,9 +163,12 @@ class TokenType(Enum):
     EOF = auto()
 
     # Aliases mantidos para compatibilidade retroativa total
-    INT = KEYWORD_INT
+    INT_KEYWORD = KEYWORD_INT
     STRING = KEYWORD_STRING
     ID = IDENTIFIER
+    INT_LITERAL = INT
+    DOUBLE_LITERAL = DOUBLE
+    FLOAT_LITERAL = FLOAT
 
 
 @dataclass

@@ -464,7 +464,10 @@ class CompiladorGUI(tk.Tk):
             # 5. Preenchimento da Aba Geral de Erros
             if result.has_errors:
                 erros_lista = []
-                if result.lexical_error:
+                if result.lexical_errors:
+                    for le in result.lexical_errors:
+                        erros_lista.append(str(le))
+                elif result.lexical_error:
                     erros_lista.append(str(result.lexical_error))
                 if result.syntactic_error:
                     erros_lista.append(str(result.syntactic_error))

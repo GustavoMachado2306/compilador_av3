@@ -323,16 +323,48 @@ class SemanticAnalyzer:
                             line,
                         )
                     )
-                elif left_type and right_type and left_type not in ("Object", "desconhecido") and right_type not in ("Object", "desconhecido") and (left_type != "int" or right_type != "int"):
-                    self.errors.append(
-                        SemanticError(
-                            f"Operação aritmética '{node.op}' inválida entre tipos '{left_type}' e '{right_type}'.",
-                            line,
+                else:
+                    numeric_types = {"int", "double", "float", "long", "short", "byte"}
+                    if (
+                        left_type
+                        and right_type
+                        and left_type not in ("Object", "desconhecido")
+                        and right_type not in ("Object", "desconhecido")
+                        and not (left_type in numeric_types and right_type in numeric_types)
+                    ):
+                        self.errors.append(
+                            SemanticError(
+                                f"Operação aritmética '{node.op}' inválida entre tipos '{left_type}' e '{right_type}'.",
+                                line,
+                            )
                         )
-                    )
+
+    def is_assignable(self, target_type: str, source_type: str) -> bool:
+        """
+        Verifica compatibilidade de atribuição entre o tipo alvo e o da expressão,
+        suportando as regras de promoção implícita (widening primitive conversion) do Java:
+        byte -> short -> int -> long -> float -> double
+        char -> int
+        """
+        if not target_type or not source_type:
+            return True
+        if target_type == source_type:
+            return True
+        widening_map = {
+            "double": {"int", "float", "long", "short", "byte", "char"},
+            "float": {"int", "long", "short", "byte", "char"},
+            "long": {"int", "short", "byte", "char"},
+            "int": {"short", "byte", "char"},
+            "short": {"byte"},
+        }
+        if target_type in widening_map and source_type in widening_map[target_type]:
+            return True
+        if target_type in ("Object", "desconhecido") or source_type in ("Object", "desconhecido"):
+            return True
+        return False
 
     def infer_type(self, node: Optional[ASTNode]) -> Optional[str]:
-        """Inferência simples de tipos para expressões primitivas."""
+        """Inferência simples de tipos para expressões primitivas com suporte a widening."""
         if node is None:
             return None
         if isinstance(node, Literal):
@@ -342,6 +374,21 @@ class SemanticAnalyzer:
                 return "boolean"
             if node.kind == "CHAR":
                 return "char"
+            if node.kind == "DOUBLE":
+                return "double"
+            if node.kind == "FLOAT":
+                return "float"
+            if node.kind in ("NUM", "INT"):
+                val_str = str(node.value)
+                # Hexadecimais inteiros (ex: 0x0F, 0xFF) são int e não devem ser
+                # classificados como float apenas por terminarem em 'F'/'f' ou 'D'/'d'.
+                if val_str.startswith(("0x", "0X")) and not any(c in val_str for c in ('p', 'P', '.')):
+                    return "int"
+                if "." in val_str or "e" in val_str.lower() or val_str.endswith(("f", "F", "d", "D")):
+                    if val_str.endswith(("f", "F")):
+                        return "float"
+                    return "double"
+                return "int"
             return "int"
         if isinstance(node, Identifier):
             symbol = self.symbols.lookup(node.name)
@@ -352,7 +399,15 @@ class SemanticAnalyzer:
             return node.target_type.name if hasattr(node.target_type, "name") else str(node.target_type)
         if isinstance(node, ConditionalExpression):
             then_t = self.infer_type(node.then_expr)
-            return then_t if then_t else self.infer_type(node.else_expr)
+            else_t = self.infer_type(node.else_expr)
+            if then_t and else_t:
+                if then_t == else_t:
+                    return then_t
+                if "double" in (then_t, else_t):
+                    return "double"
+                if "float" in (then_t, else_t):
+                    return "float"
+            return then_t if then_t else else_t
         if isinstance(node, UnaryOp):
             if node.op == "!":
                 return "boolean"
@@ -362,15 +417,23 @@ class SemanticAnalyzer:
                 return "boolean"
             left = self.infer_type(node.left)
             right = self.infer_type(node.right)
-            if left == "int" and right == "int":
-                return "int"
-            return None
+            if left and right:
+                # Promoção binária aritmética oficial do Java (widening)
+                if "double" in (left, right):
+                    return "double"
+                if "float" in (left, right):
+                    return "float"
+                if "long" in (left, right):
+                    return "long"
+                if left == "int" and right == "int":
+                    return "int"
+            return left or right or None
         return None
 
     def check_assignment_type(self, target_type: str, expression: ASTNode, target_name: str, line: int):
-        """Verifica compatibilidade simples entre o tipo alvo e o da expressão."""
+        """Verifica compatibilidade entre o tipo alvo e o da expressão com suporte a promoção por alargamento."""
         expr_type = self.infer_type(expression)
-        if expr_type and expr_type != target_type:
+        if expr_type and not self.is_assignable(target_type, expr_type):
             self.errors.append(
                 SemanticError(
                     f"Incompatibilidade de tipos: não é possível atribuir {expr_type} a '{target_name}' do tipo {target_type}.",

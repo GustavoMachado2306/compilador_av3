@@ -248,13 +248,22 @@ class TestLexerNumeros(unittest.TestCase):
         source = "3.14 .5 10. 1.23f 1.23F 2.718d 2.718D"
         tokens = Lexer(source).tokenize()
         for tok in tokens[:-1]:
-            self.assertEqual(tok.type, TokenType.NUMBER)
+            self.assertIn(tok.type, (TokenType.DOUBLE, TokenType.FLOAT))
+        self.assertEqual(tokens[0].type, TokenType.DOUBLE) # 3.14
+        self.assertEqual(tokens[1].type, TokenType.DOUBLE) # .5
+        self.assertEqual(tokens[2].type, TokenType.DOUBLE) # 10.
+        self.assertEqual(tokens[3].type, TokenType.FLOAT)  # 1.23f
+        self.assertEqual(tokens[4].type, TokenType.FLOAT)  # 1.23F
+        self.assertEqual(tokens[5].type, TokenType.DOUBLE) # 2.718d
+        self.assertEqual(tokens[6].type, TokenType.DOUBLE) # 2.718D
 
     def test_notacao_cientifica(self):
         source = "1e10 1.5e-3 2E+5 1e4f 3.0e-2d"
         tokens = Lexer(source).tokenize()
         for tok in tokens[:-1]:
-            self.assertEqual(tok.type, TokenType.NUMBER)
+            self.assertIn(tok.type, (TokenType.DOUBLE, TokenType.FLOAT))
+        self.assertEqual(tokens[0].type, TokenType.DOUBLE) # 1e10
+        self.assertEqual(tokens[3].type, TokenType.FLOAT)  # 1e4f
 
     def test_erro_hex_sem_digitos(self):
         with self.assertRaises(LexicalError):
@@ -335,13 +344,211 @@ class TestLexerStringsECaracteres(unittest.TestCase):
         self.assertIn("Sequência de escape inválida", str(cm.exception))
 
 
-class TestLexerCaracteresInvalidos(unittest.TestCase):
-    """Garante que caracteres genuinamente estranhos ao Java geram erro léxico."""
+class TestLexerCaracteresInvalidosERecuperacao(unittest.TestCase):
+    """Garante que caracteres inválidos geram erros registrados com tolerância a falhas."""
 
-    def test_caracteres_estranhos_rejeitados(self):
-        for ch in ['#', '`', '$', '§', '°']:
-            with self.assertRaises(LexicalError):
-                Lexer(f"int x = {ch};").tokenize()
+    def test_caracteres_estranhos_registrados_e_recuperados(self):
+        # Caracteres genuinamente estranhos ao Java (cifrao '$' e underscore '_' sao validos)
+        for ch in ['#', '`', '§', '°']:
+            source = f"int x = {ch};"
+            lexer = Lexer(source)
+            tokens = lexer.tokenize()
+
+            # O erro deve ser registrado na lista de erros sem interromper o lexer
+            self.assertEqual(len(lexer.errors), 1, f"Deveria registrar 1 erro para {ch}")
+            err = lexer.errors[0]
+            self.assertEqual(err.character, ch)
+            self.assertEqual(err.line, 1)
+            self.assertEqual(err.column, 9)
+            self.assertIn(f"Caractere inválido: {ch!r}", str(err))
+
+            # Tolerância a falhas: o fluxo continua até EOF e retorna tokens válidos
+            self.assertEqual([t.type for t in tokens], [
+                TokenType.KEYWORD_INT,
+                TokenType.IDENTIFIER,
+                TokenType.ASSIGN,
+                TokenType.SEMICOLON,
+                TokenType.EOF
+            ])
+            self.assertEqual(tokens[-1].type, TokenType.EOF)
+
+    def test_multiplos_erros_lexicos_recuperados_ate_eof(self):
+        source = "int # a = 1 § 2 ` ;"
+        lexer = Lexer(source)
+        tokens = lexer.tokenize()
+
+        self.assertEqual(len(lexer.errors), 3)
+        self.assertEqual(lexer.errors[0].character, '#')
+        self.assertEqual(lexer.errors[0].column, 5)
+        self.assertEqual(lexer.errors[1].character, '§')
+        self.assertEqual(lexer.errors[1].column, 13)
+        self.assertEqual(lexer.errors[2].character, '`')
+        self.assertEqual(lexer.errors[2].column, 17)
+
+        # Continuidade total até EOF
+        lexemes = [t.lexeme for t in tokens]
+        self.assertEqual(lexemes, ["int", "a", "=", "1", "2", ";", ""])
+        self.assertEqual(tokens[-1].type, TokenType.EOF)
+
+    def test_acesso_propriedades_e_dicionario_erro(self):
+        lexer = Lexer("int ? @ # ;")
+        lexer.tokenize()
+        self.assertEqual(len(lexer.errors), 1)
+        err = lexer.errors[0]
+        self.assertEqual(err.line, 1)
+        self.assertEqual(err.column, 9)
+        self.assertEqual(err.character, "#")
+        self.assertEqual(err["line"], 1)
+        self.assertEqual(err["column"], 9)
+        self.assertEqual(err["character"], "#")
+
+
+class TestLexerIdentificadoresJavaAbrangentes(unittest.TestCase):
+    """Testes específicos para identificadores válidos em Java (com '$' e '_')."""
+
+    def test_identificadores_iniciados_por_cifrao(self):
+        source = "$ $var $1 $foo_bar $$$"
+        tokens = Lexer(source).tokenize()
+        for tok in tokens[:-1]:
+            self.assertEqual(tok.type, TokenType.IDENTIFIER)
+        self.assertEqual([t.lexeme for t in tokens[:-1]], ["$", "$var", "$1", "$foo_bar", "$$$"])
+
+    def test_identificadores_iniciados_por_underscore(self):
+        source = "_ _var _1 _foo_bar ___"
+        tokens = Lexer(source).tokenize()
+        for tok in tokens[:-1]:
+            self.assertEqual(tok.type, TokenType.IDENTIFIER)
+        self.assertEqual([t.lexeme for t in tokens[:-1]], ["_", "_var", "_1", "_foo_bar", "___"])
+
+    def test_identificadores_com_cifrao_e_underscore_intermediarios(self):
+        source = "var$name my_var$1 Class$Inner total_$$$"
+        tokens = Lexer(source).tokenize()
+        for tok in tokens[:-1]:
+            self.assertEqual(tok.type, TokenType.IDENTIFIER)
+        self.assertEqual([t.lexeme for t in tokens[:-1]], ["var$name", "my_var$1", "Class$Inner", "total_$$$"])
+
+
+class TestLexerLiteraisJavaAvancados(unittest.TestCase):
+    """Testes para todos os literais da linguagem Java."""
+
+    def test_strings_com_escapes_octais(self):
+        source = r'"\0 \033 \377 \7"'
+        tokens = Lexer(source).tokenize()
+        self.assertEqual(tokens[0].type, TokenType.STRING_LITERAL)
+        self.assertEqual(tokens[0].lexeme, "\0 \033 \377 \7")
+
+    def test_char_com_escapes_octais(self):
+        source = r"'\0' '\033' '\377' '\7'"
+        tokens = Lexer(source).tokenize()
+        self.assertEqual([t.type for t in tokens[:-1]], [TokenType.CHAR_LITERAL] * 4)
+        self.assertEqual([t.lexeme for t in tokens[:-1]], ["\0", "\033", "\377", "\7"])
+
+    def test_numeros_hexadecimais_ponto_flutuante(self):
+        source = "0x1.0p0 0x1p-2 0x1.fp3f 0x0.8p1D"
+        tokens = Lexer(source).tokenize()
+        for tok in tokens[:-1]:
+            self.assertIn(tok.type, (TokenType.DOUBLE, TokenType.FLOAT))
+        self.assertEqual(tokens[0].type, TokenType.DOUBLE) # 0x1.0p0
+        self.assertEqual(tokens[2].type, TokenType.FLOAT)  # 0x1.fp3f
+        self.assertEqual([t.lexeme for t in tokens[:-1]], ["0x1.0p0", "0x1p-2", "0x1.fp3f", "0x0.8p1D"])
+
+    def test_erro_octal_com_sufixo_long_e_digito_oito(self):
+        with self.assertRaises(LexicalError):
+            Lexer("089L").tokenize()
+
+    def test_literais_float_double_completos_nao_quebram_no_ponto(self):
+        # Garante que 3.1415 e 2.0 são lidos inteiramente como DOUBLE e não quebrados no ponto
+        source = "3.1415 2.0 0.0 123.456789"
+        tokens = Lexer(source).tokenize()
+        self.assertEqual(len(tokens), 5) # 4 números + EOF
+        self.assertEqual(tokens[0].type, TokenType.DOUBLE)
+        self.assertEqual(tokens[0].lexeme, "3.1415")
+        self.assertEqual(tokens[1].type, TokenType.DOUBLE)
+        self.assertEqual(tokens[1].lexeme, "2.0")
+        self.assertEqual(tokens[2].type, TokenType.DOUBLE)
+        self.assertEqual(tokens[2].lexeme, "0.0")
+        self.assertEqual(tokens[3].type, TokenType.DOUBLE)
+        self.assertEqual(tokens[3].lexeme, "123.456789")
+        self.assertEqual(tokens[4].type, TokenType.EOF)
+
+        # Nenhum token DOT isolado deve existir
+        self.assertNotIn(TokenType.DOT, [t.type for t in tokens])
+
+    def test_regex_float_double_compilada(self):
+        from src.lexer import FLOAT_DOUBLE_REGEX
+        self.assertIsNotNone(FLOAT_DOUBLE_REGEX.match("3.1415"))
+        self.assertIsNotNone(FLOAT_DOUBLE_REGEX.match("2.0"))
+        self.assertIsNotNone(FLOAT_DOUBLE_REGEX.match(".5"))
+        self.assertIsNotNone(FLOAT_DOUBLE_REGEX.match("1e10"))
+        self.assertIsNotNone(FLOAT_DOUBLE_REGEX.match("1.23f"))
+
+    def test_operadores_compostos_e_simples_completos(self):
+        source = ">>= >>> >>>= <<= && || ++ -- != == <= >= += -= *= /= %= &= |= ^= << >>"
+        tokens = Lexer(source).tokenize()
+        esperados = [
+            TokenType.RSHIFT_ASSIGN,
+            TokenType.URSHIFT,
+            TokenType.URSHIFT_ASSIGN,
+            TokenType.LSHIFT_ASSIGN,
+            TokenType.LOGICAL_AND,
+            TokenType.LOGICAL_OR,
+            TokenType.INCREMENT,
+            TokenType.DECREMENT,
+            TokenType.NOT_EQUAL,
+            TokenType.EQUAL,
+            TokenType.LESS_EQUAL,
+            TokenType.GREATER_EQUAL,
+            TokenType.PLUS_ASSIGN,
+            TokenType.MINUS_ASSIGN,
+            TokenType.STAR_ASSIGN,
+            TokenType.SLASH_ASSIGN,
+            TokenType.PERCENT_ASSIGN,
+            TokenType.AND_ASSIGN,
+            TokenType.OR_ASSIGN,
+            TokenType.XOR_ASSIGN,
+            TokenType.LSHIFT,
+            TokenType.RSHIFT,
+            TokenType.EOF
+        ]
+        self.assertEqual([t.type for t in tokens], esperados)
+
+    def test_literal_hexadecimal_0x0F_classificado_como_int(self):
+        """Verifica que '0x0F' e hexadecimais terminados em 'F'/'f' são classificados como INT e não float."""
+        tokens = Lexer("0x0F 0X0F 0xFF 0x1A2B 0xCAFE_BABE 0x10L").tokenize()
+        for tok in tokens[:-1]:
+            self.assertEqual(tok.type, TokenType.INT)
+            self.assertEqual(tok.type.name, "INT")
+            self.assertNotEqual(tok.type, TokenType.FLOAT)
+            self.assertNotEqual(tok.type, TokenType.DOUBLE)
+
+    def test_regex_hex_int_compilada(self):
+        """Valida que HEX_INT_REGEX reconhece inteiros hexadecimais válidos e rejeita floats."""
+        from src.lexer import HEX_INT_REGEX, classify_number
+        self.assertIsNotNone(HEX_INT_REGEX.match("0x0F"))
+        self.assertIsNotNone(HEX_INT_REGEX.match("0X0F"))
+        self.assertIsNotNone(HEX_INT_REGEX.match("0xFF"))
+        self.assertIsNotNone(HEX_INT_REGEX.match("0xCAFE_BABE"))
+        self.assertIsNotNone(HEX_INT_REGEX.match("0x10L"))
+        self.assertIsNone(HEX_INT_REGEX.match("3.1415"))
+        self.assertIsNone(HEX_INT_REGEX.match("1.23f"))
+        self.assertIsNone(HEX_INT_REGEX.match("0x1.0p0"))
+
+        # Valida que classify_number dá precedência ao hex int sobre float
+        self.assertEqual(classify_number("0x0F"), TokenType.INT)
+        self.assertEqual(classify_number("0xFF"), TokenType.INT)
+        self.assertEqual(classify_number("0x1.0p0"), TokenType.DOUBLE)
+        self.assertEqual(classify_number("0x1.fp3f"), TokenType.FLOAT)
+
+    def test_atribuicao_semantica_hexadecimal_int(self):
+        """Valida que int x = 0x0F; é semanticamente aceito como int sem disparar falso erro de float."""
+        from src.parser import Parser
+        from src.semantic import SemanticAnalyzer
+        from src.symbol_table import SymbolTable
+        tokens = Lexer("int x = 0x0F;").tokenize()
+        ast = Parser(tokens).parse()
+        symbols = SymbolTable()
+        errors = SemanticAnalyzer(symbols).analyze(ast)
+        self.assertEqual(errors, [])
 
 
 if __name__ == "__main__":
