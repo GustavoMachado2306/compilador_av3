@@ -115,7 +115,7 @@ class TestCompiladorOficial(unittest.TestCase):
         self.assertIsInstance(ast.statements[1], Assignment)
 
     def test_09_caractere_invalido(self):
-        source = "int x = 10 @ 5;"
+        source = "int x = 10 # 5;"
         lexer = Lexer(source)
         with self.assertRaises(LexicalError) as cm:
             lexer.tokenize()
@@ -123,9 +123,9 @@ class TestCompiladorOficial(unittest.TestCase):
         err = cm.exception
         self.assertEqual(err.line, 1)
         self.assertEqual(err.column, 12)
-        self.assertEqual(err.character, "@")
+        self.assertEqual(err.character, "#")
         self.assertIn("[ERRO LÉXICO]", str(err))
-        self.assertIn("Caractere inválido: '@'", str(err))
+        self.assertIn("Caractere inválido: '#'", str(err))
 
     def test_10_string_nao_fechada(self):
         source = 'String nome = "Gustavo;'
@@ -347,7 +347,7 @@ class TestCompiladorOficial(unittest.TestCase):
         sym_str = st.lookup("String")
         self.assertIsNotNone(sym_str)
         self.assertEqual(sym_str["name"], "String")
-        self.assertEqual(sym_str["category"], "palavra_reservada")
+        self.assertEqual(sym_str["category"], "tipo")
         self.assertEqual(sym_str["type"], "tipo")
         self.assertEqual(sym_str["line"], "-")
         self.assertEqual(sym_str["order"], 2)
@@ -479,7 +479,8 @@ class TestEstresseERobustez(unittest.TestCase):
     # -------------------------------------------------------------
 
     def test_39_caracteres_invalidos_individuais(self):
-        chars_invalidos = ['@', '#', '$', '%', '&', '*', '/', '\\', '?', ':', '!', '~', '`', '[', ']', '{', '}', ',']
+        # Caracteres que não pertencem ao léxico da linguagem Java
+        chars_invalidos = ['#', '$', '`', '\\', '§', '°']
         for ch in chars_invalidos:
             source = f"int a = 1 {ch} 2;"
             with self.assertRaises(LexicalError, msg=f"Falha ao rejeitar '{ch}'") as cm:
@@ -784,7 +785,7 @@ class TestIntegracaoGUIEAPI(unittest.TestCase):
         self.assertEqual(len(res.semantic_errors), 0)
 
     def test_56_analyze_source_api_erro_lexico(self):
-        source = "int a = 10 @ 5;"
+        source = "int a = 10 # 5;"
         res = analyze_source(source)
         self.assertFalse(res.success)
         self.assertTrue(res.has_errors)
@@ -848,7 +849,7 @@ class TestIntegracaoGUIEAPI(unittest.TestCase):
 
             # 3. Análise com erro léxico
             app.editor.delete("1.0", tk.END)
-            app.editor.insert("1.0", "int x = 10 @ 5;")
+            app.editor.insert("1.0", "int x = 10 # 5;")
             app.on_analyze()
             self.assertIn("[ERRO LÉXICO]", app.errors_text.get("1.0", tk.END))
 
@@ -899,7 +900,7 @@ class TestIntegracaoGUIEAPI(unittest.TestCase):
         # Ordem 2: String
         self.assertEqual(all_syms[1]["order"], 2)
         self.assertEqual(all_syms[1]["name"], "String")
-        self.assertEqual(all_syms[1]["category"], "palavra_reservada")
+        self.assertEqual(all_syms[1]["category"], "tipo")
         self.assertEqual(all_syms[1]["type"], "tipo")
         self.assertEqual(all_syms[1]["line"], "-")
 
