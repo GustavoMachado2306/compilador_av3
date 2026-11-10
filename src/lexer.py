@@ -878,10 +878,10 @@ class Lexer:
                     break
                 next_ch = self._peek()
 
-                if next_ch in ('"', '\\', 'n', 't', 'r', 'b', 'f', "'"):
+                if next_ch in ('"', '\\', 'n', 't', 'r', 'b', 'f', "'", 's'):
                     escape_map = {
                         '"': '"', '\\': '\\', 'n': '\n', 't': '\t',
-                        'r': '\r', 'b': '\b', 'f': '\f', "'": "'"
+                        'r': '\r', 'b': '\b', 'f': '\f', "'": "'", 's': ' '
                     }
                     chars.append(escape_map[next_ch])
                     self.pos += 1
@@ -902,9 +902,10 @@ class Lexer:
                     chars.append(chr(int("".join(octal_digits), 8)))
                     continue
                 elif next_ch == 'u':
-                    # Suporte a escape Unicode \uXXXX
-                    self.pos += 1
-                    self.column += 1
+                    # Suporte a escape Unicode \uXXXX (inclui múltiplos 'u' conforme especificação Java)
+                    while not self._is_at_end() and self._peek() == 'u':
+                        self.pos += 1
+                        self.column += 1
                     hex_code = self.source[self.pos:self.pos + 4]
                     if len(hex_code) == 4 and all(c in "0123456789abcdefABCDEF" for c in hex_code):
                         chars.append(chr(int(hex_code, 16)))
@@ -912,19 +913,20 @@ class Lexer:
                         self.column += 4
                         continue
                     else:
-                        self.tokens = list(current_tokens)
-                        raise LexicalError(
-                            "Sequência de escape Unicode inválida (esperado 4 dígitos hexadecimais após '\\u').",
-                            self.line,
-                            esc_col,
-                            tokens=current_tokens
-                        )
+                        chars.append("\\u")
+                        continue
+                elif next_ch not in ('\r', '\n'):
+                    # Aceita o caractere de escape como parte do literal sem lançar erro de sequência inválida
+                    chars.append(f"\\{next_ch}")
+                    self.pos += 1
+                    self.column += 1
+                    continue
                 else:
                     self.tokens = list(current_tokens)
                     raise LexicalError(
-                        f"Sequência de escape inválida na string: '\\{next_ch}'.",
-                        self.line,
-                        esc_col,
+                        "String não fechada antes da quebra de linha.",
+                        start_line,
+                        start_col,
                         tokens=current_tokens
                     )
 
@@ -1005,10 +1007,10 @@ class Lexer:
                     tokens=current_tokens
                 )
             next_ch = self._peek()
-            if next_ch in ("'", '"', '\\', 'n', 't', 'r', 'b', 'f'):
+            if next_ch in ("'", '"', '\\', 'n', 't', 'r', 'b', 'f', 's'):
                 escape_map = {
                     "'": "'", '"': '"', '\\': '\\', 'n': '\n',
-                    't': '\t', 'r': '\r', 'b': '\b', 'f': '\f'
+                    't': '\t', 'r': '\r', 'b': '\b', 'f': '\f', 's': ' '
                 }
                 char_val = escape_map[next_ch]
                 self.pos += 1
@@ -1027,27 +1029,27 @@ class Lexer:
                         break
                 char_val = chr(int("".join(octal_digits), 8))
             elif next_ch == 'u':
-                self.pos += 1
-                self.column += 1
+                while not self._is_at_end() and self._peek() == 'u':
+                    self.pos += 1
+                    self.column += 1
                 hex_code = self.source[self.pos:self.pos + 4]
                 if len(hex_code) == 4 and all(c in "0123456789abcdefABCDEF" for c in hex_code):
                     char_val = chr(int(hex_code, 16))
                     self.pos += 4
                     self.column += 4
                 else:
-                    self.tokens = list(current_tokens)
-                    raise LexicalError(
-                        "Escape Unicode inválido no literal de caractere.",
-                        self.line,
-                        esc_col,
-                        tokens=current_tokens
-                    )
+                    char_val = "\\u"
+            elif next_ch not in ('\r', '\n'):
+                # Aceita o caractere de escape como parte do token de literal sem lançar erro
+                char_val = f"\\{next_ch}"
+                self.pos += 1
+                self.column += 1
             else:
                 self.tokens = list(current_tokens)
                 raise LexicalError(
-                    f"Sequência de escape inválida no caractere: '\\{next_ch}'.",
-                    self.line,
-                    esc_col,
+                    "Literal de caractere não fechado após escape.",
+                    start_line,
+                    start_col,
                     tokens=current_tokens
                 )
         else:

@@ -142,7 +142,13 @@ class SemanticAnalyzer:
                     )
                 self.check_expression(stmt.expression)
                 if symbol is not None and "type" in symbol:
-                    self.check_assignment_type(symbol["type"], stmt.expression, stmt.name, stmt.line)
+                    self.check_assignment_type(
+                        symbol["type"],
+                        stmt.expression,
+                        stmt.name,
+                        stmt.line,
+                        operator=getattr(stmt, "operator", "="),
+                    )
 
         elif isinstance(stmt, ReturnStatement):
             if stmt.expression:
@@ -319,6 +325,20 @@ class SemanticAnalyzer:
         elif isinstance(node, Assignment):
             if node.target is not None and not isinstance(node.target, Identifier):
                 self.check_expression(node.target)
+            elif node.name and "." not in node.name and not node.name.startswith("this."):
+                symbol = self.symbols.lookup(node.name)
+                if symbol is None or symbol.get("category") not in ("variavel", "parametro", "campo"):
+                    self.errors.append(
+                        SemanticError(f"Variável '{node.name}' não foi declarada.", getattr(node, "line", 1))
+                    )
+                elif "type" in symbol:
+                    self.check_assignment_type(
+                        symbol["type"],
+                        node.expression,
+                        node.name,
+                        getattr(node, "line", 1),
+                        operator=getattr(node, "operator", "="),
+                    )
             self.check_expression(node.expression)
 
         elif isinstance(node, UnaryOp):
@@ -327,13 +347,17 @@ class SemanticAnalyzer:
         elif isinstance(node, BinaryOp):
             self.check_expression(node.left)
             self.check_expression(node.right)
-            # Apenas operações puramente aritméticas requerem checagem de tipo didática
             if node.op in ("+", "-", "*", "/", "%"):
                 left_type = self.infer_type(node.left)
                 right_type = self.infer_type(node.right)
                 line = getattr(node, "line", 1)
 
-                # Regra didática oficial: String não deve participar de + ou - numéricos
+                # 1. Regra do Java para '+': se pelo menos um operando for String,
+                #    trata-se de concatenação válida e o tipo resultante é String.
+                if node.op == "+" and (left_type == "String" or right_type == "String"):
+                    return
+
+                # Demais operadores aritméticos (-, *, /, %) não suportam String
                 if left_type == "String" or right_type == "String":
                     self.errors.append(
                         SemanticError(
@@ -342,7 +366,7 @@ class SemanticAnalyzer:
                         )
                     )
                 else:
-                    numeric_types = {"int", "double", "float", "long", "short", "byte"}
+                    numeric_types = {"int", "double", "float", "long", "short", "byte", "char"}
                     if (
                         left_type
                         and right_type
@@ -430,11 +454,19 @@ class SemanticAnalyzer:
             if node.op == "!":
                 return "boolean"
             return self.infer_type(node.operand)
+        if isinstance(node, Assignment):
+            if node.name and "." not in node.name and not node.name.startswith("this."):
+                symbol = self.symbols.lookup(node.name)
+                if symbol and "type" in symbol:
+                    return symbol["type"]
+            return self.infer_type(node.expression)
         if isinstance(node, BinaryOp):
             if node.op in ("&&", "||", "==", "!=", "<", ">", "<=", ">="):
                 return "boolean"
             left = self.infer_type(node.left)
             right = self.infer_type(node.right)
+            if node.op == "+" and (left == "String" or right == "String"):
+                return "String"
             if left and right:
                 # Promoção binária aritmética oficial do Java (widening)
                 if "double" in (left, right):
@@ -445,11 +477,36 @@ class SemanticAnalyzer:
                     return "long"
                 if left == "int" and right == "int":
                     return "int"
+                numeric_int_types = {"int", "short", "byte", "char"}
+                if left in numeric_int_types and right in numeric_int_types:
+                    return "int"
             return left or right or None
         return None
 
-    def check_assignment_type(self, target_type: str, expression: ASTNode, target_name: str, line: int):
-        """Verifica compatibilidade entre o tipo alvo e o da expressão com suporte a promoção por alargamento."""
+    def check_assignment_type(
+        self,
+        target_type: str,
+        expression: ASTNode,
+        target_name: str,
+        line: int,
+        operator: str = "=",
+    ):
+        """
+        Verifica compatibilidade entre o tipo alvo e o da expressão com suporte a
+        promoção por alargamento e concatenação composta (+= quando o destino for String).
+        """
+        if operator == "+=" and target_type == "String":
+            return
+
+        if operator != "=" and target_type == "String":
+            self.errors.append(
+                SemanticError(
+                    f"Operação aritmética '{operator}' inválida: tipo 'String' não é suportado em operações aritméticas.",
+                    line,
+                )
+            )
+            return
+
         expr_type = self.infer_type(expression)
         if expr_type and not self.is_assignable(target_type, expr_type):
             self.errors.append(

@@ -265,7 +265,7 @@ class TestCompiladorOficial(unittest.TestCase):
         self.assertIn("não é possível atribuir int a 'nome' do tipo String", str(errors[0]))
 
     def test_21_operacao_aritmetica_incompativel_com_string(self):
-        source = 'String nome = "abc";\nint x = nome + 10;'
+        source = 'String nome = "abc";\nint x = nome - 10;'
         ast = Parser(Lexer(source).tokenize()).parse()
         symbols = SymbolTable()
         errors = SemanticAnalyzer(symbols).analyze(ast)
@@ -583,7 +583,7 @@ class TestEstresseERobustez(unittest.TestCase):
             ('int x = 1;\nString s = "a";\nx = s;', "Incompatibilidade de tipos"),
             ('int x = 1;\nString s = "a";\ns = x;', "Incompatibilidade de tipos"),
             ('String nome = "abc";\nint x = nome - 10;', "não é suportado em operações aritméticas"),
-            ('String nome = "abc";\nint x = nome + 10;', "não é suportado em operações aritméticas"),
+            ('String nome = "abc";\nint x = nome + 10;', "Incompatibilidade de tipos"),
         ]
         for source, esperado in casos:
             ast = Parser(Lexer(source).tokenize()).parse()
@@ -982,6 +982,28 @@ class TestPromocaoImplicitaWidening(unittest.TestCase):
         res = analyze_source(source)
         self.assertFalse(res.success)
         self.assertTrue(any("não é possível atribuir double a 'c' do tipo int" in err for err in res.semantic_errors))
+
+    def test_concatenacao_string_com_plus_e_plus_assign(self):
+        source = """
+        String saudacao = "Ola " + "Mundo";
+        int idade = 25;
+        double nota = 9.5;
+        String msg1 = "Idade: " + idade;
+        String msg2 = idade + " anos";
+        String msg3 = "Nota: " + (nota + 0.5);
+        msg1 += "!";
+        msg1 += 100;
+        msg1 += nota;
+        """
+        res = analyze_source(source)
+        self.assertEqual(len(res.semantic_errors), 0, f"Erros inesperados: {res.semantic_errors}")
+        self.assertTrue(res.success)
+
+    def test_atribuicao_composta_aritmetica_invalida_em_string(self):
+        source = 'String s = "abc";\ns -= 10;'
+        res = analyze_source(source)
+        self.assertFalse(res.success)
+        self.assertTrue(any("não é suportado em operações aritméticas" in err for err in res.semantic_errors))
 
 
 class TestArquiteturaTriplaEWebGUI(unittest.TestCase):

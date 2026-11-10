@@ -305,13 +305,16 @@ class TestLexerStringsECaracteres(unittest.TestCase):
         self.assertEqual(tokens[1].lexeme, "Z")
 
     def test_char_literal_com_escapes(self):
-        source = r"'\n' '\t' '\\' '\'' '\0'"
+        source = r"'\n' '\t' '\r' '\"' '\\' '\'' '\s' '\0'"
         tokens = Lexer(source).tokenize()
         self.assertEqual(tokens[0].lexeme, "\n")
         self.assertEqual(tokens[1].lexeme, "\t")
-        self.assertEqual(tokens[2].lexeme, "\\")
-        self.assertEqual(tokens[3].lexeme, "'")
-        self.assertEqual(tokens[4].lexeme, "\0")
+        self.assertEqual(tokens[2].lexeme, "\r")
+        self.assertEqual(tokens[3].lexeme, '"')
+        self.assertEqual(tokens[4].lexeme, "\\")
+        self.assertEqual(tokens[5].lexeme, "'")
+        self.assertEqual(tokens[6].lexeme, " ")
+        self.assertEqual(tokens[7].lexeme, "\0")
 
     def test_char_literal_unicode(self):
         source = r"'\u0041'"  # 'A'
@@ -333,15 +336,19 @@ class TestLexerStringsECaracteres(unittest.TestCase):
             Lexer("'a\n").tokenize()
 
     def test_string_com_escapes_e_unicode(self):
-        source = r'"Linha 1\nLinha 2\t\"Aspas\" \u0042"'
+        source = r'"Linha 1\nLinha 2\t\"Aspas\"\s\u0042"'
         tokens = Lexer(source).tokenize()
         self.assertEqual(tokens[0].type, TokenType.STRING_LITERAL)
         self.assertIn("Linha 1\nLinha 2\t\"Aspas\" B", tokens[0].lexeme)
 
-    def test_erro_string_escape_invalido(self):
-        with self.assertRaises(LexicalError) as cm:
-            Lexer(r'"texto \q invalido"').tokenize()
-        self.assertIn("Sequência de escape inválida", str(cm.exception))
+    def test_escapes_genericos_em_char_e_string_sem_erro(self):
+        tokens = Lexer(r"""'\s' '\d' "texto \s \q valido" """).tokenize()
+        self.assertEqual(tokens[0].type, TokenType.CHAR_LITERAL)
+        self.assertEqual(tokens[0].lexeme, " ")
+        self.assertEqual(tokens[1].type, TokenType.CHAR_LITERAL)
+        self.assertEqual(tokens[1].lexeme, r"\d")
+        self.assertEqual(tokens[2].type, TokenType.STRING_LITERAL)
+        self.assertIn(r"\q", tokens[2].lexeme)
 
 
 class TestLexerCaracteresInvalidosERecuperacao(unittest.TestCase):
