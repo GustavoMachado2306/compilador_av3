@@ -10,7 +10,7 @@ Contém as representações estruturais para:
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 
 
 def _format_children(title: str, children: list) -> str:
@@ -45,6 +45,20 @@ class ASTNode:
     def pretty(self) -> str:
         raise NotImplementedError
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Representação em dicionário para inspeção e testes estruturais."""
+        res = {"node": self.__class__.__name__}
+        for k, v in self.__dict__.items():
+            if k.startswith("_"):
+                continue
+            if isinstance(v, ASTNode):
+                res[k] = v.to_dict()
+            elif isinstance(v, list):
+                res[k] = [item.to_dict() if isinstance(item, ASTNode) else item for item in v]
+            else:
+                res[k] = v
+        return res
+
 
 # =============================================================================
 # SEÇÃO 2: PROGRAMA E UNIDADE DE COMPILAÇÃO JAVA (COMPILATION UNIT)
@@ -66,17 +80,13 @@ class Program(ASTNode):
 @dataclass
 class CompilationUnit(Program):
     """
-    Representa uma Unidade de Compilação Java completa.
-    Composta por:
-    - Declaração de pacote opcional (PackageDeclaration)
-    - Lista de declarações de importação (ImportDeclaration*)
-    - Lista de declarações de tipos (ClassDeclaration, InterfaceDeclaration, EnumDeclaration*)
-    - Lista de comandos didáticos para compatibilidade com modo de fragmento.
+    Classe base para Unidades de Compilação Java (JLS §7.3).
     """
     package: Optional['PackageDeclaration'] = None
     imports: List['ImportDeclaration'] = field(default_factory=list)
     type_declarations: List[ASTNode] = field(default_factory=list)
     statements: list = field(default_factory=list)
+    module_declaration: Optional[ASTNode] = None
     line: int = 1
     column: int = 1
 
@@ -85,19 +95,33 @@ class CompilationUnit(Program):
         """Alias para self.package."""
         return self.package
 
+    @property
+    def is_modular(self) -> bool:
+        return isinstance(self, ModularCompilationUnit) or self.module_declaration is not None
+
+    @property
+    def is_compact(self) -> bool:
+        return isinstance(self, CompactCompilationUnit)
+
+    @property
+    def is_ordinary(self) -> bool:
+        return not self.is_modular and not self.is_compact
+
     def pretty(self) -> str:
         # Se for arquivo completamente vazio, retorna "Program" para compatibilidade com test_23
-        if not self.package and not self.imports and not self.type_declarations and not self.statements:
+        if not self.package and not self.imports and not self.type_declarations and not self.statements and not self.module_declaration:
             return "Program"
 
-        # Se for um fragmento antigo (apenas comandos, sem pacote/imports/tipos)
-        if not self.package and not self.imports and not self.type_declarations:
+        # Se for um fragmento antigo (apenas comandos, sem pacote/imports/tipos/modulo)
+        if not self.package and not self.imports and not self.type_declarations and not self.module_declaration:
             return _format_children("Program", self.statements)
 
         children = []
         if self.package:
             children.append(self.package)
         children.extend(self.imports)
+        if self.module_declaration:
+            children.append(self.module_declaration)
         children.extend(self.type_declarations)
         children.extend(self.statements)
 
@@ -109,49 +133,214 @@ class CompilationUnit(Program):
 # =============================================================================
 @dataclass
 class PackageDeclaration(ASTNode):
-    """Representa a cláusula de pacote: package nome.do.pacote;"""
+    """Representa a cláusula de pacote: [annotations] package nome.do.pacote;"""
     name: str
     line: int = 1
     column: int = 1
+    modifiers: List[ASTNode] = field(default_factory=list)
+
+    @property
+    def annotations(self) -> List[ASTNode]:
+        """Alias para self.modifiers."""
+        return self.modifiers
 
     def pretty(self) -> str:
+        mods_str = (" ".join(m.pretty() for m in self.modifiers) + " ") if self.modifiers else ""
+        header = f"PackageDeclaration: {mods_str}{self.name}".strip()
+        if self.modifiers:
+            return _format_children(header, [self.name])
         return _format_children("PackageDeclaration", [self.name])
 
 
 @dataclass
 class ImportDeclaration(ASTNode):
-    """Representa uma importação: import [static] caminho.[*];"""
+    """Representa uma importação Java: import [static | module] caminho.[*];"""
     name: str
     is_static: bool = False
     is_wildcard: bool = False
+    is_module: bool = False
     line: int = 1
     column: int = 1
 
     def pretty(self) -> str:
-        static_str = " (static)" if self.is_static else ""
-        return f"ImportDeclaration{static_str}: {self.name}"
+        tag = ""
+        if self.is_static and self.is_wildcard:
+            tag = " (static on-demand)"
+        elif self.is_static:
+            tag = " (static)"
+        elif self.is_module:
+            tag = " (module)"
+        elif self.is_wildcard:
+            tag = " (on-demand)"
+        return f"ImportDeclaration{tag}: {self.name}"
+
+
+@dataclass
+class SingleTypeImport(ImportDeclaration):
+    """import TypeName;"""
+    pass
+
+
+@dataclass
+class TypeImportOnDemand(ImportDeclaration):
+    """import PackageOrTypeName.*;"""
+    def __init__(self, name: str, line: int = 1, column: int = 1):
+        super().__init__(name=name, is_static=False, is_wildcard=True, is_module=False, line=line, column=column)
+
+
+@dataclass
+class SingleStaticImport(ImportDeclaration):
+    """import static TypeName.Identifier;"""
+    def __init__(self, name: str, line: int = 1, column: int = 1):
+        super().__init__(name=name, is_static=True, is_wildcard=False, is_module=False, line=line, column=column)
+
+
+@dataclass
+class StaticImportOnDemand(ImportDeclaration):
+    """import static TypeName.*;"""
+    def __init__(self, name: str, line: int = 1, column: int = 1):
+        super().__init__(name=name, is_static=True, is_wildcard=True, is_module=False, line=line, column=column)
+
+
+@dataclass
+class SingleModuleImport(ImportDeclaration):
+    """import module ModuleName;"""
+    def __init__(self, name: str, line: int = 1, column: int = 1):
+        super().__init__(name=name, is_static=False, is_wildcard=False, is_module=True, line=line, column=column)
 
 
 # =============================================================================
 # SEÇÃO 4: REFERÊNCIAS DE TIPO (PRIMITIVOS, CLASSES, ARRAYS, GENERICS)
 # =============================================================================
 @dataclass
-class TypeReference(ASTNode):
-    """
-    Representa o nome de um tipo Java (primitivo ou de referência).
-    Suporta arrays (ex: int[]), generics simples (ex: List<T>) e varargs (...).
-    """
+class Annotation(ASTNode):
+    """Representa uma anotação Java: @Nome ou @Nome(argumentos)."""
     name: str
-    array_dimensions: int = 0
-    type_arguments: List['TypeReference'] = field(default_factory=list)
-    is_varargs: bool = False
+    arguments: Any = None
     line: int = 1
     column: int = 1
 
     def pretty(self) -> str:
-        res = self.name
-        if self.type_arguments:
-            args_str = ", ".join(arg.pretty() for arg in self.type_arguments)
+        if self.arguments is not None:
+            return f"@{self.name}(...)"
+        return f"@{self.name}"
+
+
+@dataclass
+class WildcardType(ASTNode):
+    """Representa um tipo curinga (wildcard) em generics: ?, ? extends T, ? super T."""
+    bound_kind: Optional[str] = None # 'extends', 'super' ou None
+    bound_type: Optional[ASTNode] = None
+    annotations: List[ASTNode] = field(default_factory=list)
+    line: int = 1
+    column: int = 1
+
+    def pretty(self) -> str:
+        anno_str = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
+        if self.bound_kind and self.bound_type:
+            b_str = self.bound_type.pretty() if hasattr(self.bound_type, "pretty") else str(self.bound_type)
+            return f"{anno_str}? {self.bound_kind} {b_str}"
+        return f"{anno_str}?"
+
+
+@dataclass
+class TypeParameter(ASTNode):
+    """Representa a declaração de parâmetro genérico: T, T extends Number & Comparable<T>."""
+    name: str
+    bounds: List[ASTNode] = field(default_factory=list)
+    annotations: List[ASTNode] = field(default_factory=list)
+    line: int = 1
+    column: int = 1
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, str):
+            return self.name == other
+        if isinstance(other, TypeParameter):
+            return (
+                self.name == other.name
+                and self.bounds == other.bounds
+                and self.annotations == other.annotations
+            )
+        return False
+
+    def pretty(self) -> str:
+        anno_str = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
+        if self.bounds:
+            bounds_str = " & ".join(b.pretty() if hasattr(b, "pretty") else str(b) for b in self.bounds)
+            return f"{anno_str}{self.name} extends {bounds_str}"
+        return f"{anno_str}{self.name}"
+
+
+@dataclass
+class TypeReference(ASTNode):
+    """
+    Representa o nome de um tipo Java (primitivo ou de referência).
+    Suporta arrays (ex: int[]), generics simples e aninhados (ex: List<T>, Map<K, List<V>>),
+    wildcards (?, ? extends T), annotations de tipo e varargs (...).
+    """
+    name: str
+    array_dimensions: int = 0
+    type_arguments: List[ASTNode] = field(default_factory=list)
+    is_varargs: bool = False
+    line: int = 1
+    column: int = 1
+    annotations: List[ASTNode] = field(default_factory=list)
+    type_parameters: List[TypeParameter] = field(default_factory=list)
+    dims_annotations: List[List[ASTNode]] = field(default_factory=list)
+
+    def get_effective_type(self, extra_dims: int = 0) -> str:
+        """Retorna a representação do tipo com suas dimensões normais acrescidas de extra_dims (JLS §10.2)."""
+        total_dims = self.array_dimensions + extra_dims
+        base_str = self.name
+        if self.type_parameters:
+            params_str = ", ".join(p.pretty() for p in self.type_parameters)
+            base_str += f"<{params_str}>"
+        elif self.type_arguments:
+            args_str = ", ".join(arg.pretty() if hasattr(arg, "pretty") else str(arg) for arg in self.type_arguments)
+            base_str += f"<{args_str}>"
+        if self.is_varargs:
+            return f"{base_str}{'[]' * total_dims}..."
+        return f"{base_str}{'[]' * total_dims}"
+
+    def get_effective_type_ref(self, extra_dims: int = 0) -> "TypeReference":
+        """Retorna uma nova instância de TypeReference com as dimensões combinadas."""
+        return TypeReference(
+            name=self.name,
+            array_dimensions=self.array_dimensions + extra_dims,
+            type_arguments=list(self.type_arguments),
+            is_varargs=self.is_varargs,
+            line=self.line,
+            column=self.column,
+            annotations=list(self.annotations),
+            type_parameters=list(self.type_parameters),
+            dims_annotations=list(self.dims_annotations),
+        )
+
+    @property
+    def full_name(self) -> str:
+        """Nome completo do tipo incluindo suas dimensões de array."""
+        return self.get_effective_type(0)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "node": "TypeReference",
+            "name": self.name,
+            "array_dimensions": self.array_dimensions,
+            "full_name": self.full_name,
+            "is_varargs": self.is_varargs,
+            "line": self.line,
+            "column": self.column,
+        }
+
+    def pretty(self) -> str:
+        anno_str = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
+        res = f"{anno_str}{self.name}"
+        if self.type_parameters:
+            params_str = ", ".join(p.pretty() for p in self.type_parameters)
+            base_str = f"<{params_str}>"
+            res += base_str
+        elif self.type_arguments:
+            args_str = ", ".join(arg.pretty() if hasattr(arg, "pretty") else str(arg) for arg in self.type_arguments)
             res += f"<{args_str}>"
         if self.array_dimensions > 0:
             res += "[]" * self.array_dimensions
@@ -167,7 +356,7 @@ class TypeReference(ASTNode):
 class ClassDeclaration(ASTNode):
     """
     Representa a declaração de uma classe Java:
-    [modificadores] class Nome [extends Base] [implements I1, I2] { membros }
+    [modificadores] class Nome [<T>] [extends Base] [implements I1, I2] [permits P1, P2] { membros }
     """
     name: str
     modifiers: List[str] = field(default_factory=list)
@@ -176,12 +365,17 @@ class ClassDeclaration(ASTNode):
     members: List[ASTNode] = field(default_factory=list)
     line: int = 1
     column: int = 1
+    type_parameters: List[TypeParameter] = field(default_factory=list)
+    permits_types: List[TypeReference] = field(default_factory=list)
+    annotations: List[ASTNode] = field(default_factory=list)
 
     def pretty(self) -> str:
         mods = (" ".join(self.modifiers) + " ") if self.modifiers else ""
+        tparams = f"<{', '.join(p.pretty() for p in self.type_parameters)}>" if self.type_parameters else ""
         ext = f" extends {self.extends_type.pretty()}" if self.extends_type else ""
         impl = f" implements {', '.join(t.pretty() for t in self.implements_types)}" if self.implements_types else ""
-        header = f"ClassDeclaration: {mods}{self.name}{ext}{impl}".strip()
+        perm = f" permits {', '.join(t.pretty() for t in self.permits_types)}" if self.permits_types else ""
+        header = f"ClassDeclaration: {mods}{self.name}{tparams}{ext}{impl}{perm}".strip()
         if not self.members:
             return header
         return _format_children(header, self.members)
@@ -191,21 +385,26 @@ class ClassDeclaration(ASTNode):
 class InterfaceDeclaration(ASTNode):
     """
     Representa a declaração de uma interface Java:
-    [modificadores] interface Nome [<T>] [extends I1, I2] { membros }
+    [modificadores] interface Nome [<T>] [extends I1, I2] [permits P1, P2] { membros }
     """
     name: str
     modifiers: List[str] = field(default_factory=list)
-    type_parameters: List[str] = field(default_factory=list)
+    type_parameters: List[Any] = field(default_factory=list)
     extends_types: List[TypeReference] = field(default_factory=list)
     members: List[ASTNode] = field(default_factory=list)
     line: int = 1
     column: int = 1
+    permits_types: List[TypeReference] = field(default_factory=list)
+    annotations: List[ASTNode] = field(default_factory=list)
 
     def pretty(self) -> str:
         mods = (" ".join(self.modifiers) + " ") if self.modifiers else ""
-        tparams = f"<{', '.join(self.type_parameters)}>" if self.type_parameters else ""
+        tparams = ""
+        if self.type_parameters:
+            tparams = f"<{', '.join(p.pretty() if hasattr(p, 'pretty') else str(p) for p in self.type_parameters)}>"
         ext = f" extends {', '.join(t.pretty() for t in self.extends_types)}" if self.extends_types else ""
-        header = f"InterfaceDeclaration: {mods}{self.name}{tparams}{ext}".strip()
+        perm = f" permits {', '.join(t.pretty() for t in self.permits_types)}" if self.permits_types else ""
+        header = f"InterfaceDeclaration: {mods}{self.name}{tparams}{ext}{perm}".strip()
         if not self.members:
             return header
         return _format_children(header, self.members)
@@ -248,8 +447,305 @@ class EnumDeclaration(ASTNode):
 
 
 # =============================================================================
-# SEÇÃO 6: PARÂMETROS, CAMPOS, MÉTODOS E CONSTRUTORES
+# SEÇÃO 5.1: SUBCLASSES DE UNIDADE DE COMPILAÇÃO (JAVA SE 26 / JLS §7.3)
 # =============================================================================
+@dataclass
+class OrdinaryCompilationUnit(CompilationUnit):
+    """
+    Representa uma unidade de compilação ordinária (JLS §7.3):
+    [PackageDeclaration] {ImportDeclaration} {TopLevelClassOrInterfaceDeclaration}
+    """
+    def pretty(self) -> str:
+        if not self.package and not self.imports and not self.type_declarations and not self.statements:
+            return "Program"
+        if not self.package and not self.imports and not self.type_declarations:
+            return _format_children("Program", self.statements)
+        children = []
+        if self.package:
+            children.append(self.package)
+        children.extend(self.imports)
+        children.extend(self.type_declarations)
+        children.extend(self.statements)
+        return _format_children("OrdinaryCompilationUnit", children)
+
+
+@dataclass
+class ModularCompilationUnit(CompilationUnit):
+    """
+    Representa uma unidade de compilação modular (JLS §7.3 / §7.7):
+    {ImportDeclaration} ModuleDeclaration
+    """
+    def __init__(self, imports: List[ImportDeclaration] = None, module_declaration: 'ModuleDeclaration' = None, line: int = 1, column: int = 1):
+        super().__init__(
+            package=None,
+            imports=imports or [],
+            type_declarations=[module_declaration] if module_declaration else [],
+            statements=[],
+            module_declaration=module_declaration,
+            line=line,
+            column=column
+        )
+
+    def pretty(self) -> str:
+        children = []
+        children.extend(self.imports)
+        if self.module_declaration:
+            children.append(self.module_declaration)
+        return _format_children("ModularCompilationUnit", children)
+
+
+@dataclass
+class CompactCompilationUnit(CompilationUnit):
+    """
+    Representa uma unidade de compilação compacta com classe declarada implicitamente (JLS §7.3):
+    {ImportDeclaration} {ClassBodyDeclaration}
+    """
+    class_members: List[ASTNode] = field(default_factory=list)
+    implicit_class: Optional[ClassDeclaration] = None
+
+    def __init__(self, imports: List[ImportDeclaration] = None, class_members: List[ASTNode] = None, line: int = 1, column: int = 1):
+        members = class_members or []
+        imp_class = ClassDeclaration(
+            name="Unnamed",
+            modifiers=[],
+            members=members,
+            line=line,
+            column=column
+        )
+        super().__init__(
+            package=None,
+            imports=imports or [],
+            type_declarations=[imp_class],
+            statements=[],
+            line=line,
+            column=column
+        )
+        self.class_members = members
+        self.implicit_class = imp_class
+
+    def pretty(self) -> str:
+        children = []
+        children.extend(self.imports)
+        children.extend(self.class_members)
+        return _format_children("CompactCompilationUnit", children)
+
+
+# =============================================================================
+# SEÇÃO 5.2: DIRETIVAS E DECLARAÇÃO DE MÓDULOS (JAVA SE 26 / JLS §7.7)
+# =============================================================================
+@dataclass
+class ModuleDirective(ASTNode):
+    """Classe base para diretivas de um módulo Java (JLS §7.7)."""
+    pass
+
+
+@dataclass
+class RequiresDirective(ModuleDirective):
+    """
+    Directiva: requires {RequiresModifier} ModuleName ;
+    Modifiers: 'transitive', 'static'
+    """
+    module_name: str
+    is_transitive: bool = False
+    is_static: bool = False
+    line: int = 1
+    column: int = 1
+
+    @property
+    def modifiers(self) -> List[str]:
+        mods = []
+        if self.is_transitive:
+            mods.append("transitive")
+        if self.is_static:
+            mods.append("static")
+        return mods
+
+    def pretty(self) -> str:
+        flags = []
+        if self.is_transitive:
+            flags.append("transitive")
+        if self.is_static:
+            flags.append("static")
+        mods_str = (" " + " ".join(flags)) if flags else ""
+        return f"RequiresDirective{mods_str}: {self.module_name}"
+
+
+@dataclass
+class ExportsDirective(ModuleDirective):
+    """Directiva: exports PackageName [to ModuleName {, ModuleName}] ;"""
+    package_name: str
+    to_modules: List[str] = field(default_factory=list)
+    line: int = 1
+    column: int = 1
+
+    def pretty(self) -> str:
+        to_str = f" to {', '.join(self.to_modules)}" if self.to_modules else ""
+        return f"ExportsDirective: {self.package_name}{to_str}"
+
+
+@dataclass
+class OpensDirective(ModuleDirective):
+    """Directiva: opens PackageName [to ModuleName {, ModuleName}] ;"""
+    package_name: str
+    to_modules: List[str] = field(default_factory=list)
+    line: int = 1
+    column: int = 1
+
+    def pretty(self) -> str:
+        to_str = f" to {', '.join(self.to_modules)}" if self.to_modules else ""
+        return f"OpensDirective: {self.package_name}{to_str}"
+
+
+@dataclass
+class UsesDirective(ModuleDirective):
+    """Directiva: uses TypeName ;"""
+    service_type: TypeReference
+    line: int = 1
+    column: int = 1
+
+    def pretty(self) -> str:
+        return f"UsesDirective: {self.service_type.pretty()}"
+
+
+@dataclass
+class ProvidesDirective(ModuleDirective):
+    """Directiva: provides TypeName with TypeName {, TypeName} ;"""
+    service_type: TypeReference
+    with_types: List[TypeReference] = field(default_factory=list)
+    line: int = 1
+    column: int = 1
+
+    def pretty(self) -> str:
+        impls = ", ".join(t.pretty() for t in self.with_types)
+        return f"ProvidesDirective: {self.service_type.pretty()} with {impls}"
+
+
+@dataclass
+class ModuleDeclaration(ASTNode):
+    """
+    Representa a declaração de módulo (Java 9+ / JLS §7.7):
+    {Annotation} [open] module Identifier {. Identifier} { {ModuleDirective} }
+    """
+    name: str
+    is_open: bool = False
+    directives: List[ModuleDirective] = field(default_factory=list)
+    annotations: List[ASTNode] = field(default_factory=list)
+    line: int = 1
+    column: int = 1
+
+    def pretty(self) -> str:
+        annos = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
+        open_str = "open " if self.is_open else ""
+        header = f"ModuleDeclaration: {annos}{open_str}{self.name}".strip()
+        if not self.directives:
+            return header
+        return _format_children(header, self.directives)
+
+
+# =============================================================================
+# SEÇÃO 6: PARÂMETROS, CAMPOS, MÉTODOS, CONSTRUTORES E INICIALIZADORES (ETAPA S3)
+# =============================================================================
+@dataclass
+class VariableDeclaratorId(ASTNode):
+    """
+    Identificador de variável com dimensões de array opcionais (JLS §8.3):
+    (Identifier | _) [Dims]
+    """
+    name: str
+    dims: int = 0
+    line: int = 1
+    column: int = 1
+
+    @property
+    def is_unnamed(self) -> bool:
+        return self.name == "_"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "node": "VariableDeclaratorId",
+            "name": self.name,
+            "dims": self.dims,
+            "is_unnamed": self.is_unnamed,
+            "line": self.line,
+            "column": self.column,
+        }
+
+    def pretty(self) -> str:
+        dims_str = "[]" * self.dims
+        return f"{self.name}{dims_str}"
+
+
+@dataclass
+class VariableDeclarator(ASTNode):
+    """
+    Declarador individual de variável (JLS §8.3):
+    VariableDeclaratorId [= VariableInitializer]
+    """
+    id: VariableDeclaratorId
+    initializer: Optional[ASTNode] = None
+    line: int = 1
+    column: int = 1
+    base_type: Optional[TypeReference] = None
+
+    @property
+    def name(self) -> str:
+        return self.id.name
+
+    @property
+    def dims(self) -> int:
+        return self.id.dims
+
+    @property
+    def effective_type(self) -> str:
+        """Tipo efetivo do campo combinando o tipo base da declaração e as dimensões do declarador (JLS §8.3 e §10.2)."""
+        if self.base_type is not None:
+            return self.base_type.get_effective_type(self.dims)
+        return f"{'[]' * self.dims}"
+
+    @property
+    def effective_type_ref(self) -> Optional[TypeReference]:
+        if self.base_type is not None:
+            return self.base_type.get_effective_type_ref(self.dims)
+        return None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "node": "VariableDeclarator",
+            "name": self.name,
+            "dims": self.dims,
+            "effective_type": self.effective_type,
+            "initializer": self.initializer.to_dict() if self.initializer and hasattr(self.initializer, "to_dict") else (self.initializer.pretty() if self.initializer else None),
+            "line": self.line,
+            "column": self.column,
+        }
+
+    def pretty(self) -> str:
+        s = self.id.pretty()
+        if self.initializer is not None:
+            init_str = self.initializer.pretty() if hasattr(self.initializer, "pretty") else str(self.initializer)
+            s += f" = {init_str}"
+        return s
+
+
+@dataclass
+class ReceiverParameter(ASTNode):
+    """
+    Parâmetro receptor explícito (JLS §8.4.1):
+    {Annotation} UnannType [Identifier .] this
+    """
+    type_ref: TypeReference
+    name: str = "this"
+    qualifier: Optional[str] = None
+    annotations: List[ASTNode] = field(default_factory=list)
+    line: int = 1
+    column: int = 1
+
+    def pretty(self) -> str:
+        annos = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
+        qual = f"{self.qualifier}." if self.qualifier else ""
+        return f"ReceiverParameter: {annos}{self.type_ref.pretty()} {qual}this"
+
+
 @dataclass
 class Parameter(ASTNode):
     """Representa um parâmetro formal em método ou construtor: Tipo nome."""
@@ -258,9 +754,29 @@ class Parameter(ASTNode):
     is_varargs: bool = False
     line: int = 1
     column: int = 1
+    modifiers: List[str] = field(default_factory=list)
+    annotations: List[ASTNode] = field(default_factory=list)
+    dims: int = 0
 
     def pretty(self) -> str:
-        return f"Parametro ({self.type_ref.pretty()}) {self.name}"
+        annos = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
+        mods = (" ".join(self.modifiers) + " ") if self.modifiers else ""
+        var = "..." if self.is_varargs else ""
+        dims_str = "[]" * self.dims
+        return f"Parametro {annos}{mods}({self.type_ref.pretty()}{var}) {self.name}{dims_str}".strip()
+
+
+@dataclass
+class FormalParameter(Parameter):
+    """Parâmetro formal tradicional (JLS §8.4.1)."""
+    pass
+
+
+@dataclass
+class VariableArityParameter(Parameter):
+    """Parâmetro de aridade variável / varargs (JLS §8.4.1): Tipo... nome."""
+    def __init__(self, type_ref: TypeReference, name: str, line: int = 1, column: int = 1, modifiers: List[str] = None, annotations: List[ASTNode] = None):
+        super().__init__(type_ref=type_ref, name=name, is_varargs=True, line=line, column=column, modifiers=modifiers or [], annotations=annotations or [])
 
 
 @dataclass
@@ -277,31 +793,137 @@ class Block(ASTNode):
 
 
 @dataclass
-class FieldDeclaration(ASTNode):
-    """
-    Representa a declaração de um campo (atributo) em uma classe/interface:
-    [modificadores] Tipo nome [= inicializador];
-    """
-    type_ref: TypeReference
-    name: str
-    modifiers: List[str] = field(default_factory=list)
-    initializer: Optional[ASTNode] = None
+class InstanceInitializer(ASTNode):
+    """Inicializador de instância (JLS §8.6): { ... }."""
+    block: Block
     line: int = 1
     column: int = 1
 
     def pretty(self) -> str:
+        return _format_children("InstanceInitializer", [self.block])
+
+
+@dataclass
+class StaticInitializer(ASTNode):
+    """Inicializador estático (JLS §8.7): static { ... }."""
+    block: Block
+    line: int = 1
+    column: int = 1
+
+    def pretty(self) -> str:
+        return _format_children("StaticInitializer", [self.block])
+
+
+@dataclass
+class FieldDeclaration(ASTNode):
+    """
+    Representa a declaração de um campo (atributo) em uma classe/interface (JLS §8.3):
+    {FieldModifier} UnannType VariableDeclaratorList ;
+    """
+    type_ref: TypeReference
+    declarators: List[VariableDeclarator] = field(default_factory=list)
+    modifiers: List[str] = field(default_factory=list)
+    line: int = 1
+    column: int = 1
+    annotations: List[ASTNode] = field(default_factory=list)
+
+    def __init__(
+        self,
+        type_ref: TypeReference,
+        name_or_declarators: Any = None,
+        modifiers: List[str] = None,
+        initializer: Optional[ASTNode] = None,
+        line: int = 1,
+        column: int = 1,
+        annotations: List[ASTNode] = None,
+        declarators: List[VariableDeclarator] = None,
+        name: Optional[str] = None,
+    ):
+        super().__init__()
+        self.type_ref = type_ref
+        self.modifiers = modifiers or []
+        self.line = line
+        self.column = column
+        self.annotations = annotations or []
+
+        if name is not None:
+            name_or_declarators = name
+
+        if declarators is not None:
+            self.declarators = declarators
+        elif isinstance(name_or_declarators, list):
+            self.declarators = name_or_declarators
+        elif isinstance(name_or_declarators, str):
+            decl_id = VariableDeclaratorId(name=name_or_declarators, dims=0, line=line, column=column)
+            self.declarators = [VariableDeclarator(id=decl_id, initializer=initializer, line=line, column=column)]
+        else:
+            self.declarators = []
+
+        # Vincula o tipo base da declaração aos declaradores individuais (JLS §8.3 e §10.2)
+        for d in self.declarators:
+            if hasattr(d, "base_type"):
+                d.base_type = self.type_ref
+
+    @property
+    def name(self) -> str:
+        return self.declarators[0].name if self.declarators else ""
+
+    @property
+    def initializer(self) -> Optional[ASTNode]:
+        return self.declarators[0].initializer if self.declarators else None
+
+    def get_effective_type(self, declarator_or_name_or_index: Any) -> str:
+        """Consulta o tipo efetivo de um declarador específico por objeto, nome ou índice."""
+        if isinstance(declarator_or_name_or_index, int):
+            if 0 <= declarator_or_name_or_index < len(self.declarators):
+                return self.declarators[declarator_or_name_or_index].effective_type
+        elif isinstance(declarator_or_name_or_index, str):
+            for d in self.declarators:
+                if d.name == declarator_or_name_or_index:
+                    return d.effective_type
+        elif isinstance(declarator_or_name_or_index, VariableDeclarator):
+            return declarator_or_name_or_index.effective_type
+        return self.type_ref.full_name
+
+    @property
+    def effective_types(self) -> List[str]:
+        """Lista com os tipos efetivos de todos os declaradores da declaração."""
+        return [d.effective_type for d in self.declarators]
+
+    @property
+    def effective_type(self) -> str:
+        """Tipo efetivo do primeiro declarador (mantido para retrocompatibilidade)."""
+        if self.declarators:
+            return self.declarators[0].effective_type
+        return self.type_ref.full_name
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "node": "FieldDeclaration",
+            "type": self.type_ref.pretty(),
+            "modifiers": list(self.modifiers),
+            "declarators": [d.to_dict() for d in self.declarators],
+            "effective_types": self.effective_types,
+            "line": self.line,
+            "column": self.column,
+        }
+
+    def pretty(self) -> str:
+        annos = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
         mods = (" ".join(self.modifiers) + " ") if self.modifiers else ""
-        header = f"FieldDeclaration: {mods}{self.type_ref.pretty()} {self.name}".strip()
-        if self.initializer is not None:
-            return _format_children(header, [self.initializer])
+        decls_str = ", ".join(d.pretty() for d in self.declarators)
+        header = f"FieldDeclaration: {annos}{mods}{self.type_ref.pretty()} {decls_str}".strip()
+        inits = [d.initializer for d in self.declarators if d.initializer is not None]
+        if inits:
+            return _format_children(header, inits)
         return header
 
 
 @dataclass
 class MethodDeclaration(ASTNode):
     """
-    Representa a declaração de um método:
-    [modificadores] TipoRetorno nome(parametros) [throws excecoes] { corpo }
+    Representa a declaração de um método (JLS §8.4):
+    {MethodModifier} [TypeParameters] Result MethodDeclarator [Throws] MethodBody
     """
     name: str
     return_type: TypeReference
@@ -311,36 +933,155 @@ class MethodDeclaration(ASTNode):
     body: Optional[Block] = None
     line: int = 1
     column: int = 1
+    type_parameters: List[TypeParameter] = field(default_factory=list)
+    annotations: List[ASTNode] = field(default_factory=list)
+    receiver_parameter: Optional[ReceiverParameter] = None
+    dims: int = 0
+
+    @property
+    def effective_return_type(self) -> str:
+        """Tipo efetivo de retorno combinando Result e dimensões posteriores ao declarador (JLS §8.4.5 e §10.2)."""
+        if self.return_type is None:
+            return ""
+        return self.return_type.get_effective_type(self.dims)
+
+    @property
+    def effective_return_type_ref(self) -> TypeReference:
+        if self.return_type is None:
+            return TypeReference(name="void", line=self.line, column=self.column)
+        return self.return_type.get_effective_type_ref(self.dims)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "node": "MethodDeclaration",
+            "name": self.name,
+            "return_type": self.return_type.pretty() if self.return_type else None,
+            "dims": self.dims,
+            "effective_return_type": self.effective_return_type,
+            "modifiers": list(self.modifiers),
+            "parameters": [p.to_dict() if hasattr(p, "to_dict") else str(p) for p in self.parameters],
+            "throws_types": [t.pretty() for t in self.throws_types],
+            "line": self.line,
+            "column": self.column,
+        }
 
     def pretty(self) -> str:
         mods = (" ".join(self.modifiers) + " ") if self.modifiers else ""
-        params_str = ", ".join(p.pretty() for p in self.parameters)
+        annos = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
+        tparams = f"<{', '.join(p.pretty() for p in self.type_parameters)}> " if self.type_parameters else ""
+        all_params_repr = []
+        if self.receiver_parameter:
+            all_params_repr.append(self.receiver_parameter.pretty())
+        all_params_repr.extend(p.pretty() for p in self.parameters)
+        params_str = ", ".join(all_params_repr)
         thr_str = f" throws {', '.join(t.pretty() for t in self.throws_types)}" if self.throws_types else ""
-        header = f"MethodDeclaration: {mods}{self.return_type.pretty()} {self.name}({params_str}){thr_str}".strip()
+        dims_str = "[]" * self.dims
+        header = f"MethodDeclaration: {annos}{mods}{tparams}{self.return_type.pretty()} {self.name}({params_str}){dims_str}{thr_str}".strip()
         if self.body is not None:
             return _format_children(header, [self.body])
         return header + " (abstrato / sem corpo)"
 
 
 @dataclass
+class ExplicitConstructorInvocation(ASTNode):
+    """
+    Invocação explícita de construtor (JLS §8.8.7.1):
+    [TypeArguments] this ( [ArgumentList] ) ;
+    [TypeArguments] super ( [ArgumentList] ) ;
+    Expression . [TypeArguments] super ( [ArgumentList] ) ;
+    """
+    kind: str  # "this" ou "super"
+    arguments: List[ASTNode] = field(default_factory=list)
+    type_arguments: List[TypeReference] = field(default_factory=list)
+    qualifier: Optional[ASTNode] = None
+    line: int = 1
+    column: int = 1
+
+    def pretty(self) -> str:
+        targs = f"<{', '.join(t.pretty() for t in self.type_arguments)}>" if self.type_arguments else ""
+        qual = f"{self.qualifier.pretty()}." if self.qualifier else ""
+        header = f"ExplicitConstructorInvocation: {qual}{targs}{self.kind}"
+        if self.arguments:
+            return _format_children(header, self.arguments)
+        return header + "()"
+
+
+@dataclass
+class AlternateConstructorInvocation(ExplicitConstructorInvocation):
+    """Invocação explícita de construtor alternativo: this(...) (JLS §8.8.7.1)."""
+    def __init__(self, arguments: List[ASTNode] = None, type_arguments: List[TypeReference] = None, line: int = 1, column: int = 1):
+        super().__init__(kind="this", arguments=arguments or [], type_arguments=type_arguments or [], qualifier=None, line=line, column=column)
+
+
+@dataclass
+class SuperclassConstructorInvocation(ExplicitConstructorInvocation):
+    """Invocação explícita de construtor da superclasse: [qualifier.]super(...) (JLS §8.8.7.1)."""
+    def __init__(self, arguments: List[ASTNode] = None, type_arguments: List[TypeReference] = None, qualifier: Optional[ASTNode] = None, line: int = 1, column: int = 1):
+        super().__init__(kind="super", arguments=arguments or [], type_arguments=type_arguments or [], qualifier=qualifier, line=line, column=column)
+
+
+@dataclass
+class ConstructorBody(ASTNode):
+    """
+    Corpo de construtor com suporte a Flexible Constructor Bodies (JEP 513 / JLS §8.8.7):
+    { [BlockStatements] ConstructorInvocation [BlockStatements] }
+    { [BlockStatements] }
+    """
+    prologue: List[ASTNode] = field(default_factory=list)
+    constructor_invocation: Optional[ExplicitConstructorInvocation] = None
+    epilogue: List[ASTNode] = field(default_factory=list)
+    line: int = 1
+    column: int = 1
+
+    @property
+    def statements(self) -> List[ASTNode]:
+        res = list(self.prologue)
+        if self.constructor_invocation is not None:
+            res.append(self.constructor_invocation)
+        res.extend(self.epilogue)
+        return res
+
+    def pretty(self) -> str:
+        children = []
+        if self.prologue:
+            children.append(_format_children("Prologue", self.prologue))
+        if self.constructor_invocation:
+            children.append(self.constructor_invocation)
+        if self.epilogue:
+            children.append(_format_children("Epilogue", self.epilogue))
+        if not children:
+            return "ConstructorBody"
+        return _format_children("ConstructorBody", children)
+
+
+@dataclass
 class ConstructorDeclaration(ASTNode):
     """
-    Representa a declaração de um construtor:
-    [modificadores] NomeClasse(parametros) [throws excecoes] { corpo }
+    Declaração de construtor (JLS §8.8):
+    {ConstructorModifier} [TypeParameters] SimpleTypeName ( [FormalParameterList] ) [Throws] ConstructorBody
     """
     name: str
     parameters: List[Parameter] = field(default_factory=list)
     modifiers: List[str] = field(default_factory=list)
     throws_types: List[TypeReference] = field(default_factory=list)
-    body: Optional[Block] = None
+    body: Optional[ASTNode] = None
     line: int = 1
     column: int = 1
+    receiver_parameter: Optional[ReceiverParameter] = None
+    type_parameters: List[TypeParameter] = field(default_factory=list)
+    annotations: List[ASTNode] = field(default_factory=list)
 
     def pretty(self) -> str:
         mods = (" ".join(self.modifiers) + " ") if self.modifiers else ""
-        params_str = ", ".join(p.pretty() for p in self.parameters)
+        annos = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
+        tparams = f"<{', '.join(p.pretty() for p in self.type_parameters)}> " if self.type_parameters else ""
+        all_params_repr = []
+        if self.receiver_parameter:
+            all_params_repr.append(self.receiver_parameter.pretty())
+        all_params_repr.extend(p.pretty() for p in self.parameters)
+        params_str = ", ".join(all_params_repr)
         thr_str = f" throws {', '.join(t.pretty() for t in self.throws_types)}" if self.throws_types else ""
-        header = f"ConstructorDeclaration: {mods}{self.name}({params_str}){thr_str}".strip()
+        header = f"ConstructorDeclaration: {annos}{mods}{tparams}{self.name}({params_str}){thr_str}".strip()
         if self.body is not None:
             return _format_children(header, [self.body])
         return header

@@ -854,10 +854,13 @@ class Lexer:
         return Token(TokenType.INT, lexeme, start_line, start_col)
 
     # -------------------------------------------------------------------------
-    # 3.4 RECONHECIMENTO DE STRINGS COM ESCAPES
+    # 3.4 RECONHECIMENTO DE STRINGS E TEXT BLOCKS COM ESCAPES
     # -------------------------------------------------------------------------
     def _lex_string(self, current_tokens: list) -> Token:
-        """Processa literais de string delimitados por aspas duplas, validando escapes."""
+        """Processa literais de string delimitados por aspas duplas e text blocks (\"\"\")."""
+        if self.source.startswith('"""', self.pos):
+            return self._lex_text_block(current_tokens)
+
         start_line = self.line
         start_col = self.column
         self.pos += 1
@@ -953,6 +956,107 @@ class Lexer:
             self.tokens = list(current_tokens)
             raise LexicalError(
                 "String não fechada (esperado '\"' antes do fim do arquivo).",
+                start_line,
+                start_col,
+                tokens=current_tokens
+            )
+
+        value = "".join(chars)
+        return Token(TokenType.STRING_LITERAL, value, start_line, start_col)
+
+    def _lex_text_block(self, current_tokens: list) -> Token:
+        """Processa text blocks delimitados por aspas triplas (\"\"\"...\"\"\") do Java."""
+        start_line = self.line
+        start_col = self.column
+        self.pos += 3
+        self.column += 3
+
+        while not self._is_at_end() and self._peek() in (' ', '\t'):
+            self.pos += 1
+            self.column += 1
+
+        if self._is_at_end() or self._peek() not in ('\r', '\n'):
+            self.tokens = list(current_tokens)
+            raise LexicalError(
+                "Abertura de text block deve ser seguida por quebra de linha.",
+                start_line,
+                start_col,
+                tokens=current_tokens
+            )
+
+        if self._peek() == '\r':
+            self.pos += 1
+            if not self._is_at_end() and self._peek() == '\n':
+                self.pos += 1
+            self.line += 1
+            self.column = 1
+        elif self._peek() == '\n':
+            self.pos += 1
+            self.line += 1
+            self.column = 1
+
+        chars = []
+        closed = False
+        while not self._is_at_end():
+            if self.source.startswith('"""', self.pos):
+                self.pos += 3
+                self.column += 3
+                closed = True
+                break
+
+            ch = self._peek()
+            if ch == '\r':
+                self.pos += 1
+                if not self._is_at_end() and self._peek() == '\n':
+                    self.pos += 1
+                self.line += 1
+                self.column = 1
+                chars.append('\n')
+                continue
+            elif ch == '\n':
+                self.pos += 1
+                self.line += 1
+                self.column = 1
+                chars.append('\n')
+                continue
+            elif ch == '\\':
+                self.pos += 1
+                self.column += 1
+                if not self._is_at_end():
+                    next_ch = self._peek()
+                    if next_ch in ('"', '\\', 'n', 't', 'r', 'b', 'f', "'", 's'):
+                        escape_map = {
+                            '"': '"', '\\': '\\', 'n': '\n', 't': '\t',
+                            'r': '\r', 'b': '\b', 'f': '\f', "'": "'", 's': ' '
+                        }
+                        chars.append(escape_map[next_ch])
+                        self.pos += 1
+                        self.column += 1
+                        continue
+                    elif next_ch in ('\r', '\n'):
+                        if next_ch == '\r':
+                            self.pos += 1
+                            if not self._is_at_end() and self._peek() == '\n':
+                                self.pos += 1
+                        else:
+                            self.pos += 1
+                        self.line += 1
+                        self.column = 1
+                        continue
+                    else:
+                        chars.append(f"\\{next_ch}")
+                        self.pos += 1
+                        self.column += 1
+                        continue
+            else:
+                chars.append(ch)
+                self.pos += 1
+                self.column += 1
+
+        if not closed:
+            self.tokens = list(current_tokens)
+            raise LexicalError(
+                "Text block não fechado (esperado '\"\"\"' antes do fim do arquivo).",
                 start_line,
                 start_col,
                 tokens=current_tokens

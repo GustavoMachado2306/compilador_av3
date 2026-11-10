@@ -11,7 +11,7 @@ Implementa um analisador descendente recursivo capaz de processar:
 - Modo de compatibilidade com fragmentos didáticos de comandos.
 """
 
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Any, Tuple
 from .token import Token, TokenType
 from .ast_nodes import (
     ASTNode, Program, CompilationUnit, PackageDeclaration, ImportDeclaration,
@@ -26,7 +26,15 @@ from .ast_nodes import (
     UnsupportedStatement,
     ConditionalExpression, MemberAccess, ArrayAccess, ObjectCreationExpression,
     ArrayInitializer, ArrayCreationExpression, CastExpression,
-    InstanceOfExpression, LambdaExpression, MethodReference
+    InstanceOfExpression, LambdaExpression, MethodReference,
+    Annotation, WildcardType, TypeParameter,
+    OrdinaryCompilationUnit, ModularCompilationUnit, CompactCompilationUnit,
+    SingleTypeImport, TypeImportOnDemand, SingleStaticImport, StaticImportOnDemand,
+    SingleModuleImport, ModuleDirective, RequiresDirective, ExportsDirective,
+    OpensDirective, UsesDirective, ProvidesDirective, ModuleDeclaration,
+    VariableDeclaratorId, VariableDeclarator, ReceiverParameter, FormalParameter,
+    VariableArityParameter, ExplicitConstructorInvocation, AlternateConstructorInvocation,
+    SuperclassConstructorInvocation, ConstructorBody, InstanceInitializer, StaticInitializer
 )
 
 # Conjunto de palavras-chave que representam modificadores em Java
@@ -148,41 +156,86 @@ class Parser:
         return self.advance()
 
     # -------------------------------------------------------------------------
-    # 2.2 PONTO DE ENTRADA: PARSE DE UNIDADE DE COMPILAÇÃO
+    # 2.2 PONTO DE ENTRADA: PARSE DE UNIDADE DE COMPILAÇÃO (JAVA SE 26 / JLS §7.3)
     # -------------------------------------------------------------------------
-    def parse(self) -> CompilationUnit:
+    def parse(self, mode: Optional[str] = None) -> CompilationUnit:
         """
-        Ponto de entrada principal do parser.
-        Constrói a árvore sintática completa (CompilationUnit).
+        Ponto de entrada principal do parser (JLS §7.3).
+        Reconhece as 3 modalidades normativas de unidades de compilação:
+        - ModularCompilationUnit: {ImportDeclaration} ModuleDeclaration
+        - CompactCompilationUnit: {ImportDeclaration} {ClassBodyDeclaration}
+        - OrdinaryCompilationUnit: [PackageDeclaration] {ImportDeclaration} {TypeDeclaration}
         """
         try:
-            unit = CompilationUnit()
-
             # Se for entrada vazia (apenas EOF)
             if self.check(TokenType.EOF):
-                return unit
+                return OrdinaryCompilationUnit()
 
-            # 1. Declaração opcional de pacote
-            if self.check(TokenType.KEYWORD_PACKAGE):
-                unit.package = self.package_declaration()
+            # 1. Declaração opcional de pacote (com possíveis anotações precedentes)
+            pkg_decl = None
+            has_package = False
+            if self._is_package_declaration_ahead():
+                pkg_annos = self._parse_optional_annotations()
+                pkg_decl = self.package_declaration(modifiers=pkg_annos)
+                has_package = True
 
             # 2. Declarações de importação (zero ou mais)
+            imports: List[ImportDeclaration] = []
             while self.check(TokenType.KEYWORD_IMPORT):
-                unit.imports.append(self.import_declaration())
+                imports.append(self.import_declaration())
 
-            # 3. Declarações de tipos ou comandos de nível superior
+            # 3. Unidade Modular (JLS §7.3 / §7.7)
+            if not has_package and self._is_module_declaration_ahead():
+                mod_annos = self._parse_optional_annotations()
+                mod_decl = self.parse_module_declaration(leading_annotations=mod_annos)
+                if not self.check(TokenType.EOF):
+                    t = self.peek()
+                    raise SyntacticError(
+                        message="Tokens indevidos após a declaração do módulo na unidade de compilação modular",
+                        line=t.line,
+                        column=t.column,
+                        expected="fim de arquivo (EOF). Tokens indevidos após a declaração do módulo",
+                        found=t.lexeme if t.type != TokenType.EOF else "EOF",
+                    )
+                return ModularCompilationUnit(imports=imports, module_declaration=mod_decl, line=mod_decl.line, column=mod_decl.column)
+
+            if has_package and self._is_module_declaration_ahead():
+                t = self.peek()
+                raise SyntacticError(
+                    message="Declarações de módulo não são permitidas após declaração de pacote",
+                    line=t.line,
+                    column=t.column,
+                    expected="declaração de classe, interface ou enum",
+                    found=t.lexeme if t.type != TokenType.EOF else "EOF",
+                )
+
+            # 4. Unidade Compacta (JLS §7.3)
+            # Sem package, e com membros de corpo de classe declarados no nível superior
+            if not has_package and (mode == "compact" or self._is_compact_compilation_unit()):
+                return self.parse_compact_compilation_unit(imports)
+
+            # 5. Unidade Ordinária (JLS §7.3) ou modo de comandos didáticos
+            unit = OrdinaryCompilationUnit(package=pkg_decl, imports=imports)
+
             while not self.check(TokenType.EOF):
                 old_current = self.current
 
-                # Captura modificadores no nível superior
+                # Captura annotations e modificadores no nível superior
+                annos = self._parse_optional_annotations()
                 modifiers = self.parse_modifiers()
 
                 if self.check(TokenType.KEYWORD_CLASS):
-                    unit.type_declarations.append(self.class_declaration(modifiers))
+                    decl = self.class_declaration(modifiers)
+                    decl.annotations = annos
+                    unit.type_declarations.append(decl)
                 elif self.check(TokenType.KEYWORD_INTERFACE):
-                    unit.type_declarations.append(self.interface_declaration(modifiers))
+                    decl = self.interface_declaration(modifiers)
+                    decl.annotations = annos
+                    unit.type_declarations.append(decl)
                 elif self.check(TokenType.KEYWORD_ENUM):
-                    unit.type_declarations.append(self.enum_declaration(modifiers))
+                    decl = self.enum_declaration(modifiers)
+                    decl.annotations = annos
+                    unit.type_declarations.append(decl)
                 elif modifiers:
                     # Modificadores presentes, mas sem class/interface/enum (ex: public int somar() {})
                     t = self.peek()
@@ -195,7 +248,6 @@ class Parser:
                         found=found_repr,
                     )
                 else:
-                    # Verifica se alguém declarou método sem modificadores no nível superior (ex: int somar() {})
                     if self._is_method_signature():
                         t = self.peek()
                         raise SyntacticError(
@@ -206,11 +258,10 @@ class Parser:
                             found=t.lexeme if t.type != TokenType.EOF else "EOF",
                         )
 
-                    # Caso contrário, trata como comando didático de nível superior (modo fragmento)
+                    # Modo fragmento didático
                     stmt = self.statement()
                     unit.statements.append(stmt)
 
-                # Salvaguarda contra loop infinito
                 if self.current <= old_current:
                     t = self.peek()
                     raise SyntacticError(
@@ -234,10 +285,12 @@ class Parser:
             )
 
     # -------------------------------------------------------------------------
-    # 2.3 DECLARAÇÃO DE PACOTE E IMPORTS
+    # 2.3 DECLARAÇÃO DE PACOTE E IMPORTS (JLS §7.4, §7.5)
     # -------------------------------------------------------------------------
-    def package_declaration(self) -> PackageDeclaration:
-        """Processa: package nome.do.pacote;"""
+    def package_declaration(self, modifiers: List[ASTNode] = None) -> PackageDeclaration:
+        """Processa: [annotations] package nome.do.pacote;"""
+        if modifiers is None:
+            modifiers = self._parse_optional_annotations()
         pkg_tok = self.advance() # consome 'package'
         if not self.check(TokenType.IDENTIFIER):
             t = self.peek()
@@ -245,16 +298,51 @@ class Parser:
                 message="Era esperado um identificador após 'package'",
                 line=t.line,
                 column=t.column,
-                expected="o nome do pacote",
+                expected="identificador após 'package'",
                 found=t.lexeme if t.type != TokenType.EOF else "EOF",
             )
         name = self.qualified_identifier()
         self.expect(TokenType.SEMICOLON, "Era esperado ';' ao final da declaração de package", expected="';' ao final da declaração de package")
-        return PackageDeclaration(name, pkg_tok.line, pkg_tok.column)
+        return PackageDeclaration(name=name, line=pkg_tok.line, column=pkg_tok.column, modifiers=modifiers)
 
     def import_declaration(self) -> ImportDeclaration:
-        """Processa: import [static] caminho.[*];"""
+        """
+        Processa declarações de importação da JLS §7.5:
+        - SingleTypeImport: import TypeName;
+        - TypeImportOnDemand: import PackageOrTypeName.*;
+        - SingleStaticImport: import static TypeName.Identifier;
+        - StaticImportOnDemand: import static TypeName.*;
+        - SingleModuleImport: import module ModuleName;
+        """
         imp_tok = self.advance() # consome 'import'
+
+        if self.check(TokenType.SEMICOLON):
+            t = self.peek()
+            raise SyntacticError(
+                message="Era esperado um identificador após 'import'",
+                line=t.line,
+                column=t.column,
+                expected="identificador após 'import'",
+                found=";",
+            )
+
+        # SingleModuleImport (Java 23+ / 26): import module ModuleName;
+        if self.check(TokenType.IDENTIFIER) and self.peek().lexeme == "module":
+            self.advance() # consome 'module'
+            if not self.check(TokenType.IDENTIFIER):
+                t = self.peek()
+                raise SyntacticError(
+                    message="Era esperado o nome do módulo após 'import module'",
+                    line=t.line,
+                    column=t.column,
+                    expected="nome do módulo após 'import module'",
+                    found=t.lexeme if t.type != TokenType.EOF else "EOF",
+                )
+            mod_name = self.qualified_identifier()
+            self.expect(TokenType.SEMICOLON, "Era esperado ';' ao final do import de módulo", expected="';'")
+            return SingleModuleImport(name=mod_name, line=imp_tok.line, column=imp_tok.column)
+
+        # Static imports: import static ...
         is_static = False
         if self.check(TokenType.KEYWORD_STATIC):
             self.advance()
@@ -293,14 +381,25 @@ class Parser:
                 )
 
         self.expect(TokenType.SEMICOLON, "Era esperado ';' ao final do import", expected="';'")
-        return ImportDeclaration(".".join(parts), is_static, is_wildcard, imp_tok.line, imp_tok.column)
+        full_name = ".".join(parts)
+
+        if is_static:
+            if is_wildcard:
+                return StaticImportOnDemand(name=full_name, line=imp_tok.line, column=imp_tok.column)
+            else:
+                return SingleStaticImport(name=full_name, line=imp_tok.line, column=imp_tok.column)
+        else:
+            if is_wildcard:
+                return TypeImportOnDemand(name=full_name, line=imp_tok.line, column=imp_tok.column)
+            else:
+                return SingleTypeImport(name=full_name, line=imp_tok.line, column=imp_tok.column)
 
     def qualified_identifier(self) -> str:
         """Lê identificadores separados por ponto: a.b.c"""
         parts = [self.expect(TokenType.IDENTIFIER, "Era esperado um identificador").lexeme]
         while self.check(TokenType.DOT):
             self.advance()
-            parts.append(self.expect(TokenType.IDENTIFIER, "Era esperado um identificador após '.'").lexeme)
+            parts.append(self.expect(TokenType.IDENTIFIER, "Era esperado um identificador após '.'", expected="identificador após '.'").lexeme)
         return ".".join(parts)
 
     def parse_modifiers(self) -> List[str]:
@@ -327,6 +426,10 @@ class Parser:
             )
         class_name = self.advance().lexeme
 
+        type_parameters = []
+        if self.check(TokenType.LESS):
+            type_parameters = self.parse_type_parameters()
+
         extends_type = None
         if self.check(TokenType.KEYWORD_EXTENDS):
             self.advance()
@@ -340,6 +443,14 @@ class Parser:
                 self.advance()
                 implements_types.append(self.parse_type_reference())
 
+        permits_types = []
+        if self.check(TokenType.IDENTIFIER) and self.peek().lexeme == "permits":
+            self.advance()
+            permits_types.append(self.parse_type_reference())
+            while self.check(TokenType.COMMA):
+                self.advance()
+                permits_types.append(self.parse_type_reference())
+
         self.expect(TokenType.LBRACE, "Era esperado '{' para abrir o corpo da classe", expected="'{'")
 
         members = []
@@ -347,7 +458,17 @@ class Parser:
             members.append(self.class_member(class_name))
 
         self.expect(TokenType.RBRACE, "Era esperado '}' para fechar o corpo da classe", expected="'}'")
-        return ClassDeclaration(class_name, modifiers, extends_type, implements_types, members, class_tok.line, class_tok.column)
+        return ClassDeclaration(
+            name=class_name,
+            modifiers=modifiers,
+            extends_type=extends_type,
+            implements_types=implements_types,
+            members=members,
+            line=class_tok.line,
+            column=class_tok.column,
+            type_parameters=type_parameters,
+            permits_types=permits_types
+        )
 
     def interface_declaration(self, modifiers: List[str]) -> InterfaceDeclaration:
         """Processa a declaração de uma interface Java."""
@@ -365,15 +486,7 @@ class Parser:
 
         type_parameters = []
         if self.check(TokenType.LESS):
-            self.advance()
-            while not self.check(TokenType.GREATER) and not self.check(TokenType.EOF):
-                if self.check(TokenType.IDENTIFIER):
-                    type_parameters.append(self.advance().lexeme)
-                if self.check(TokenType.COMMA):
-                    self.advance()
-                else:
-                    break
-            self.expect(TokenType.GREATER, "Era esperado '>' após os parâmetros de tipo da interface", expected="'>'")
+            type_parameters = self.parse_type_parameters()
 
         extends_types = []
         if self.check(TokenType.KEYWORD_EXTENDS):
@@ -383,6 +496,14 @@ class Parser:
                 self.advance()
                 extends_types.append(self.parse_type_reference())
 
+        permits_types = []
+        if self.check(TokenType.IDENTIFIER) and self.peek().lexeme == "permits":
+            self.advance()
+            permits_types.append(self.parse_type_reference())
+            while self.check(TokenType.COMMA):
+                self.advance()
+                permits_types.append(self.parse_type_reference())
+
         self.expect(TokenType.LBRACE, "Era esperado '{' para abrir o corpo da interface", expected="'{'")
 
         members = []
@@ -390,7 +511,16 @@ class Parser:
             members.append(self.interface_member(iface_name))
 
         self.expect(TokenType.RBRACE, "Era esperado '}' para fechar o corpo da interface", expected="'}'")
-        return InterfaceDeclaration(iface_name, modifiers, type_parameters, extends_types, members, iface_tok.line, iface_tok.column)
+        return InterfaceDeclaration(
+            name=iface_name,
+            modifiers=modifiers,
+            type_parameters=type_parameters,
+            extends_types=extends_types,
+            members=members,
+            line=iface_tok.line,
+            column=iface_tok.column,
+            permits_types=permits_types
+        )
 
     def enum_declaration(self, modifiers: List[str]) -> EnumDeclaration:
         """Processa a declaração de um enum Java."""
@@ -446,56 +576,330 @@ class Parser:
         return EnumDeclaration(enum_name, modifiers, implements_types, constants, members, enum_tok.line, enum_tok.column)
 
     # -------------------------------------------------------------------------
-    # 2.5 MEMBROS DE CLASSE (CAMPOS, CONSTRUTORES, MÉTODOS)
+    # 2.5 MEMBROS DE CLASSE (CAMPOS, CONSTRUTORES, MÉTODOS, INICIALIZADORES - ETAPA S3)
     # -------------------------------------------------------------------------
+    def parse_variable_declarator_id(self) -> VariableDeclaratorId:
+        """
+        Processa identificador de variável com dimensões opcionais (JLS §8.3):
+        (Identifier | _) [Dims]
+        """
+        if not self.check(TokenType.IDENTIFIER):
+            t = self.peek()
+            raise SyntacticError(
+                message="Era esperado um identificador de variável",
+                line=t.line,
+                column=t.column,
+                expected="identificador de variável",
+                found=t.lexeme if t.type != TokenType.EOF else "EOF"
+            )
+        id_tok = self.advance()
+        dims = 0
+        while self.check(TokenType.LBRACKET) and self.peek_offset(1).type == TokenType.RBRACKET:
+            self.advance()
+            self.advance()
+            dims += 1
+        return VariableDeclaratorId(name=id_tok.lexeme, dims=dims, line=id_tok.line, column=id_tok.column)
+
+    def variable_initializer(self) -> ASTNode:
+        """Processa inicializador de variável (expressão ou inicializador de array literal)."""
+        if self.check(TokenType.LBRACE):
+            return self.parse_array_initializer()
+        return self.expression()
+
+    def _is_constructor_invocation_ahead(self) -> bool:
+        """Verifica se os próximos tokens iniciam uma invocação explícita de construtor (JLS §8.8.7.1)."""
+        if self.check(TokenType.KEYWORD_THIS) and self.peek_offset(1).type == TokenType.LPAREN:
+            return True
+        if self.check(TokenType.KEYWORD_SUPER) and self.peek_offset(1).type == TokenType.LPAREN:
+            return True
+        if self.check(TokenType.LESS):
+            depth = 1
+            idx = 1
+            while depth > 0 and self.peek_offset(idx).type != TokenType.EOF:
+                if self.peek_offset(idx).type == TokenType.LESS:
+                    depth += 1
+                elif self.peek_offset(idx).type in (TokenType.GREATER, TokenType.RSHIFT, TokenType.URSHIFT):
+                    depth -= 1
+                idx += 1
+            if self.peek_offset(idx).type in (TokenType.KEYWORD_THIS, TokenType.KEYWORD_SUPER) and self.peek_offset(idx + 1).type == TokenType.LPAREN:
+                return True
+
+        # Qualified: busca '. super (' na mesma instrução (antes de ';')
+        idx = 0
+        while self.peek_offset(idx).type not in (TokenType.SEMICOLON, TokenType.LBRACE, TokenType.RBRACE, TokenType.EOF):
+            if self.peek_offset(idx).type == TokenType.DOT:
+                next_idx = idx + 1
+                if self.peek_offset(next_idx).type == TokenType.LESS:
+                    depth = 1
+                    next_idx += 1
+                    while depth > 0 and self.peek_offset(next_idx).type != TokenType.EOF:
+                        if self.peek_offset(next_idx).type == TokenType.LESS:
+                            depth += 1
+                        elif self.peek_offset(next_idx).type in (TokenType.GREATER, TokenType.RSHIFT, TokenType.URSHIFT):
+                            depth -= 1
+                        next_idx += 1
+                if self.peek_offset(next_idx).type == TokenType.KEYWORD_SUPER and self.peek_offset(next_idx + 1).type == TokenType.LPAREN:
+                    return True
+            idx += 1
+
+        return False
+
+    def parse_explicit_constructor_invocation(self) -> ExplicitConstructorInvocation:
+        """
+        Processa uma invocação explícita de construtor (JLS §8.8.7.1):
+        - this(...)
+        - super(...)
+        - <TypeArgs>this(...)
+        - <TypeArgs>super(...)
+        - qualifier.super(...)
+        - qualifier.<TypeArgs>super(...)
+        """
+        type_args = []
+        if self.check(TokenType.LESS):
+            type_args = self.parse_type_arguments()
+            if self.check(TokenType.KEYWORD_THIS):
+                t_tok = self.advance()
+                self.expect(TokenType.LPAREN, "Era esperado '(' após 'this'")
+                args = self.parse_arguments()
+                self.expect(TokenType.RPAREN, "Era esperado ')' após argumentos do construtor")
+                self.expect(TokenType.SEMICOLON, "Era esperado ';' ao final da invocação do construtor", expected="';'")
+                return AlternateConstructorInvocation(arguments=args, type_arguments=type_args, line=t_tok.line, column=t_tok.column)
+            elif self.check(TokenType.KEYWORD_SUPER):
+                s_tok = self.advance()
+                self.expect(TokenType.LPAREN, "Era esperado '(' após 'super'")
+                args = self.parse_arguments()
+                self.expect(TokenType.RPAREN, "Era esperado ')' após argumentos do construtor")
+                self.expect(TokenType.SEMICOLON, "Era esperado ';' ao final da invocação do construtor", expected="';'")
+                return SuperclassConstructorInvocation(arguments=args, type_arguments=type_args, qualifier=None, line=s_tok.line, column=s_tok.column)
+
+        if self.check(TokenType.KEYWORD_THIS) and self.peek_offset(1).type == TokenType.LPAREN:
+            t_tok = self.advance()
+            self.expect(TokenType.LPAREN, "Era esperado '(' após 'this'")
+            args = self.parse_arguments()
+            self.expect(TokenType.RPAREN, "Era esperado ')' após argumentos do construtor")
+            self.expect(TokenType.SEMICOLON, "Era esperado ';' ao final da invocação do construtor", expected="';'")
+            return AlternateConstructorInvocation(arguments=args, type_arguments=[], line=t_tok.line, column=t_tok.column)
+
+        if self.check(TokenType.KEYWORD_SUPER) and self.peek_offset(1).type == TokenType.LPAREN:
+            s_tok = self.advance()
+            self.expect(TokenType.LPAREN, "Era esperado '(' após 'super'")
+            args = self.parse_arguments()
+            self.expect(TokenType.RPAREN, "Era esperado ')' após argumentos do construtor")
+            self.expect(TokenType.SEMICOLON, "Era esperado ';' ao final da invocação do construtor", expected="';'")
+            return SuperclassConstructorInvocation(arguments=args, type_arguments=[], qualifier=None, line=s_tok.line, column=s_tok.column)
+
+        # Qualified: expr.super(...) ou expr.<T>super(...)
+        qualifier = self.primary()
+        while self.check(TokenType.DOT) and not (self.peek_offset(1).type == TokenType.KEYWORD_SUPER or self.peek_offset(1).type == TokenType.LESS):
+            self.advance() # consome '.'
+            m_tok = self.expect(TokenType.IDENTIFIER, "Era esperado um identificador")
+            if self.check(TokenType.LPAREN):
+                self.advance()
+                args = self.parse_arguments()
+                self.expect(TokenType.RPAREN, "Era esperado ')'")
+                qualifier = MethodCall(method_name=m_tok.lexeme, target=qualifier, arguments=args, line=m_tok.line, column=m_tok.column)
+            else:
+                qualifier = MemberAccess(target=qualifier, member_name=m_tok.lexeme, line=m_tok.line, column=m_tok.column)
+
+        self.expect(TokenType.DOT, "Era esperado '.' antes de 'super' na invocação qualificada de construtor")
+        type_args = []
+        if self.check(TokenType.LESS):
+            type_args = self.parse_type_arguments()
+
+        s_tok = self.expect(TokenType.KEYWORD_SUPER, "Era esperado 'super' na invocação de construtor")
+        self.expect(TokenType.LPAREN, "Era esperado '(' após 'super'")
+        args = self.parse_arguments()
+        self.expect(TokenType.RPAREN, "Era esperado ')' após argumentos do construtor")
+        self.expect(TokenType.SEMICOLON, "Era esperado ';' ao final da invocação do construtor", expected="';'")
+        return SuperclassConstructorInvocation(arguments=args, type_arguments=type_args, qualifier=qualifier, line=s_tok.line, column=s_tok.column)
+
+    def parse_constructor_body(self, class_name: str) -> ConstructorBody:
+        """
+        Processa o corpo de um construtor com suporte a Flexible Constructor Bodies (JEP 513 / JLS §8.8.7):
+        { [BlockStatements] ConstructorInvocation [BlockStatements] }
+        { [BlockStatements] }
+        """
+        start_tok = self.expect(TokenType.LBRACE, "Era esperado '{' para abrir o corpo do construtor", expected="'{'")
+        prologue: List[ASTNode] = []
+        ctor_inv: Optional[ExplicitConstructorInvocation] = None
+        epilogue: List[ASTNode] = []
+
+        while not self.check(TokenType.RBRACE) and not self.check(TokenType.EOF):
+            if self._is_constructor_invocation_ahead():
+                if ctor_inv is not None:
+                    t = self.peek()
+                    raise SyntacticError(
+                        message="Múltiplas invocações explícitas de construtor não são permitidas no mesmo corpo de construtor",
+                        line=t.line,
+                        column=t.column,
+                        expected="apenas uma invocação explícita de 'this(...)' ou 'super(...)'",
+                        found=t.lexeme
+                    )
+                ctor_inv = self.parse_explicit_constructor_invocation()
+                continue
+
+            stmt = self.parse_statement()
+            if ctor_inv is None:
+                prologue.append(stmt)
+            else:
+                epilogue.append(stmt)
+
+        self.expect(TokenType.RBRACE, "Era esperado '}' para fechar o corpo do construtor", expected="'}'")
+        return ConstructorBody(prologue=prologue, constructor_invocation=ctor_inv, epilogue=epilogue, line=start_tok.line, column=start_tok.column)
+
     def class_member(self, class_name: str) -> ASTNode:
-        """Processa um membro dentro de uma classe."""
-        mods = self.parse_modifiers()
+        """Processa um membro dentro de uma classe (JLS §8.1.7)."""
+        if self.check(TokenType.SEMICOLON):
+            sem_tok = self.advance()
+            return EmptyStatement(line=sem_tok.line, column=sem_tok.column)
 
-        # Tipos aninhados
+        annos = []
+        mods = []
+        while self.peek().type in MODIFIER_TOKENS or self.check(TokenType.AT):
+            if self.check(TokenType.AT):
+                annos.extend(self._parse_optional_annotations())
+            else:
+                mods.append(self.advance().lexeme)
+
+        # 1. Inicializador de instância: { ... } (sem modificadores)
+        if not mods and not annos and self.check(TokenType.LBRACE):
+            block = self.parse_block()
+            return InstanceInitializer(block=block, line=block.line, column=block.column)
+
+        # 2. Inicializador estático: static { ... }
+        if mods == ["static"] and not annos and self.check(TokenType.LBRACE):
+            block = self.parse_block()
+            return StaticInitializer(block=block, line=block.line, column=block.column)
+
+        # 3. Tipos aninhados
         if self.check(TokenType.KEYWORD_CLASS):
-            return self.class_declaration(mods)
+            decl = self.class_declaration(mods)
+            decl.annotations = annos
+            return decl
         if self.check(TokenType.KEYWORD_INTERFACE):
-            return self.interface_declaration(mods)
+            decl = self.interface_declaration(mods)
+            decl.annotations = annos
+            return decl
         if self.check(TokenType.KEYWORD_ENUM):
-            return self.enum_declaration(mods)
+            decl = self.enum_declaration(mods)
+            decl.annotations = annos
+            return decl
 
-        # Construtor: identificador igual ao nome da classe seguido de '('
-        if self.check(TokenType.IDENTIFIER) and self.peek().lexeme == class_name and self.peek_offset(1).type == TokenType.LPAREN:
+        # 4. Parâmetros de tipo genérico (para métodos genéricos ou construtores genéricos)
+        type_params = []
+        if self.check(TokenType.LESS):
+            type_params = self.parse_type_parameters()
+
+        # 5. Construtor genérico: <U> ClassName(...)
+        if type_params and self.check(TokenType.IDENTIFIER) and self.peek_offset(1).type == TokenType.LPAREN:
             ctor_tok = self.advance()
-            params = self.parse_parameter_list()
+            recv_param, params = self.parse_formal_parameters()
             throws_types = self.parse_throws_clause()
-            body = self.parse_block()
-            return ConstructorDeclaration(ctor_tok.lexeme, params, mods, throws_types, body, ctor_tok.line, ctor_tok.column)
+            body = self.parse_constructor_body(ctor_tok.lexeme)
+            return ConstructorDeclaration(
+                name=ctor_tok.lexeme,
+                parameters=params,
+                modifiers=mods,
+                throws_types=throws_types,
+                body=body,
+                line=ctor_tok.line,
+                column=ctor_tok.column,
+                receiver_parameter=recv_param,
+                type_parameters=type_params,
+                annotations=annos
+            )
 
-        # Campo ou Método: inicia com o tipo
-        type_ref = self.parse_type_reference()
+        # 6. Construtor normal: identificador seguido de '(' sem tipo de retorno
+        if not type_params and self.check(TokenType.IDENTIFIER) and self.peek_offset(1).type == TokenType.LPAREN:
+            if self.peek().lexeme == class_name or not any(m in ("static", "abstract", "native", "synchronized") for m in mods):
+                ctor_tok = self.advance()
+                recv_param, params = self.parse_formal_parameters()
+                throws_types = self.parse_throws_clause()
+                body = self.parse_constructor_body(ctor_tok.lexeme)
+                return ConstructorDeclaration(
+                    name=ctor_tok.lexeme,
+                    parameters=params,
+                    modifiers=mods,
+                    throws_types=throws_types,
+                    body=body,
+                    line=ctor_tok.line,
+                    column=ctor_tok.column,
+                    receiver_parameter=recv_param,
+                    type_parameters=[],
+                    annotations=annos
+                )
+
+        # 7. Método ou Campo: inicia com o tipo
+        type_ref = self.parse_type_reference(leading_annotations=annos)
         name_tok = self.expect(TokenType.IDENTIFIER, "Era esperado o nome do membro (método ou campo)", expected="o nome do membro (método ou campo)")
 
-        # Método
+        # 7.1 Método
         if self.check(TokenType.LPAREN):
-            params = self.parse_parameter_list()
+            recv_param, params = self.parse_formal_parameters()
+            dims = 0
+            while self.check(TokenType.LBRACKET) and self.peek_offset(1).type == TokenType.RBRACKET:
+                self.advance()
+                self.advance()
+                dims += 1
             throws_types = self.parse_throws_clause()
             if self.check(TokenType.SEMICOLON):
                 self.advance()
-                body = None # método abstrato ou assinatura sem corpo
+                body = None
             else:
                 body = self.parse_block()
-            return MethodDeclaration(name_tok.lexeme, type_ref, params, mods, throws_types, body, name_tok.line, name_tok.column)
+            return MethodDeclaration(
+                name=name_tok.lexeme,
+                return_type=type_ref,
+                parameters=params,
+                modifiers=mods,
+                throws_types=throws_types,
+                body=body,
+                line=name_tok.line,
+                column=name_tok.column,
+                type_parameters=type_params,
+                annotations=annos,
+                receiver_parameter=recv_param,
+                dims=dims
+            )
 
-        # Campo
-        initializer = None
+        # 7.2 Campo: VariableDeclaratorList
+        declarators: List[VariableDeclarator] = []
+        dims = 0
+        while self.check(TokenType.LBRACKET) and self.peek_offset(1).type == TokenType.RBRACKET:
+            self.advance()
+            self.advance()
+            dims += 1
+        first_id = VariableDeclaratorId(name=name_tok.lexeme, dims=dims, line=name_tok.line, column=name_tok.column)
+        first_init = None
         if self.check(TokenType.ASSIGN):
             self.advance()
-            initializer = self.expression()
+            first_init = self.variable_initializer()
+        declarators.append(VariableDeclarator(id=first_id, initializer=first_init, line=name_tok.line, column=name_tok.column))
+
+        while self.check(TokenType.COMMA):
+            self.advance()
+            decl_id = self.parse_variable_declarator_id()
+            init = None
+            if self.check(TokenType.ASSIGN):
+                self.advance()
+                init = self.variable_initializer()
+            declarators.append(VariableDeclarator(id=decl_id, initializer=init, line=decl_id.line, column=decl_id.column))
 
         self.expect(TokenType.SEMICOLON, "Era esperado ';' ao final da declaração do campo", expected="';'")
-        return FieldDeclaration(type_ref, name_tok.lexeme, mods, initializer, name_tok.line, name_tok.column)
+        return FieldDeclaration(type_ref=type_ref, declarators=declarators, modifiers=mods, line=name_tok.line, column=name_tok.column, annotations=annos)
 
     def interface_member(self, interface_name: str) -> ASTNode:
         """Processa um membro dentro de uma interface."""
+        annos = self._parse_optional_annotations()
         mods = self.parse_modifiers()
-        type_ref = self.parse_type_reference()
+        if self.check(TokenType.AT):
+            annos.extend(self._parse_optional_annotations())
+
+        type_params = []
+        if self.check(TokenType.LESS):
+            type_params = self.parse_type_parameters()
+
+        type_ref = self.parse_type_reference(leading_annotations=annos)
         name_tok = self.expect(TokenType.IDENTIFIER, "Era esperado o nome do método ou constante da interface")
 
         if self.check(TokenType.LPAREN):
@@ -506,20 +910,189 @@ class Parser:
                 body = None
             else:
                 body = self.parse_block() # default method
-            return MethodDeclaration(name_tok.lexeme, type_ref, params, mods, throws_types, body, name_tok.line, name_tok.column)
+            return MethodDeclaration(
+                name_tok.lexeme,
+                type_ref,
+                params,
+                mods,
+                throws_types,
+                body,
+                name_tok.line,
+                name_tok.column,
+                type_parameters=type_params,
+                annotations=annos
+            )
 
         initializer = None
         if self.check(TokenType.ASSIGN):
             self.advance()
             initializer = self.expression()
         self.expect(TokenType.SEMICOLON, "Era esperado ';' ao final da declaração", expected="';'")
-        return FieldDeclaration(type_ref, name_tok.lexeme, mods, initializer, name_tok.line, name_tok.column)
+        return FieldDeclaration(type_ref, name_tok.lexeme, mods, initializer, name_tok.line, name_tok.column, annotations=annos)
 
     # -------------------------------------------------------------------------
-    # 2.6 REFERÊNCIA DE TIPO E PARÂMETROS
+    # 2.6 REFERÊNCIA DE TIPO, GENERICS E PARÂMETROS (ETAPA S1)
     # -------------------------------------------------------------------------
-    def parse_type_reference(self) -> TypeReference:
-        """Processa tipos primitivos, nomes qualificados, generics e dimensões de arrays."""
+    def _is_closing_generic_bracket(self) -> bool:
+        """Verifica se o próximo token fecha um nível de generic: >, >> ou >>>."""
+        return self.peek().type in (TokenType.GREATER, TokenType.RSHIFT, TokenType.URSHIFT)
+
+    def _consume_closing_generic_bracket(self) -> Token:
+        """
+        Consome um delimitador '>' de fechamento genérico.
+        Lida transparentemente com tokens compostos gerados por maximal munch no lexer:
+        '>>' (RSHIFT) -> consome um '>' e substitui por '>' (GREATER)
+        '>>>' (URSHIFT) -> consome um '>' e substitui por '>>' (RSHIFT)
+        """
+        tok = self.peek()
+        if tok.type == TokenType.GREATER:
+            return self.advance()
+        elif tok.type == TokenType.RSHIFT:
+            replacement = Token(TokenType.GREATER, ">", tok.line, tok.column + 1)
+            self.tokens[self.current] = replacement
+            return Token(TokenType.GREATER, ">", tok.line, tok.column)
+        elif tok.type == TokenType.URSHIFT:
+            replacement = Token(TokenType.RSHIFT, ">>", tok.line, tok.column + 1)
+            self.tokens[self.current] = replacement
+            return Token(TokenType.GREATER, ">", tok.line, tok.column)
+        else:
+            raise SyntacticError(
+                message="Era esperado '>' para fechar argumentos ou parâmetros de tipo genérico",
+                line=tok.line,
+                column=tok.column,
+                expected="'>'",
+                found=tok.lexeme if tok.type != TokenType.EOF else "EOF"
+            )
+
+    def _parse_optional_annotations(self) -> List[Annotation]:
+        """Processa zero ou mais annotations no formato @Nome ou @Nome(...)."""
+        annotations = []
+        while self.check(TokenType.AT):
+            # Não consome se for @interface
+            if self.peek_offset(1).type == TokenType.KEYWORD_INTERFACE:
+                break
+            at_tok = self.advance() # consome '@'
+            if not self.check(TokenType.IDENTIFIER):
+                t = self.peek()
+                raise SyntacticError(
+                    message="Era esperado um identificador após '@'",
+                    line=t.line,
+                    column=t.column,
+                    expected="o nome da anotação após '@'",
+                    found=t.lexeme if t.type != TokenType.EOF else "EOF"
+                )
+            name = self.qualified_identifier()
+            args = None
+            if self.check(TokenType.LPAREN):
+                self.advance() # consome '('
+                args = self._parse_annotation_arguments()
+                self.expect(TokenType.RPAREN, "Era esperado ')' para fechar argumentos da anotação", expected="')'")
+            annotations.append(Annotation(name, args, at_tok.line, at_tok.column))
+        return annotations
+
+    def _parse_annotation_arguments(self) -> Any:
+        """Processa argumentos de anotação dentro dos parênteses: (valor) ou (k=v, ...)."""
+        if self.check(TokenType.RPAREN):
+            return None
+        if self.check(TokenType.LBRACE):
+            return self.parse_array_initializer()
+        if self.check(TokenType.IDENTIFIER) and self.peek_offset(1).type == TokenType.ASSIGN:
+            pairs = {}
+            while not self.check(TokenType.RPAREN) and not self.check(TokenType.EOF):
+                k_tok = self.expect(TokenType.IDENTIFIER, "Era esperado nome de elemento na anotação")
+                self.expect(TokenType.ASSIGN, "Era esperado '=' após o nome do elemento")
+                if self.check(TokenType.LBRACE):
+                    v = self.parse_array_initializer()
+                elif self.check(TokenType.AT):
+                    v = self._parse_optional_annotations()[0]
+                else:
+                    v = self.expression()
+                pairs[k_tok.lexeme] = v
+                if self.check(TokenType.COMMA):
+                    self.advance()
+                else:
+                    break
+            return pairs
+        if self.check(TokenType.AT):
+            return self._parse_optional_annotations()[0]
+        return self.expression()
+
+    def parse_type_parameters(self) -> List[TypeParameter]:
+        """
+        Processa parâmetros de tipo genérico na declaração de classes, interfaces, records ou métodos:
+        < T [extends Bound1 & Bound2], U >
+        """
+        self.expect(TokenType.LESS, "Era esperado '<' para iniciar parâmetros de tipo", expected="'<'")
+        if self._is_closing_generic_bracket():
+            t = self.peek()
+            raise SyntacticError(
+                message="Era esperado nome de parâmetro genérico após '<'",
+                line=t.line,
+                column=t.column,
+                expected="nome de parâmetro genérico",
+                found=t.lexeme if t.type != TokenType.EOF else "EOF",
+            )
+        params = []
+        while not self._is_closing_generic_bracket() and not self.check(TokenType.EOF):
+            annos = self._parse_optional_annotations()
+            p_tok = self.expect(TokenType.IDENTIFIER, "Era esperado nome de parâmetro genérico", expected="identificador de parâmetro genérico")
+            bounds = []
+            if self.check(TokenType.KEYWORD_EXTENDS):
+                self.advance() # consome 'extends'
+                bounds.append(self.parse_type_reference())
+                while self.check(TokenType.BITWISE_AND):
+                    self.advance() # consome '&'
+                    bounds.append(self.parse_type_reference())
+            params.append(TypeParameter(p_tok.lexeme, bounds, annos, p_tok.line, p_tok.column))
+            if self.check(TokenType.COMMA):
+                self.advance()
+            else:
+                break
+        self._consume_closing_generic_bracket()
+        return params
+
+    def parse_type_arguments(self) -> List[ASTNode]:
+        """
+        Processa argumentos de tipo genérico no uso de tipos ou invocações genéricas:
+        < String, ? extends Number, Map<K, List<V>> >
+        """
+        self.expect(TokenType.LESS, "Era esperado '<' para iniciar argumentos de tipo", expected="'<'")
+        args = []
+        while not self._is_closing_generic_bracket() and not self.check(TokenType.EOF):
+            annos = self._parse_optional_annotations()
+            if self.check(TokenType.QUESTION):
+                q_tok = self.advance() # consome '?'
+                bound_kind = None
+                bound_type = None
+                if self.check(TokenType.KEYWORD_EXTENDS):
+                    self.advance()
+                    bound_kind = "extends"
+                    bound_type = self.parse_type_reference()
+                elif self.check(TokenType.KEYWORD_SUPER):
+                    self.advance()
+                    bound_kind = "super"
+                    bound_type = self.parse_type_reference()
+                args.append(WildcardType(bound_kind, bound_type, annos, q_tok.line, q_tok.column))
+            else:
+                args.append(self.parse_type_reference(leading_annotations=annos))
+
+            if self.check(TokenType.COMMA):
+                self.advance()
+            else:
+                break
+        self._consume_closing_generic_bracket()
+        return args
+
+    def parse_type_reference(self, leading_annotations: List[ASTNode] = None) -> TypeReference:
+        """
+        Processa tipos primitivos, nomes qualificados, generics (com wildcards e bounds),
+        annotations e dimensões de arrays.
+        """
+        if leading_annotations is None:
+            leading_annotations = self._parse_optional_annotations()
+        elif self.check(TokenType.AT):
+            leading_annotations = list(leading_annotations) + self._parse_optional_annotations()
+
         tok = self.peek()
         if tok.type in PRIMITIVE_TYPE_TOKENS:
             self.advance()
@@ -535,49 +1108,135 @@ class Parser:
                 found=tok.lexeme if tok.type != TokenType.EOF else "EOF",
             )
 
-        # Parâmetros genéricos simples (<T>, <K, V>)
+        # Argumentos de tipo genérico (<T>, <K, V>, <List<String>>, <?>)
         type_arguments = []
         if self.check(TokenType.LESS):
-            self.advance()
-            while not self.check(TokenType.GREATER) and not self.check(TokenType.EOF):
-                type_arguments.append(self.parse_type_reference())
-                if self.check(TokenType.COMMA):
-                    self.advance()
-                else:
-                    break
-            self.expect(TokenType.GREATER, "Era esperado '>' para fechar argumentos de tipo genérico", expected="'>'")
+            type_arguments = self.parse_type_arguments()
 
-        # Dimensões de array (ex: int[], String[][])
+        # Dimensões de array (ex: int[], String[][], @Nullable [])
         array_dimensions = 0
-        while self.check(TokenType.LBRACKET) and self.peek_offset(1).type == TokenType.RBRACKET:
-            self.advance() # [
-            self.advance() # ]
-            array_dimensions += 1
+        dims_annotations = []
+        while True:
+            dim_annos = self._parse_optional_annotations()
+            if self.check(TokenType.LBRACKET) and self.peek_offset(1).type == TokenType.RBRACKET:
+                self.advance() # [
+                self.advance() # ]
+                array_dimensions += 1
+                dims_annotations.append(dim_annos)
+            else:
+                break
 
         is_varargs = False
         if self.check(TokenType.ELLIPSIS):
             self.advance()
             is_varargs = True
 
-        return TypeReference(type_name, array_dimensions, type_arguments, is_varargs, tok.line, tok.column)
+        return TypeReference(
+            name=type_name,
+            array_dimensions=array_dimensions,
+            type_arguments=type_arguments,
+            is_varargs=is_varargs,
+            line=tok.line,
+            column=tok.column,
+            annotations=leading_annotations,
+            dims_annotations=dims_annotations
+        )
 
-    def parse_parameter_list(self) -> List[Parameter]:
-        """Processa a lista de parâmetros entre parênteses: (Tipo a, Tipo... b)"""
+    def parse_formal_parameters(self) -> Tuple[Optional[ReceiverParameter], List[Parameter]]:
+        """
+        Processa parâmetros formais e parâmetro receptor opcional (JLS §8.4.1):
+        ( [ReceiverParameter ,] [FormalParameterList] )
+        """
         self.expect(TokenType.LPAREN, "Era esperado '(' para iniciar parâmetros", expected="'('")
-        params = []
+        receiver_param = None
+        params: List[Parameter] = []
+        is_first = True
+
         while not self.check(TokenType.RPAREN) and not self.check(TokenType.EOF):
-            t_ref = self.parse_type_reference()
+            p_annos = self._parse_optional_annotations()
+            p_mods = []
+            while self.peek().type in (TokenType.KEYWORD_FINAL,):
+                p_mods.append(self.advance().lexeme)
+            if self.check(TokenType.AT):
+                p_annos.extend(self._parse_optional_annotations())
+
+            t_ref = self.parse_type_reference(leading_annotations=p_annos)
+
+            # Verifica se é ReceiverParameter no primeiro parâmetro:
+            # {Annotation} UnannType [Identifier .] this
+            if is_first and (self.check(TokenType.KEYWORD_THIS) or (self.check(TokenType.IDENTIFIER) and self.peek_offset(1).type == TokenType.DOT and self.peek_offset(2).type == TokenType.KEYWORD_THIS)):
+                qualifier = None
+                if self.check(TokenType.IDENTIFIER):
+                    qual_tok = self.advance()
+                    self.expect(TokenType.DOT, "Era esperado '.' em qualificador de this")
+                    qualifier = qual_tok.lexeme
+                this_tok = self.expect(TokenType.KEYWORD_THIS, "Era esperado 'this' no parâmetro receptor")
+                receiver_param = ReceiverParameter(
+                    type_ref=t_ref,
+                    name="this",
+                    qualifier=qualifier,
+                    annotations=p_annos,
+                    line=this_tok.line,
+                    column=this_tok.column
+                )
+                is_first = False
+                if self.check(TokenType.COMMA):
+                    self.advance()
+                    continue
+                else:
+                    break
+
+            is_first = False
+
+            if self.check(TokenType.KEYWORD_THIS):
+                t = self.peek()
+                raise SyntacticError(
+                    message="O parâmetro receptor ('this') só pode aparecer como o primeiro parâmetro formal",
+                    line=t.line,
+                    column=t.column,
+                    expected="um identificador de parâmetro válido",
+                    found="this"
+                )
+
             is_var = t_ref.is_varargs
             if self.check(TokenType.ELLIPSIS):
                 self.advance()
                 is_var = True
-            p_name_tok = self.expect(TokenType.IDENTIFIER, "Era esperado o nome do parâmetro")
-            params.append(Parameter(t_ref, p_name_tok.lexeme, is_var, p_name_tok.line, p_name_tok.column))
+
+            decl_id = self.parse_variable_declarator_id()
+            if is_var:
+                param = VariableArityParameter(
+                    type_ref=t_ref,
+                    name=decl_id.name,
+                    line=decl_id.line,
+                    column=decl_id.column,
+                    modifiers=p_mods,
+                    annotations=p_annos
+                )
+            else:
+                param = FormalParameter(
+                    type_ref=t_ref,
+                    name=decl_id.name,
+                    is_varargs=False,
+                    line=decl_id.line,
+                    column=decl_id.column,
+                    modifiers=p_mods,
+                    annotations=p_annos,
+                    dims=decl_id.dims
+                )
+            params.append(param)
+
             if self.check(TokenType.COMMA):
                 self.advance()
             else:
                 break
+
         self.expect(TokenType.RPAREN, "Era esperado ')' para fechar os parâmetros", expected="')'")
+        return receiver_param, params
+
+    def parse_parameter_list(self) -> List[Parameter]:
+        """Processa a lista de parâmetros entre parênteses: (Tipo a, Tipo... b)"""
+        _, params = self.parse_formal_parameters()
         return params
 
     def parse_throws_clause(self) -> List[TypeReference]:
@@ -628,6 +1287,17 @@ class Parser:
         - synchronized
         - Chamadas de método e expressões como instruções
         """
+        # 0. Verificação estrutural: Invocação explícita de construtor em posição inválida
+        if self._is_constructor_invocation_ahead():
+            t = self.peek()
+            raise SyntacticError(
+                message="Invocação explícita de construtor ('this' ou 'super') só é permitida no nível superior do corpo de um construtor",
+                line=t.line,
+                column=t.column,
+                expected="instrução válida (invocação de construtor proibida nesta posição)",
+                found=t.lexeme
+            )
+
         # 1. Instrução vazia ';'
         if self.check(TokenType.SEMICOLON):
             tok = self.advance()
@@ -1853,3 +2523,542 @@ class Parser:
             if next_t.type == TokenType.IDENTIFIER and self.peek_offset(2).type == TokenType.LPAREN:
                 return True
         return False
+
+    # -------------------------------------------------------------------------
+    # 2.12 PROCESSAMENTO DE MÓDULOS E UNIDADES COMPACTAS (ETAPA S2)
+    # -------------------------------------------------------------------------
+    def _is_package_declaration_ahead(self) -> bool:
+        """Verifica se há uma declaração de pacote, mesmo precedida por annotations."""
+        offset = 0
+        while self.peek_offset(offset).type == TokenType.AT:
+            offset += 1
+            if self.peek_offset(offset).type == TokenType.IDENTIFIER:
+                offset += 1
+                while self.peek_offset(offset).type == TokenType.DOT and self.peek_offset(offset + 1).type == TokenType.IDENTIFIER:
+                    offset += 2
+                if self.peek_offset(offset).type == TokenType.LPAREN:
+                    nesting = 1
+                    offset += 1
+                    while nesting > 0 and self.peek_offset(offset).type != TokenType.EOF:
+                        if self.peek_offset(offset).type == TokenType.LPAREN:
+                            nesting += 1
+                        elif self.peek_offset(offset).type == TokenType.RPAREN:
+                            nesting -= 1
+                        offset += 1
+            else:
+                break
+        return self.peek_offset(offset).type == TokenType.KEYWORD_PACKAGE
+
+    def _is_module_declaration_ahead(self) -> bool:
+        """Verifica se os próximos tokens (após eventuais annotations) iniciam uma declaração de módulo."""
+        offset = 0
+        while self.peek_offset(offset).type == TokenType.AT:
+            offset += 1
+            if self.peek_offset(offset).type == TokenType.IDENTIFIER:
+                offset += 1
+                while self.peek_offset(offset).type == TokenType.DOT and self.peek_offset(offset + 1).type == TokenType.IDENTIFIER:
+                    offset += 2
+                if self.peek_offset(offset).type == TokenType.LPAREN:
+                    nesting = 1
+                    offset += 1
+                    while nesting > 0 and self.peek_offset(offset).type != TokenType.EOF:
+                        if self.peek_offset(offset).type == TokenType.LPAREN:
+                            nesting += 1
+                        elif self.peek_offset(offset).type == TokenType.RPAREN:
+                            nesting -= 1
+                        offset += 1
+            else:
+                break
+
+        t = self.peek_offset(offset)
+        if t.type == TokenType.IDENTIFIER and t.lexeme == "open":
+            offset += 1
+            t = self.peek_offset(offset)
+
+        if t.type == TokenType.IDENTIFIER and t.lexeme == "module":
+            next_t = self.peek_offset(offset + 1)
+            if next_t.type == TokenType.IDENTIFIER:
+                return True
+        return False
+
+    def _is_compact_compilation_unit(self) -> bool:
+        """
+        Determina se a unidade de compilação é compacta (JLS §7.3):
+        sem package e sem classe explícita que englobe o arquivo,
+        mas com declarações de métodos no nível superior (sem modificadores de acesso proibidos).
+        """
+        offset = 0
+        has_method = False
+        has_explicit_top_class = False
+        brace_depth = 0
+
+        while self.peek_offset(offset).type != TokenType.EOF:
+            t = self.peek_offset(offset)
+
+            if t.type == TokenType.LBRACE:
+                brace_depth += 1
+                offset += 1
+                continue
+            elif t.type == TokenType.RBRACE:
+                brace_depth = max(0, brace_depth - 1)
+                offset += 1
+                continue
+
+            # Se estiver dentro de algum bloco ou classe interna, não analisa assinaturas de nível superior
+            if brace_depth > 0:
+                offset += 1
+                continue
+
+            # Pula annotations no nível raiz
+            while self.peek_offset(offset).type == TokenType.AT:
+                offset += 1
+                if self.peek_offset(offset).type == TokenType.IDENTIFIER:
+                    offset += 1
+                    while self.peek_offset(offset).type == TokenType.DOT and self.peek_offset(offset + 1).type == TokenType.IDENTIFIER:
+                        offset += 2
+                    if self.peek_offset(offset).type == TokenType.LPAREN:
+                        nesting = 1
+                        offset += 1
+                        while nesting > 0 and self.peek_offset(offset).type != TokenType.EOF:
+                            if self.peek_offset(offset).type == TokenType.LPAREN:
+                                nesting += 1
+                            elif self.peek_offset(offset).type == TokenType.RPAREN:
+                                nesting -= 1
+                            offset += 1
+
+            mods = []
+            while self.peek_offset(offset).type in MODIFIER_TOKENS:
+                mods.append(self.peek_offset(offset).lexeme)
+                offset += 1
+
+            t = self.peek_offset(offset)
+
+            # Se encontrar classe explícita no nível raiz com public/protected/private, não é compact unit
+            if t.type in (TokenType.KEYWORD_CLASS, TokenType.KEYWORD_INTERFACE, TokenType.KEYWORD_ENUM):
+                if any(m in ("public", "protected", "private") for m in mods):
+                    has_explicit_top_class = True
+                    break
+
+            # Se encontrar método no nível superior (sem modificadores de acesso proibidos)
+            if t.type in PRIMITIVE_TYPE_TOKENS or t.type == TokenType.IDENTIFIER:
+                off_look = offset + 1
+                while self.peek_offset(off_look).type == TokenType.LBRACKET and self.peek_offset(off_look + 1).type == TokenType.RBRACKET:
+                    off_look += 2
+                if self.peek_offset(off_look).type == TokenType.IDENTIFIER and self.peek_offset(off_look + 1).type == TokenType.LPAREN:
+                    if not any(m in ("public", "protected", "private", "abstract") for m in mods):
+                        has_method = True
+                        break
+
+            offset += 1
+
+        if has_explicit_top_class:
+            return False
+
+        return has_method
+
+    def parse_module_declaration(self, leading_annotations: List[ASTNode] = None) -> ModuleDeclaration:
+        """
+        Processa declaração de módulo (JLS §7.7):
+        {Annotation} [open] module Identifier {. Identifier} { {ModuleDirective} }
+        """
+        if leading_annotations is None:
+            leading_annotations = self._parse_optional_annotations()
+
+        is_open = False
+        tok = self.peek()
+        if tok.type == TokenType.IDENTIFIER and tok.lexeme == "open":
+            is_open = True
+            self.advance()
+
+        mod_tok = self.peek()
+        if not (mod_tok.type == TokenType.IDENTIFIER and mod_tok.lexeme == "module"):
+            raise SyntacticError(
+                message="Era esperado 'module' para iniciar a declaração de módulo",
+                line=mod_tok.line,
+                column=mod_tok.column,
+                expected="'module'",
+                found=mod_tok.lexeme if mod_tok.type != TokenType.EOF else "EOF",
+            )
+        self.advance() # consome 'module'
+
+        if not self.check(TokenType.IDENTIFIER):
+            t = self.peek()
+            raise SyntacticError(
+                message="Era esperado o nome do módulo após 'module'",
+                line=t.line,
+                column=t.column,
+                expected="o nome do módulo",
+                found=t.lexeme if t.type != TokenType.EOF else "EOF",
+            )
+
+        module_name = self.qualified_identifier()
+
+        self.expect(TokenType.LBRACE, "Era esperado '{' para abrir o corpo do módulo", expected="'{'")
+
+        directives: List[ModuleDirective] = []
+        while not self.check(TokenType.RBRACE) and not self.check(TokenType.EOF):
+            directives.append(self.parse_module_directive())
+
+        self.expect(TokenType.RBRACE, "Era esperado '}' para fechar o corpo do módulo", expected="'}'")
+
+        return ModuleDeclaration(
+            name=module_name,
+            is_open=is_open,
+            directives=directives,
+            annotations=leading_annotations,
+            line=mod_tok.line,
+            column=mod_tok.column,
+        )
+
+    def parse_module_directive(self) -> ModuleDirective:
+        """
+        Processa uma diretiva de módulo (JLS §7.7):
+        - requires {RequiresModifier} ModuleName ;
+        - exports PackageName [to ModuleName {, ModuleName}] ;
+        - opens PackageName [to ModuleName {, ModuleName}] ;
+        - uses TypeName ;
+        - provides TypeName with TypeName {, TypeName} ;
+        """
+        tok = self.peek()
+
+        if tok.type == TokenType.IDENTIFIER and tok.lexeme == "requires":
+            req_tok = self.advance() # consome 'requires'
+            is_transitive = False
+            is_static = False
+            while True:
+                if self.check(TokenType.KEYWORD_STATIC):
+                    self.advance()
+                    is_static = True
+                elif self.check(TokenType.IDENTIFIER) and self.peek().lexeme == "transitive":
+                    self.advance()
+                    is_transitive = True
+                else:
+                    break
+
+            if not self.check(TokenType.IDENTIFIER):
+                t = self.peek()
+                raise SyntacticError(
+                    message="Era esperado o nome do módulo após 'requires'",
+                    line=t.line,
+                    column=t.column,
+                    expected="nome do módulo após 'requires'",
+                    found=t.lexeme if t.type != TokenType.EOF else "EOF",
+                )
+            mod_name = self.qualified_identifier()
+            self.expect(TokenType.SEMICOLON, "Era esperado ';' ao final da diretiva 'requires'", expected="';'")
+            return RequiresDirective(
+                module_name=mod_name,
+                is_transitive=is_transitive,
+                is_static=is_static,
+                line=req_tok.line,
+                column=req_tok.column,
+            )
+
+        elif tok.type == TokenType.IDENTIFIER and tok.lexeme == "exports":
+            exp_tok = self.advance() # consome 'exports'
+            if not self.check(TokenType.IDENTIFIER):
+                t = self.peek()
+                raise SyntacticError(
+                    message="Era esperado o nome do pacote após 'exports'",
+                    line=t.line,
+                    column=t.column,
+                    expected="nome do pacote após 'exports'",
+                    found=t.lexeme if t.type != TokenType.EOF else "EOF",
+                )
+            pkg_name = self.qualified_identifier()
+            to_modules = []
+            if self.check(TokenType.IDENTIFIER) and self.peek().lexeme == "to":
+                self.advance() # consome 'to'
+                if not self.check(TokenType.IDENTIFIER):
+                    t = self.peek()
+                    raise SyntacticError(
+                        message="Era esperado o nome do módulo de destino após 'to'",
+                        line=t.line,
+                        column=t.column,
+                        expected="nome do módulo de destino",
+                        found=t.lexeme if t.type != TokenType.EOF else "EOF",
+                    )
+                to_modules.append(self.qualified_identifier())
+                while self.check(TokenType.COMMA):
+                    self.advance()
+                    to_modules.append(self.qualified_identifier())
+            self.expect(TokenType.SEMICOLON, "Era esperado ';' ao final da diretiva 'exports'", expected="';'")
+            return ExportsDirective(
+                package_name=pkg_name,
+                to_modules=to_modules,
+                line=exp_tok.line,
+                column=exp_tok.column,
+            )
+
+        elif tok.type == TokenType.IDENTIFIER and tok.lexeme == "opens":
+            opn_tok = self.advance() # consome 'opens'
+            if not self.check(TokenType.IDENTIFIER):
+                t = self.peek()
+                raise SyntacticError(
+                    message="Era esperado o nome do pacote após 'opens'",
+                    line=t.line,
+                    column=t.column,
+                    expected="nome do pacote após 'opens'",
+                    found=t.lexeme if t.type != TokenType.EOF else "EOF",
+                )
+            pkg_name = self.qualified_identifier()
+            to_modules = []
+            if self.check(TokenType.IDENTIFIER) and self.peek().lexeme == "to":
+                self.advance() # consome 'to'
+                if not self.check(TokenType.IDENTIFIER):
+                    t = self.peek()
+                    raise SyntacticError(
+                        message="Era esperado o nome do módulo de destino após 'to'",
+                        line=t.line,
+                        column=t.column,
+                        expected="nome do módulo de destino",
+                        found=t.lexeme if t.type != TokenType.EOF else "EOF",
+                    )
+                to_modules.append(self.qualified_identifier())
+                while self.check(TokenType.COMMA):
+                    self.advance()
+                    to_modules.append(self.qualified_identifier())
+            self.expect(TokenType.SEMICOLON, "Era esperado ';' ao final da diretiva 'opens'", expected="';'")
+            return OpensDirective(
+                package_name=pkg_name,
+                to_modules=to_modules,
+                line=opn_tok.line,
+                column=opn_tok.column,
+            )
+
+        elif tok.type == TokenType.IDENTIFIER and tok.lexeme == "uses":
+            uses_tok = self.advance() # consome 'uses'
+            if not self.check(TokenType.IDENTIFIER):
+                t = self.peek()
+                raise SyntacticError(
+                    message="Era esperado o nome do tipo de serviço após 'uses'",
+                    line=t.line,
+                    column=t.column,
+                    expected="nome do tipo de serviço após 'uses'",
+                    found=t.lexeme if t.type != TokenType.EOF else "EOF",
+                )
+            service_type = self.parse_type_reference()
+            self.expect(TokenType.SEMICOLON, "Era esperado ';' ao final da diretiva 'uses'", expected="';'")
+            return UsesDirective(
+                service_type=service_type,
+                line=uses_tok.line,
+                column=uses_tok.column,
+            )
+
+        elif tok.type == TokenType.IDENTIFIER and tok.lexeme == "provides":
+            prov_tok = self.advance() # consome 'provides'
+            if not self.check(TokenType.IDENTIFIER):
+                t = self.peek()
+                raise SyntacticError(
+                    message="Era esperado o nome do tipo de serviço após 'provides'",
+                    line=t.line,
+                    column=t.column,
+                    expected="o nome do tipo de serviço",
+                    found=t.lexeme if t.type != TokenType.EOF else "EOF",
+                )
+            service_type = self.parse_type_reference()
+            if not (self.check(TokenType.IDENTIFIER) and self.peek().lexeme == "with"):
+                t = self.peek()
+                raise SyntacticError(
+                    message="Era esperado 'with' na diretiva 'provides'",
+                    line=t.line,
+                    column=t.column,
+                    expected="'with'",
+                    found=t.lexeme if t.type != TokenType.EOF else "EOF",
+                )
+            self.advance() # consome 'with'
+            if not self.check(TokenType.IDENTIFIER):
+                t = self.peek()
+                raise SyntacticError(
+                    message="Era esperado o nome da classe implementadora após 'with'",
+                    line=t.line,
+                    column=t.column,
+                    expected="nome da classe implementadora",
+                    found=t.lexeme if t.type != TokenType.EOF else "EOF",
+                )
+            with_types = [self.parse_type_reference()]
+            while self.check(TokenType.COMMA):
+                self.advance()
+                with_types.append(self.parse_type_reference())
+            self.expect(TokenType.SEMICOLON, "Era esperado ';' ao final da diretiva 'provides'", expected="';'")
+            return ProvidesDirective(
+                service_type=service_type,
+                with_types=with_types,
+                line=prov_tok.line,
+                column=prov_tok.column,
+            )
+
+        else:
+            raise SyntacticError(
+                message=f"Diretiva de módulo desconhecida ou inválida: '{tok.lexeme}'",
+                line=tok.line,
+                column=tok.column,
+                expected="uma diretiva ('requires', 'exports', 'opens', 'uses', 'provides')",
+                found=tok.lexeme if tok.type != TokenType.EOF else "EOF",
+            )
+
+    def parse_compact_compilation_unit(self, imports: List[ImportDeclaration]) -> CompactCompilationUnit:
+        """
+        Processa uma unidade de compilação compacta (JLS §7.3):
+        {ImportDeclaration} {ClassMemberDeclarationNoMethod} MethodDeclaration {ClassMemberDeclaration}
+        Declara implicitamente uma classe (top-level) contendo os membros.
+        Membros não podem possuir modificadores de acesso ('public', 'protected', 'private', 'abstract').
+        Deve possuir obrigatoriamente pelo menos uma declaração de método.
+        Antes do primeiro método, somente são permitidos ClassMemberDeclarationNoMethod (campos, classes, interfaces, ;).
+        """
+        start_line = self.peek().line
+        start_col = self.peek().column
+        members: List[ASTNode] = []
+        found_first_method = False
+
+        while not self.check(TokenType.EOF):
+            old_current = self.current
+
+            # Ponto e vírgula avulso ';'
+            if self.check(TokenType.SEMICOLON):
+                self.advance()
+                members.append(EmptyStatement(line=self.peek().line, column=self.peek().column))
+                continue
+
+            annos = self._parse_optional_annotations()
+            mods = self.parse_modifiers()
+
+            for m in mods:
+                if m in ("public", "protected", "private", "abstract"):
+                    t = self.peek()
+                    raise SyntacticError(
+                        message=f"Modificadores de acesso ou abstratos ('{m}') não são permitidos em membros de unidades compactas no nível superior",
+                        line=t.line,
+                        column=t.column,
+                        expected="membro sem modificadores de acesso ('static', 'final', ou sem modificadores)",
+                        found=m,
+                    )
+
+            # Verificação de inicializadores de instância ou estáticos
+            if (not mods and not annos and self.check(TokenType.LBRACE)) or (mods == ["static"] and not annos and self.check(TokenType.LBRACE)):
+                if not found_first_method:
+                    t = self.peek()
+                    raise SyntacticError(
+                        message="Inicializadores de classe não são permitidos antes da primeira declaração de método em uma unidade de compilação compacta (JLS §7.3)",
+                        line=t.line,
+                        column=t.column,
+                        expected="declaração de campo, classe, interface ou método",
+                        found=t.lexeme
+                    )
+                block = self.parse_block()
+                if mods == ["static"]:
+                    members.append(StaticInitializer(block=block, line=block.line, column=block.column))
+                else:
+                    members.append(InstanceInitializer(block=block, line=block.line, column=block.column))
+                continue
+
+            if self.check(TokenType.KEYWORD_CLASS):
+                cls = self.class_declaration(mods)
+                cls.annotations = annos
+                members.append(cls)
+            elif self.check(TokenType.KEYWORD_INTERFACE):
+                iface = self.interface_declaration(mods)
+                iface.annotations = annos
+                members.append(iface)
+            elif self.check(TokenType.KEYWORD_ENUM):
+                enum_d = self.enum_declaration(mods)
+                enum_d.annotations = annos
+                members.append(enum_d)
+            else:
+                type_params = []
+                if self.check(TokenType.LESS):
+                    type_params = self.parse_type_parameters()
+
+                type_ref = self.parse_type_reference(leading_annotations=annos)
+                name_tok = self.expect(TokenType.IDENTIFIER, "Era esperado o nome do membro (método ou campo)")
+
+                if self.check(TokenType.LPAREN):
+                    found_first_method = True
+                    recv_param, params = self.parse_formal_parameters()
+                    dims = 0
+                    while self.check(TokenType.LBRACKET) and self.peek_offset(1).type == TokenType.RBRACKET:
+                        self.advance()
+                        self.advance()
+                        dims += 1
+                    throws_types = self.parse_throws_clause()
+                    if self.check(TokenType.SEMICOLON):
+                        t = self.peek()
+                        raise SyntacticError(
+                            message="Métodos sem corpo não são permitidos em unidades de compilação compactas",
+                            line=t.line,
+                            column=t.column,
+                            expected="corpo do método '{ ... }'",
+                            found=";",
+                        )
+                    body = self.parse_block()
+                    members.append(
+                        MethodDeclaration(
+                            name=name_tok.lexeme,
+                            return_type=type_ref,
+                            parameters=params,
+                            modifiers=mods,
+                            throws_types=throws_types,
+                            body=body,
+                            line=name_tok.line,
+                            column=name_tok.column,
+                            type_parameters=type_params,
+                            annotations=annos,
+                            receiver_parameter=recv_param,
+                            dims=dims
+                        )
+                    )
+                else:
+                    declarators: List[VariableDeclarator] = []
+                    dims = 0
+                    while self.check(TokenType.LBRACKET) and self.peek_offset(1).type == TokenType.RBRACKET:
+                        self.advance()
+                        self.advance()
+                        dims += 1
+                    first_id = VariableDeclaratorId(name=name_tok.lexeme, dims=dims, line=name_tok.line, column=name_tok.column)
+                    first_init = None
+                    if self.check(TokenType.ASSIGN):
+                        self.advance()
+                        first_init = self.variable_initializer()
+                    declarators.append(VariableDeclarator(id=first_id, initializer=first_init, line=name_tok.line, column=name_tok.column))
+
+                    while self.check(TokenType.COMMA):
+                        self.advance()
+                        decl_id = self.parse_variable_declarator_id()
+                        init = None
+                        if self.check(TokenType.ASSIGN):
+                            self.advance()
+                            init = self.variable_initializer()
+                        declarators.append(VariableDeclarator(id=decl_id, initializer=init, line=decl_id.line, column=decl_id.column))
+
+                    self.expect(TokenType.SEMICOLON, "Era esperado ';' ao final da declaração do campo", expected="';'")
+                    members.append(
+                        FieldDeclaration(
+                            type_ref=type_ref,
+                            declarators=declarators,
+                            modifiers=mods,
+                            line=name_tok.line,
+                            column=name_tok.column,
+                            annotations=annos,
+                        )
+                    )
+
+            if self.current <= old_current:
+                t = self.peek()
+                raise SyntacticError(
+                    message="Loop detectado em unidade compacta: parser não avançou tokens",
+                    line=t.line,
+                    column=t.column,
+                    expected="declaração de membro de classe válida",
+                    found=t.lexeme if t.type != TokenType.EOF else "EOF",
+                )
+
+        if not found_first_method:
+            raise SyntacticError(
+                message="Unidade de compilação compacta exige pelo menos uma declaração de método (JLS §7.3)",
+                line=start_line,
+                column=start_col,
+                expected="ao menos uma declaração de método",
+                found="nenhum método declarado"
+            )
+
+        return CompactCompilationUnit(imports=imports, class_members=members, line=start_line, column=start_col)

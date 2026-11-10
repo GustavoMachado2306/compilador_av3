@@ -42,7 +42,7 @@ class SymbolTable:
         if len(self._scopes) > 1:
             self._scopes.pop()
 
-    def declare(self, name: str, type_name: str, line, category: str = "variavel") -> bool:
+    def declare(self, name: str, type_name: str, line, category: str = "variavel", is_static: bool = False, **extra) -> bool:
         """
         Declara um novo símbolo no escopo corrente.
         Retorna False se o símbolo já tiver sido declarado no mesmo escopo.
@@ -59,7 +59,9 @@ class SymbolTable:
             "category": category,
             "type": type_name,
             "line": line,
+            "is_static": is_static,
             "order": len(self._symbols) + 1,
+            **extra,
         }
         current_scope[name] = symbol
         self._symbols.append(symbol)
@@ -81,6 +83,14 @@ class SymbolTable:
     def exists(self, name: str) -> bool:
         """Verifica se o identificador existe em qualquer escopo visível ou já registrado na tabela."""
         return (self.lookup(name) is not None) or (name in self._by_name)
+
+    def get_symbol(self, name: str) -> Optional[Dict[str, Any]]:
+        """Retorna o símbolo registrado na tabela pelo nome, mesmo após o fechamento de escopos."""
+        return self._by_name.get(name)
+
+    def get(self, name: str) -> Optional[Dict[str, Any]]:
+        """Retorna o símbolo registrado na tabela pelo nome."""
+        return self._by_name.get(name)
 
     def all(self) -> List[Dict[str, Any]]:
         """Retorna todos os símbolos declarados em ordem de inserção."""

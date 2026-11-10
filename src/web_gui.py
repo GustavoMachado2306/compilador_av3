@@ -318,8 +318,9 @@ WEB_HTML = """<!DOCTYPE html>
   }
 
   .line-numbers {
-    width: 48px;
-    padding: 10px 8px 10px 0;
+    min-width: 48px;
+    width: auto;
+    padding: 10px 10px 10px 8px;
     text-align: right;
     background-color: var(--bg-elevated);
     border-right: 1px solid var(--border-hairline);
@@ -328,9 +329,11 @@ WEB_HTML = """<!DOCTYPE html>
     font-size: 13px;
     line-height: 20px;
     font-variant-numeric: tabular-nums;
+    white-space: pre;
     user-select: none;
     overflow: hidden;
     flex-shrink: 0;
+    cursor: default;
   }
 
   textarea#code-editor {
@@ -347,6 +350,8 @@ WEB_HTML = """<!DOCTYPE html>
     white-space: pre;
     overflow: auto;
     tab-size: 4;
+    word-break: normal;
+    overflow-wrap: normal;
   }
 
   .tabs-bar {
@@ -514,7 +519,7 @@ WEB_HTML = """<!DOCTYPE html>
     </div>
     <div class="editor-wrapper">
       <div class="line-numbers" id="line-numbers">1</div>
-      <textarea id="code-editor" spellcheck="false" placeholder="Digite ou carregue um código Java para analisar..."></textarea>
+      <textarea id="code-editor" wrap="off" spellcheck="false" placeholder="Digite ou carregue um código Java para analisar..."></textarea>
     </div>
   </section>
 
@@ -591,6 +596,10 @@ WEB_HTML = """<!DOCTYPE html>
   editor.addEventListener('scroll', () => {
     lineNumbers.scrollTop = editor.scrollTop;
   });
+  lineNumbers.addEventListener('wheel', (e) => {
+    editor.scrollTop += e.deltaY;
+    e.preventDefault();
+  }, { passive: false });
   editor.addEventListener('click', updateCursorInfo);
   editor.addEventListener('keyup', updateCursorInfo);
 

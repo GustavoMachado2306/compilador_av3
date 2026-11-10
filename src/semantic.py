@@ -17,7 +17,8 @@ from .ast_nodes import (
     TryStatement, CatchClause, SynchronizedStatement, ConditionalExpression,
     MemberAccess, ArrayAccess,
     ObjectCreationExpression, ArrayInitializer, ArrayCreationExpression,
-    CastExpression, InstanceOfExpression, LambdaExpression, MethodReference
+    CastExpression, InstanceOfExpression, LambdaExpression, MethodReference,
+    ModuleDeclaration, InstanceInitializer, StaticInitializer, ConstructorBody
 )
 
 
@@ -33,17 +34,19 @@ class SemanticError(str):
 
 class SemanticAnalyzer:
     """
-    Analisador semântico para Java (Fases A, B e C).
+    Analisador semântico para Java (Fases A, B e C e Etapas S1-S3).
     Gerencia escopos hierárquicos e valida a consistência de tipos e símbolos,
     escopos locais em blocos/laços/métodos e previne falsos positivos para símbolos externos.
     """
     def __init__(self, symbol_table):
         self.symbols = symbol_table
         self.errors = []
+        self._in_early_construction_context = False
 
     def analyze(self, program: ASTNode) -> List[SemanticError]:
         """Executa a análise semântica sobre a árvore sintática."""
         self.errors = []
+        self._in_early_construction_context = False
         if not program:
             return self.errors
 
@@ -59,6 +62,8 @@ class SemanticAnalyzer:
                     self.symbols.declare(type_decl.name, "enum", type_decl.line, category="enum")
                     for const in type_decl.constants:
                         self.symbols.declare(const.name, type_decl.name, const.line, category="constante_enum")
+                elif isinstance(type_decl, ModuleDeclaration):
+                    self.symbols.declare(type_decl.name, "module", type_decl.line, category="modulo")
 
         # 2. Analisa comandos didáticos de nível superior ou fragmentos
         statements = getattr(program, "statements", [])
@@ -78,17 +83,44 @@ class SemanticAnalyzer:
 
         for member in cls_node.members:
             if isinstance(member, FieldDeclaration):
-                prev_field = self.symbols.lookup(member.name)
-                if not self.symbols.declare(member.name, member.type_ref.name, member.line, category="campo"):
-                    self.errors.append(SemanticError(f"Campo '{member.name}' declarado novamente na classe.", member.line))
-                if member.initializer is not None:
-                    self.check_expression(member.initializer)
+                decls = member.declarators if hasattr(member, "declarators") and member.declarators else []
+                is_static = "static" in member.modifiers
+                if not decls and hasattr(member, "name"):
+                    if member.name == "_":
+                        self.errors.append(
+                            SemanticError("O identificador '_' não pode ser utilizado como nome de campo (JLS §8.3 / JEP 456).", member.line)
+                        )
+                    else:
+                        eff_type = getattr(member, "effective_type", member.type_ref.full_name)
+                        if not self.symbols.declare(member.name, eff_type, member.line, category="campo", is_static=is_static):
+                            self.errors.append(SemanticError(f"Campo '{member.name}' declarado novamente na classe.", member.line))
+                    if member.initializer is not None:
+                        self.check_expression(member.initializer)
+                else:
+                    for decl in decls:
+                        if decl.name == "_" or (hasattr(decl, "id") and getattr(decl.id, "is_unnamed", False)):
+                            self.errors.append(
+                                SemanticError("O identificador '_' não pode ser utilizado como nome de campo (JLS §8.3 / JEP 456).", decl.line)
+                            )
+                            if decl.initializer is not None:
+                                self.check_expression(decl.initializer)
+                            continue
+
+                        eff_type = decl.effective_type
+                        if not self.symbols.declare(decl.name, eff_type, decl.line, category="campo", is_static=is_static):
+                            self.errors.append(SemanticError(f"Campo '{decl.name}' declarado novamente na classe.", decl.line))
+                        if decl.initializer is not None:
+                            self.check_expression(decl.initializer)
 
             elif isinstance(member, MethodDeclaration):
-                self.symbols.declare(member.name, member.return_type.name, member.line, category="metodo")
+                eff_ret_type = member.effective_return_type
+                is_static = "static" in member.modifiers
+                self.symbols.declare(member.name, eff_ret_type, member.line, category="metodo", is_static=is_static)
                 self.symbols.enter_scope()
                 for p in member.parameters:
-                    self.symbols.declare(p.name, p.type_ref.name, p.line, category="parametro")
+                    if p.name != "_":
+                        p_type = getattr(p.type_ref, "full_name", p.type_ref.name) if hasattr(p, "type_ref") else "Object"
+                        self.symbols.declare(p.name, p_type, p.line, category="parametro")
                 if member.body:
                     self.analyze_block(member.body)
                 self.symbols.exit_scope()
@@ -97,10 +129,49 @@ class SemanticAnalyzer:
                 self.symbols.declare(member.name, member.name, member.line, category="construtor")
                 self.symbols.enter_scope()
                 for p in member.parameters:
-                    self.symbols.declare(p.name, p.type_ref.name, p.line, category="parametro")
+                    if p.name != "_":
+                        p_type = getattr(p.type_ref, "full_name", p.type_ref.name) if hasattr(p, "type_ref") else "Object"
+                        self.symbols.declare(p.name, p_type, p.line, category="parametro")
                 if member.body:
-                    self.analyze_block(member.body)
+                    if isinstance(member.body, ConstructorBody):
+                        has_explicit_ctor = member.body.constructor_invocation is not None
+                        if has_explicit_ctor:
+                            # 1. Prólogo (Early Construction Context - JLS §8.8.7 / JEP 513)
+                            self._in_early_construction_context = True
+                            try:
+                                for s in member.body.prologue:
+                                    self.analyze_statement(s)
+                            finally:
+                                self._in_early_construction_context = False
+
+                            # 2. Invocação explícita de construtor (argumentos no Early Construction Context)
+                            self._in_early_construction_context = True
+                            try:
+                                for arg in member.body.constructor_invocation.arguments:
+                                    self.check_expression(arg)
+                            finally:
+                                self._in_early_construction_context = False
+
+                            # 3. Epílogo (contexto normal com superclasse já inicializada)
+                            for s in member.body.epilogue:
+                                self.analyze_statement(s)
+                        else:
+                            # Construtor sem invocação explícita: super(); é invocado implicitamente no início (JLS §8.8.7).
+                            # Nenhum comando do corpo ocorre em early construction context.
+                            for s in member.body.prologue:
+                                self.analyze_statement(s)
+                            for s in member.body.epilogue:
+                                self.analyze_statement(s)
+                    elif isinstance(member.body, Block):
+                        self.analyze_block(member.body)
                 self.symbols.exit_scope()
+
+            elif isinstance(member, (InstanceInitializer, StaticInitializer)):
+                if member.block:
+                    self.analyze_block(member.block)
+
+            elif isinstance(member, ClassDeclaration):
+                self.analyze_class(member)
 
         self.symbols.exit_scope()
 
@@ -116,17 +187,34 @@ class SemanticAnalyzer:
     def analyze_statement(self, stmt: ASTNode):
         """Analisa uma declaração ou instrução isolada."""
         if isinstance(stmt, (Declaration, LocalVariableDeclaration)):
-            prev = self.symbols.lookup(stmt.name)
-            if not self.symbols.declare(stmt.name, stmt.type_name, stmt.line, category="variavel"):
-                prev_line = f" (declarada na linha {prev['line']})" if prev and "line" in prev else ""
-                self.errors.append(
-                    SemanticError(f"Variável '{stmt.name}' declarada novamente{prev_line}.", stmt.line)
-                )
-            if stmt.initializer is not None:
-                self.check_expression(stmt.initializer)
-                self.check_assignment_type(stmt.type_name, stmt.initializer, stmt.name, stmt.line)
+            if stmt.name == "_":
+                # Variável não nomeada legítima (JEP 456 / Java 21+):
+                # Valida o inicializador sem registrar símbolo para que não possa ser referenciada
+                if stmt.initializer is not None:
+                    self.check_expression(stmt.initializer)
+                    self.check_assignment_type(stmt.type_name, stmt.initializer, stmt.name, stmt.line)
+            else:
+                prev = self.symbols.lookup(stmt.name)
+                type_name = getattr(stmt.type_ref, "full_name", stmt.type_name) if hasattr(stmt, "type_ref") and stmt.type_ref else stmt.type_name
+                if not self.symbols.declare(stmt.name, type_name, stmt.line, category="variavel"):
+                    prev_line = f" (declarada na linha {prev['line']})" if prev and "line" in prev else ""
+                    self.errors.append(
+                        SemanticError(f"Variável '{stmt.name}' declarada novamente{prev_line}.", stmt.line)
+                    )
+                if stmt.initializer is not None:
+                    self.check_expression(stmt.initializer)
+                    self.check_assignment_type(type_name, stmt.initializer, stmt.name, stmt.line)
 
         elif isinstance(stmt, Assignment):
+            is_this_target = False
+            if stmt.name.startswith("this.") or (isinstance(stmt.target, MemberAccess) and getattr(stmt.target.target, 'name', '') == 'this'):
+                is_this_target = True
+
+            if self._in_early_construction_context and is_this_target:
+                self.errors.append(
+                    SemanticError("Uso inválido de 'this' antes da invocação explícita do construtor (early construction context — JLS §8.8.7 / JEP 513).", stmt.line)
+                )
+
             if isinstance(stmt.target, ArrayAccess):
                 self.check_expression(stmt.target)
                 self.check_expression(stmt.expression)
@@ -136,6 +224,10 @@ class SemanticAnalyzer:
                 self.check_expression(stmt.expression)
             else:
                 symbol = self.symbols.lookup(stmt.name)
+                if self._in_early_construction_context and symbol is not None and symbol.get("category") == "campo" and not symbol.get("is_static", False):
+                    self.errors.append(
+                        SemanticError(f"Acesso inválido ao campo de instância '{stmt.name}' antes da invocação explícita do construtor (early construction context — JLS §8.8.7 / JEP 513).", stmt.line)
+                    )
                 if symbol is None or symbol.get("category") not in ("variavel", "parametro", "campo"):
                     self.errors.append(
                         SemanticError(f"Variável '{stmt.name}' não foi declarada.", stmt.line)
@@ -182,7 +274,7 @@ class SemanticAnalyzer:
 
         elif isinstance(stmt, EnhancedForStatement):
             self.symbols.enter_scope()
-            if hasattr(stmt.variable, "name"):
+            if hasattr(stmt.variable, "name") and stmt.variable.name != "_":
                 t_name = getattr(stmt.variable, "type_name", "Object")
                 self.symbols.declare(stmt.variable.name, t_name, stmt.line, category="variavel")
             self.check_expression(stmt.iterable)
@@ -216,7 +308,8 @@ class SemanticAnalyzer:
                 self.analyze_block(stmt.body)
             for catch_c in stmt.catches:
                 self.symbols.enter_scope()
-                self.symbols.declare(catch_c.parameter.name, catch_c.parameter.type_ref.name, catch_c.line, category="parametro")
+                if catch_c.parameter and catch_c.parameter.name != "_":
+                    self.symbols.declare(catch_c.parameter.name, catch_c.parameter.type_ref.name, catch_c.line, category="parametro")
                 if catch_c.body is not None:
                     self.analyze_block(catch_c.body)
                 self.symbols.exit_scope()
@@ -252,10 +345,25 @@ class SemanticAnalyzer:
         if node is None:
             return
         if isinstance(node, Identifier):
+            # No early construction context: uso de 'this' é proibido
+            if self._in_early_construction_context and (node.name == "this" or node.name.startswith("this.")):
+                line = getattr(node, "line", 1)
+                self.errors.append(
+                    SemanticError("Uso inválido de 'this' antes da invocação explícita do construtor (early construction context — JLS §8.8.7 / JEP 513).", line)
+                )
+                return
+
             # Identificadores com ponto (ex: System.out.println) ou 'this' não geram falso erro
             if node.name == "this" or node.name.startswith("this.") or "." in node.name:
                 return
+
             symbol = self.symbols.lookup(node.name)
+            if self._in_early_construction_context and symbol is not None and symbol.get("category") == "campo" and not symbol.get("is_static", False):
+                line = getattr(node, "line", 1)
+                self.errors.append(
+                    SemanticError(f"Acesso inválido ao campo de instância '{node.name}' antes da invocação explícita do construtor (early construction context — JLS §8.8.7 / JEP 513).", line)
+                )
+
             if symbol is None or symbol.get("category") not in ("variavel", "parametro", "campo", "tipo"):
                 line = getattr(node, "line", 1)
                 self.errors.append(
@@ -263,14 +371,34 @@ class SemanticAnalyzer:
                 )
         elif isinstance(node, MethodCall):
             if node.target is not None:
+                is_this = isinstance(node.target, Identifier) and node.target.name == "this"
+                if self._in_early_construction_context and is_this:
+                    line = getattr(node, "line", 1)
+                    self.errors.append(
+                        SemanticError(f"Invocação inválida de método via 'this' ('this.{node.method_name}(...)') antes da invocação explícita do construtor (early construction context — JLS §8.8.7 / JEP 513).", line)
+                    )
                 if isinstance(node.target, Identifier) and (node.target.name in ("this", "super") or node.target.name[0].isupper()):
                     pass
                 else:
                     self.check_expression(node.target)
+            else:
+                if self._in_early_construction_context:
+                    sym = self.symbols.lookup(node.method_name)
+                    if sym is not None and sym.get("category") == "metodo" and not sym.get("is_static", False):
+                        line = getattr(node, "line", 1)
+                        self.errors.append(
+                            SemanticError(f"Invocação inválida de método de instância '{node.method_name}(...)' antes da invocação explícita do construtor (early construction context — JLS §8.8.7 / JEP 513).", line)
+                        )
             for arg in node.arguments:
                 self.check_expression(arg)
 
         elif isinstance(node, MemberAccess):
+            is_this = isinstance(node.target, Identifier) and node.target.name == "this"
+            if self._in_early_construction_context and is_this:
+                line = getattr(node, "line", 1)
+                self.errors.append(
+                    SemanticError(f"Acesso inválido a membro via 'this' ('this.{node.member_name}') antes da invocação explícita do construtor (early construction context — JLS §8.8.7 / JEP 513).", line)
+                )
             if isinstance(node.target, Identifier) and (node.target.name in ("this", "super") or node.target.name[0].isupper()):
                 pass
             else:

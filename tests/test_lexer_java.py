@@ -350,6 +350,12 @@ class TestLexerStringsECaracteres(unittest.TestCase):
         self.assertEqual(tokens[2].type, TokenType.STRING_LITERAL)
         self.assertIn(r"\q", tokens[2].lexeme)
 
+    def test_text_block_java(self):
+        source = '"""\n    linha 1\n    linha 2\n    """'
+        tokens = Lexer(source).tokenize()
+        self.assertEqual(tokens[0].type, TokenType.STRING_LITERAL)
+        self.assertIn("linha 1\n    linha 2", tokens[0].lexeme)
+
 
 class TestLexerCaracteresInvalidosERecuperacao(unittest.TestCase):
     """Garante que caracteres inválidos geram erros registrados com tolerância a falhas."""

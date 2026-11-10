@@ -80,9 +80,36 @@ O projeto adota uma abordagem incremental sólida, sem bibliotecas externas:
   - Expressões lambda (`x -> x * 2`, `(a, b) -> a + b`, `() -> executar()`, `x -> { return x + 1; }`) com corpo como expressão ou bloco;
   - Referências a métodos e construtores (`System.out::println`, `String::valueOf`, `String::new`, `objeto::executar`).
 
+- **Expansão Normativa Java SE 26 (JLS Capítulo 19)**:
+  - Documentação da matriz de cobertura em `docs/JAVA26_SYNTAX_COVERAGE.md` (206 produções mapeadas);
+  - **Etapa S1 — Nomes, Tipos, Generics e Type Annotations (Concluída)**:
+    - 100% das produções do Grupo A (JLS §4 e §6) implementadas e cobertas por testes (`tests/test_java26_names_types.py`);
+    - Desambiguação léxico-sintática determinística de fechamento de generics aninhados (`>>` e `>>>`);
+    - Parâmetros genéricos com limites de interseção (`<T extends Number & Comparable<T>>`), wildcards irrestritos e delimitados (`? extends T`, `? super T`), métodos genéricos e Type Annotations (`@NotNull String`).
+  - **Etapa S2 — Unidades de Compilação, Pacotes, Imports e Módulos (Concluída)**:
+    - 100% das produções do Grupo B (JLS §7 e §19) implementadas e cobertas por testes (`tests/test_java26_compilation_units.py`);
+    - Suporte às 3 modalidades de unidades de compilação: `OrdinaryCompilationUnit`, `ModularCompilationUnit` e `CompactCompilationUnit` (com classe declarada implicitamente);
+    - Anotações de pacote (`@Deprecated package ...`);
+    - As 5 categorias de imports da JLS: `SingleTypeImport`, `TypeImportOnDemand`, `SingleStaticImport`, `StaticImportOnDemand` e `SingleModuleImport` (`import module java.base;`);
+    - Declaração de módulos (`ModuleDeclaration`) e diretivas normativas: `RequiresDirective` (`transitive`, `static`), `ExportsDirective` (`to`), `OpensDirective` (`to`), `UsesDirective` e `ProvidesDirective` (`with`);
+    - Suporte a palavras-chave contextuais sem poluição da tabela de palavras reservadas globais.
+  - **Etapa S3 — Classes, Campos, Métodos, Construtores e Inicializadores (Concluída)**:
+    - 100% das produções do Grupo C (JLS §8 e §19) implementadas e cobertas por testes (`tests/test_java26_class_members.py`);
+    - Correção normativa de `CompactCompilationUnit` exigindo ao menos uma declaração de método e restringindo elementos pré-método a `ClassMemberDeclarationNoMethod`;
+    - Declarações múltiplas de variáveis em campos (`VariableDeclaratorList`) e identificadores não nomeados (`_`);
+    - Parâmetros de recepção (`ReceiverParameter` — `this`), dimensões no retorno (`int m()[][]`), varargs (`...`) e modificadores de parâmetros;
+    - Construtores genéricos com type parameters (`<T> Nome(...)`);
+    - Implementação de *Flexible Constructor Bodies* (JLS §8.8.7 e JEP 513) dividindo o corpo em `prologue`, `constructor_invocation` (`this(...)` / `super(...)`) e `epilogue`;
+    - Inicializadores de instância (`{ ... }`) e estáticos (`static { ... }`);
+    - Classes aninhadas com análise de escopo recursivo.
+
 - **Fases Futuras (Próximos Passos)**:
-  - Fase E: Ampliação semântica, verificação de tipos e inferência estrita de tipos Java;
-  - Fase F: Resolução de sobrecarga de métodos e polimorfismo complexo.
+  - Etapa S4: Interfaces, enums e records (JLS §8.9, §8.10, §9);
+  - Etapa S5: Annotations e declarações de tipos anotados (JLS §9.6, §9.7);
+  - Etapa S6: Blocos, instruções e controle de fluxo avançado (JLS §14);
+  - Etapa S7: Switch aprimorado e Pattern Matching (JLS §14.11, §14.30);
+  - Etapa S8: Expressões completas e primárias modernas (JLS §15);
+  - Etapa S9: Unidades compactas, classes implícitas e recuperação de erros (JLS §7.3).
 
 ---
 
@@ -96,24 +123,28 @@ compilador_av3/
 │   ├── exemplo_fase_a.java
 │   ├── Pessoa.java               # Exemplo de classe Java completa (Fase B)
 │   ├── FluxoJava.java            # Exemplo com instruções e controle de fluxo (Fase C)
-│   └── ExpressoesJava.java       # Exemplo com expressões, precedência, arrays e casts (Fase D)
+│   ├── ExpressoesJava.java       # Exemplo com expressões, precedência, arrays e casts (Fase D)
+│   └── exemplo_classes_s3.java   # Exemplo completo da Etapa S3 (construtores flexíveis, inicializadores, etc.)
 ├── src/
 │   ├── __init__.py
 │   ├── token.py                  # Enum de tokens e dataclass Token
 │   ├── lexer.py                  # Analisador léxico Java completo (Fase A)
 │   ├── symbol_table.py           # Tabela de símbolos com escopos e categorias
-│   ├── parser.py                 # Analisador sintático de comandos, tipos e expressões (Fases B, C e D)
+│   ├── parser.py                 # Analisador sintático de comandos, tipos e expressões (Fases B, C, D e Etapas S1-S3)
 │   ├── ast_nodes.py              # Nós da AST com pretty-printing hierárquico
 │   ├── semantic.py               # Validador semântico com suporte a escopos locais e expressões
 │   ├── main.py                   # Pipeline unificado e CLI (arquitetura tripla)
 │   ├── gui.py                    # Interface gráfica Tkinter com fallback automático
 │   └── web_gui.py                # Interface Web Local zero-dependências (http.server)
 └── tests/
-    ├── test_compiler.py          # 62 testes: testes didáticos e de robustez (regressão)
-    ├── test_lexer_java.py        # 42 testes: suíte de testes dedicada à Fase A do Java
-    ├── test_syntax_java.py       # 26 testes: suíte de testes dedicada à Fase B do Java
-    ├── test_statements_java.py   # 24 testes: suíte de testes dedicada à Fase C do Java
-    └── test_expressions_java.py  # 29 testes: suíte de testes dedicada à Fase D do Java
+    ├── test_compiler.py                 # 73 testes: testes didáticos e de robustez (regressão)
+    ├── test_lexer_java.py               # 58 testes: suíte de testes dedicada ao léxico Java
+    ├── test_syntax_java.py              # 26 testes: suíte de testes de sintaxe e declarações
+    ├── test_statements_java.py          # 25 testes: suíte de testes de controle de fluxo
+    ├── test_expressions_java.py         # 29 testes: suíte de testes de expressões e precedência
+    ├── test_java26_names_types.py       # 20 testes: suíte da Etapa S1 (JLS §4 e §6)
+    ├── test_java26_compilation_units.py # 50 testes: suíte da Etapa S2 (JLS §7 e §19)
+    └── test_java26_class_members.py     # 87 testes: suíte da Etapa S3 (JLS §8, JEP 513 e S3.1) (JLS §8 e JEP 513)
 ```
 
 ---
@@ -165,7 +196,7 @@ python -m src.main examples/ExpressoesJava.java
 
 ## 5. Como Executar os Testes
 
-Execute a suíte completa de testes automatizados (**183 testes ao todo, 100% aprovados**):
+Execute a suíte completa de testes automatizados (**368 testes ao todo, 100% aprovados**):
 
 ```bash
 python -m unittest discover tests
@@ -174,9 +205,12 @@ python -m unittest discover tests
 Ou execute cada suíte individualmente:
 
 ```bash
-python -m unittest -v tests/test_compiler.py         # 62 testes
-python -m unittest -v tests/test_lexer_java.py       # 42 testes
-python -m unittest -v tests/test_syntax_java.py      # 26 testes
-python -m unittest -v tests/test_statements_java.py  # 24 testes
-python -m unittest -v tests/test_expressions_java.py # 29 testes
+python -m unittest -v tests/test_compiler.py                 # 73 testes
+python -m unittest -v tests/test_lexer_java.py               # 58 testes
+python -m unittest -v tests/test_syntax_java.py              # 26 testes
+python -m unittest -v tests/test_statements_java.py          # 25 testes
+python -m unittest -v tests/test_expressions_java.py         # 29 testes
+python -m unittest -v tests/test_java26_names_types.py       # 20 testes
+python -m unittest -v tests/test_java26_compilation_units.py # 50 testes
+python -m unittest -v tests/test_java26_class_members.py     # 87 testes
 ```
