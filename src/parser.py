@@ -20,9 +20,10 @@ from .ast_nodes import (
     TypeReference, Block, ReturnStatement, Declaration, LocalVariableDeclaration,
     Assignment, BinaryOp, UnaryOp, MethodCall, Literal, Identifier,
     ExpressionStatement, EmptyStatement, IfStatement, WhileStatement,
-    DoWhileStatement, ForStatement, EnhancedForStatement, BreakStatement,
-    ContinueStatement, ThrowStatement, AssertStatement, TryStatement,
-    CatchClause, SynchronizedStatement, UnsupportedStatement,
+    DoWhileStatement, ForStatement, EnhancedForStatement, SwitchStatement,
+    SwitchCase, BreakStatement, ContinueStatement, ThrowStatement,
+    AssertStatement, TryStatement, CatchClause, SynchronizedStatement,
+    UnsupportedStatement,
     ConditionalExpression, MemberAccess, ArrayAccess, ObjectCreationExpression,
     ArrayInitializer, ArrayCreationExpression, CastExpression,
     InstanceOfExpression, LambdaExpression, MethodReference
@@ -656,6 +657,10 @@ class Parser:
         if self.check(TokenType.KEYWORD_FOR):
             return self.parse_for_statement()
 
+        # 7.1 Seleção múltipla: 'switch (expr) { case ...: ... default: ... }'
+        if self.check(TokenType.KEYWORD_SWITCH):
+            return self.parse_switch_statement()
+
         # 8. Comandos de desvio: 'break [rotulo];' e 'continue [rotulo];'
         if self.check(TokenType.KEYWORD_BREAK):
             return self.parse_break_statement()
@@ -859,6 +864,94 @@ class Parser:
         body = self.parse_statement()
         return ForStatement(init, condition, update, body, for_tok.line, for_tok.column)
 
+    def parse_switch_statement(self) -> SwitchStatement:
+        """Processa switch (expressao) { case valor: comandos... default: comandos... }."""
+        sw_tok = self.advance()  # consome 'switch'
+        self.expect(TokenType.LPAREN, "Era esperado '(' após 'switch'", expected="'('")
+        if self.check(TokenType.RPAREN):
+            t = self.peek()
+            raise SyntacticError(
+                message="Era esperado uma expressão de controle entre parênteses no 'switch'",
+                line=t.line,
+                column=t.column,
+                expected="uma expressão de controle",
+                found=")",
+            )
+        control_expr = self.expression()
+        self.expect(TokenType.RPAREN, "Era esperado ')' após a expressão do 'switch'", expected="')'")
+        self.expect(TokenType.LBRACE, "Era esperado '{' para iniciar o corpo do 'switch'", expected="'{'")
+
+        cases: List[SwitchCase] = []
+        default_block: Optional[Block] = None
+
+        while not self.check(TokenType.RBRACE) and not self.check(TokenType.EOF):
+            if self.check(TokenType.KEYWORD_CASE):
+                case_tok = self.advance()  # consome 'case'
+                if self.check(TokenType.COLON):
+                    t = self.peek()
+                    raise SyntacticError(
+                        message="Era esperado um valor após 'case'",
+                        line=t.line,
+                        column=t.column,
+                        expected="um valor ou expressão constante após 'case'",
+                        found=":",
+                    )
+                case_value = self.expression()
+                self.expect(TokenType.COLON, "Era esperado ':' após o valor do 'case'", expected="':'")
+
+                case_stmts: List[ASTNode] = []
+                while (
+                    not self.check(TokenType.RBRACE)
+                    and not self.check(TokenType.EOF)
+                    and not self.check(TokenType.KEYWORD_CASE)
+                    and not self.check(TokenType.KEYWORD_DEFAULT)
+                ):
+                    case_stmts.append(self.parse_statement())
+
+                cases.append(
+                    SwitchCase(
+                        value=case_value,
+                        statements=case_stmts,
+                        line=case_tok.line,
+                        column=case_tok.column,
+                    )
+                )
+
+            elif self.check(TokenType.KEYWORD_DEFAULT):
+                def_tok = self.advance()  # consome 'default'
+                self.expect(TokenType.COLON, "Era esperado ':' após 'default'", expected="':'")
+
+                def_stmts: List[ASTNode] = []
+                while (
+                    not self.check(TokenType.RBRACE)
+                    and not self.check(TokenType.EOF)
+                    and not self.check(TokenType.KEYWORD_CASE)
+                    and not self.check(TokenType.KEYWORD_DEFAULT)
+                ):
+                    def_stmts.append(self.parse_statement())
+
+                default_block = Block(statements=def_stmts, line=def_tok.line, column=def_tok.column)
+
+            else:
+                t = self.peek()
+                found_repr = t.lexeme if t.type != TokenType.EOF else "EOF"
+                raise SyntacticError(
+                    message="Era esperado 'case', 'default' ou '}' dentro do bloco 'switch'",
+                    line=t.line,
+                    column=t.column,
+                    expected="'case', 'default' ou '}'",
+                    found=found_repr,
+                )
+
+        self.expect(TokenType.RBRACE, "Era esperado '}' para fechar o 'switch'", expected="'}'")
+        return SwitchStatement(
+            expression=control_expr,
+            cases=cases,
+            default_block=default_block,
+            line=sw_tok.line,
+            column=sw_tok.column,
+        )
+
     def parse_local_variable_declaration_in_for(self) -> LocalVariableDeclaration:
         """Processa declaração de variável local no cabeçalho do 'for' (sem ponto e vírgula final)."""
         mods = self.parse_modifiers()
@@ -1055,7 +1148,10 @@ class Parser:
     # 2.9 COMANDOS E MODO FRAGMENTO DIDÁTICO
     # -------------------------------------------------------------------------
     def statement(self) -> ASTNode:
-        """Processa declarações e atribuições didáticas de nível superior."""
+        """Processa declarações, atribuições e estruturas de controle de nível superior."""
+        if self.check(TokenType.KEYWORD_SWITCH):
+            return self.parse_switch_statement()
+
         if self.peek().type in PRIMITIVE_TYPE_TOKENS or (
             self.check(TokenType.IDENTIFIER) and self._is_local_declaration()
         ):

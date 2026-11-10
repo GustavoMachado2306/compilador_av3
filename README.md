@@ -105,8 +105,9 @@ compilador_av3/
 │   ├── parser.py                 # Analisador sintático de comandos, tipos e expressões (Fases B, C e D)
 │   ├── ast_nodes.py              # Nós da AST com pretty-printing hierárquico
 │   ├── semantic.py               # Validador semântico com suporte a escopos locais e expressões
-│   ├── main.py                   # Pipeline unificado e CLI
-│   └── gui.py                    # Interface gráfica Tkinter
+│   ├── main.py                   # Pipeline unificado e CLI (arquitetura tripla)
+│   ├── gui.py                    # Interface gráfica Tkinter com fallback automático
+│   └── web_gui.py                # Interface Web Local zero-dependências (http.server)
 └── tests/
     ├── test_compiler.py          # 62 testes: testes didáticos e de robustez (regressão)
     ├── test_lexer_java.py        # 42 testes: suíte de testes dedicada à Fase A do Java
@@ -117,27 +118,39 @@ compilador_av3/
 
 ---
 
-## 4. Como Executar
+## 4. Como Executar (Arquitetura Tripla: Tkinter, Web Local e CLI)
 
-### Modo Terminal (Linha de Comando)
-
+### 1. Inicialização Automática com Fallback (Tkinter -> Web GUI)
 Na raiz do projeto (`compilador_av3/`), execute:
 
 ```bash
+python -m src.main
+# ou
+python -m src.gui
+```
+Tenta abrir a interface gráfica nativa (`tkinter`). Se o `tkinter` não estiver instalado ou não houver servidor gráfico disponível, inicia automaticamente a **Interface Web Local** no navegador padrão.
+
+### 2. Interface Web Local Zero-Dependências
+Para abrir diretamente no navegador web (Windows, Linux ou macOS sem depender do `tkinter`):
+
+```bash
+python -m src.main --web
+# ou
+python -m src.web_gui
+```
+
+### 3. Modo Terminal / CLI
+Para executar diretamente no terminal (inclusive via SSH/terminal puro):
+
+```bash
+python -m src.main --cli
+python -m src.main --cli examples/ExpressoesJava.java
 python -m src.main <caminho_do_arquivo.java>
 ```
 
 Exemplo com arquivo Java contendo expressões e controle de fluxo da Fase D:
 ```bash
 python -m src.main examples/ExpressoesJava.java
-```
-
-### Modo Gráfico (Interface Tkinter)
-
-Para iniciar a aplicação visual do compilador:
-
-```bash
-python -m src.gui
 ```
 
 #### Recursos da Interface Gráfica:

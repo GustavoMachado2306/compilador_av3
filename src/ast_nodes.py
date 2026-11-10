@@ -527,6 +527,62 @@ class EnhancedForStatement(ASTNode):
 
 
 @dataclass
+class SwitchCase(ASTNode):
+    """Representa uma cláusula case dentro de um switch: case valor: comandos..."""
+    value: ASTNode
+    statements: List[ASTNode] = field(default_factory=list)
+    line: int = 1
+    column: int = 1
+
+    def pretty(self) -> str:
+        val_str = self.value.pretty() if hasattr(self.value, "pretty") else str(self.value)
+        return _format_children(f"SwitchCase ({val_str})", self.statements)
+
+
+@dataclass
+class SwitchStatement(ASTNode):
+    """
+    Representa a instrução switch / case do Java:
+    switch (expressao) { case valor: ... default: ... }
+    """
+    expression: ASTNode
+    cases: List[SwitchCase] = field(default_factory=list)
+    default_block: Optional[Block] = None
+    line: int = 1
+    column: int = 1
+
+    @property
+    def default(self) -> Optional[Block]:
+        return self.default_block
+
+    @property
+    def default_statements(self) -> List[ASTNode]:
+        if self.default_block is None:
+            return []
+        if isinstance(self.default_block, Block):
+            return self.default_block.statements
+        if isinstance(self.default_block, list):
+            return self.default_block
+        return [self.default_block]
+
+    def pretty(self) -> str:
+        children = [_format_children("Expressao", [self.expression])]
+        children.extend(self.cases)
+        if self.default_block is not None:
+            def_stmts = (
+                self.default_block.statements
+                if isinstance(self.default_block, Block)
+                else (self.default_block if isinstance(self.default_block, list) else [self.default_block])
+            )
+            children.append(_format_children("Default", def_stmts))
+        return _format_children("SwitchStatement", children)
+
+
+CaseClause = SwitchCase
+SwitchStmt = SwitchStatement
+
+
+@dataclass
 class BreakStatement(ASTNode):
     """Representa o comando: break [rotulo];"""
     label: Optional[str] = None

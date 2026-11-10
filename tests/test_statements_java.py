@@ -42,9 +42,9 @@ from src.ast_nodes import (
     CompilationUnit, ClassDeclaration, MethodDeclaration, ConstructorDeclaration,
     Block, LocalVariableDeclaration, Assignment, ExpressionStatement, EmptyStatement,
     IfStatement, WhileStatement, DoWhileStatement, ForStatement, EnhancedForStatement,
-    BreakStatement, ContinueStatement, ReturnStatement, ThrowStatement, AssertStatement,
-    TryStatement, CatchClause, SynchronizedStatement, MethodCall, UnaryOp, BinaryOp,
-    Literal, Identifier
+    SwitchStatement, SwitchCase, BreakStatement, ContinueStatement, ReturnStatement,
+    ThrowStatement, AssertStatement, TryStatement, CatchClause, SynchronizedStatement,
+    MethodCall, UnaryOp, BinaryOp, Literal, Identifier
 )
 from src.main import analyze_source
 
@@ -711,6 +711,61 @@ class TestInstrucoesEControleDeFluxoJava(unittest.TestCase):
         u3 = parse_java(source_empty)
         stmt = u3.type_declarations[0].members[0].body.statements[0]
         self.assertIsInstance(stmt, EmptyStatement)
+
+    # -------------------------------------------------------------------------
+    # 25. SWITCH / CASE / DEFAULT E VALIDAÇÃO SEMÂNTICA INTERNA
+    # -------------------------------------------------------------------------
+    def test_25_switch_case_e_default_com_analise_semantica(self):
+        source = (
+            "public class AvaliadorMenu {\n"
+            "    public void processar(int opcao) {\n"
+            "        int resultado = 0;\n"
+            "        switch (opcao) {\n"
+            "            case 1:\n"
+            "                int bonus = 10;\n"
+            "                resultado = opcao + bonus;\n"
+            "                break;\n"
+            "            case 2:\n"
+            "                resultado = 20;\n"
+            "                break;\n"
+            "            default:\n"
+            "                resultado = -1;\n"
+            "                break;\n"
+            "        }\n"
+            "    }\n"
+            "}\n"
+        )
+        res = analyze_source(source)
+        self.assertTrue(res.success, msg=f"Erros inesperados: {res.syntactic_error} | {res.semantic_errors}")
+        stmt_switch = res.ast.type_declarations[0].members[0].body.statements[1]
+        self.assertIsInstance(stmt_switch, SwitchStatement)
+        self.assertEqual(len(stmt_switch.cases), 2)
+        self.assertIsInstance(stmt_switch.cases[0], SwitchCase)
+        self.assertIsNotNone(stmt_switch.default_block)
+        self.assertIn("SwitchStatement", stmt_switch.pretty())
+        self.assertIn("SwitchCase", stmt_switch.pretty())
+        self.assertIn("Default", stmt_switch.pretty())
+
+        # Verifica detecção semântica de variável não declarada dentro de um case
+        source_invalido = (
+            "public class AvaliadorErro {\n"
+            "    public void processar(int opcao) {\n"
+            "        switch (opcao) {\n"
+            "            case 1:\n"
+            "                naoDeclarada = 10;\n"
+            "                break;\n"
+            "            default:\n"
+            "                outraNaoDeclarada = 20;\n"
+            "        }\n"
+            "    }\n"
+            "}\n"
+        )
+        res_err = analyze_source(source_invalido)
+        self.assertFalse(res_err.success)
+        self.assertEqual(len(res_err.semantic_errors), 2)
+        erros_str = "\n".join(str(e) for e in res_err.semantic_errors)
+        self.assertIn("naoDeclarada", erros_str)
+        self.assertIn("outraNaoDeclarada", erros_str)
 
 
 if __name__ == "__main__":

@@ -12,9 +12,10 @@ from .ast_nodes import (
     Block, ReturnStatement, Declaration, LocalVariableDeclaration, Assignment,
     BinaryOp, UnaryOp, MethodCall, Literal, Identifier, ExpressionStatement,
     EmptyStatement, IfStatement, WhileStatement, DoWhileStatement,
-    ForStatement, EnhancedForStatement, BreakStatement, ContinueStatement,
-    ThrowStatement, AssertStatement, TryStatement, CatchClause,
-    SynchronizedStatement, ConditionalExpression, MemberAccess, ArrayAccess,
+    ForStatement, EnhancedForStatement, SwitchStatement, SwitchCase,
+    BreakStatement, ContinueStatement, ThrowStatement, AssertStatement,
+    TryStatement, CatchClause, SynchronizedStatement, ConditionalExpression,
+    MemberAccess, ArrayAccess,
     ObjectCreationExpression, ArrayInitializer, ArrayCreationExpression,
     CastExpression, InstanceOfExpression, LambdaExpression, MethodReference
 )
@@ -181,6 +182,23 @@ class SemanticAnalyzer:
             self.check_expression(stmt.iterable)
             if stmt.body is not None:
                 self.analyze_statement(stmt.body)
+            self.symbols.exit_scope()
+
+        elif isinstance(stmt, SwitchStatement):
+            self.check_expression(stmt.expression)
+            self.symbols.enter_scope()
+            for case_clause in stmt.cases:
+                if isinstance(case_clause, SwitchCase):
+                    if case_clause.value is not None:
+                        self.check_expression(case_clause.value)
+                    for case_stmt in case_clause.statements:
+                        self.analyze_statement(case_stmt)
+            if stmt.default_block is not None:
+                if isinstance(stmt.default_block, Block):
+                    for def_stmt in stmt.default_block.statements:
+                        self.analyze_statement(def_stmt)
+                else:
+                    self.analyze_statement(stmt.default_block)
             self.symbols.exit_scope()
 
         elif isinstance(stmt, TryStatement):
