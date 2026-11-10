@@ -984,5 +984,119 @@ class TestPromocaoImplicitaWidening(unittest.TestCase):
         self.assertTrue(any("não é possível atribuir double a 'c' do tipo int" in err for err in res.semantic_errors))
 
 
+class TestArquiteturaTriplaEWebGUI(unittest.TestCase):
+    """Testes da Arquitetura Tripla: Web GUI zero-dependências, fallback do Tkinter e flags CLI."""
+
+    def test_web_gui_http_routes_e_post_analyze(self):
+        import json
+        import threading
+        import urllib.request
+        from src.web_gui import create_web_server
+
+        server, url = create_web_server(host="127.0.0.1", preferred_port=0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        try:
+            # 1. GET / retorna HTML escuro com as 5 abas
+            with urllib.request.urlopen(f"{url}/") as resp:
+                self.assertEqual(resp.status, 200)
+                html = resp.read().decode("utf-8")
+                self.assertIn("Compilador AV3", html)
+                self.assertIn("tab-tokens", html)
+                self.assertIn("tab-symbols", html)
+                self.assertIn("tab-ast", html)
+                self.assertIn("tab-semantic", html)
+                self.assertIn("tab-errors", html)
+
+            # 2. GET /examples lista arquivos da pasta examples/
+            with urllib.request.urlopen(f"{url}/examples") as resp:
+                self.assertEqual(resp.status, 200)
+                ex_data = json.loads(resp.read().decode("utf-8"))
+                self.assertIn("examples", ex_data)
+                self.assertGreaterEqual(len(ex_data["examples"]), 1)
+                first_name = ex_data["examples"][0]["name"]
+
+            # 3. GET /example?name=... retorna o conteúdo do exemplo
+            with urllib.request.urlopen(f"{url}/example?name={first_name}") as resp:
+                self.assertEqual(resp.status, 200)
+                single_ex = json.loads(resp.read().decode("utf-8"))
+                self.assertEqual(single_ex["name"], first_name)
+                self.assertTrue(len(single_ex["content"]) > 0)
+
+            # 4. POST /analyze com código válido
+            req_valid = urllib.request.Request(
+                f"{url}/analyze",
+                data=json.dumps({"source": 'int x = 10;\nString nome = "Java";'}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req_valid) as resp:
+                self.assertEqual(resp.status, 200)
+                payload = json.loads(resp.read().decode("utf-8"))
+                self.assertTrue(payload["success"])
+                self.assertFalse(payload["has_errors"])
+                self.assertEqual(len(payload["tokens"]), 11)
+                self.assertEqual(len(payload["symbols"]), 4)
+                self.assertIn("Program", payload["ast"])
+
+            # 5. POST /analyze com erro semântico
+            req_err = urllib.request.Request(
+                f"{url}/analyze",
+                data=json.dumps({"source": 'int x = "invalido";'}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req_err) as resp:
+                self.assertEqual(resp.status, 200)
+                payload_err = json.loads(resp.read().decode("utf-8"))
+                self.assertFalse(payload_err["success"])
+                self.assertTrue(payload_err["has_errors"])
+                self.assertGreater(len(payload_err["errors"]), 0)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_fallback_automatico_quando_tkinter_indisponivel(self):
+        from unittest.mock import patch
+        import src.gui as gui_mod
+        import src.main as main_mod
+        import src.web_gui as web_gui_mod
+
+        with patch.object(gui_mod, "TKINTER_AVAILABLE", False):
+            with patch.object(web_gui_mod, "start_web_gui") as mock_web:
+                gui_mod.main()
+                mock_web.assert_called_once()
+
+            with patch.object(web_gui_mod, "start_web_gui") as mock_web2:
+                code = main_mod.launch_gui_with_fallback()
+                self.assertEqual(code, 0)
+                mock_web2.assert_called_once()
+
+    def test_main_cli_flags(self):
+        from unittest.mock import patch
+        import src.main as main_mod
+        import src.web_gui as web_gui_mod
+
+        # Flag --web inicia start_web_gui
+        with patch.object(web_gui_mod, "start_web_gui") as mock_web:
+            with self.assertRaises(SystemExit) as cm:
+                main_mod.main(["--web"])
+            self.assertEqual(cm.exception.code, 0)
+            mock_web.assert_called_once()
+
+        # Flag --cli com arquivo válido retorna código 0
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", delete=False, suffix=".java") as tmp:
+            tmp.write("int a = 5;\n")
+            tmp_path = tmp.name
+        try:
+            with self.assertRaises(SystemExit) as cm_cli:
+                main_mod.main(["--cli", tmp_path])
+            self.assertEqual(cm_cli.exception.code, 0)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+
 if __name__ == "__main__":
     unittest.main()

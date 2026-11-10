@@ -1,13 +1,26 @@
 import sys
 import os
 from pathlib import Path
-import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+
+try:
+    import tkinter as tk
+    from tkinter import ttk, filedialog, messagebox
+    TKINTER_AVAILABLE = True
+    _TK_BASE = tk.Tk
+    _TK_CANVAS = tk.Canvas
+except (ImportError, Exception):
+    tk = None
+    ttk = None
+    filedialog = None
+    messagebox = None
+    TKINTER_AVAILABLE = False
+    _TK_BASE = object
+    _TK_CANVAS = object
 
 from .main import analyze_source, read_source_file, AnalysisResult
 
 
-class LineNumbers(tk.Canvas):
+class LineNumbers(_TK_CANVAS):
     """Barra lateral com numeração de linhas sincronizada com o editor de código."""
     def __init__(self, master, text_widget, **kwargs):
         super().__init__(master, **kwargs)
@@ -34,9 +47,11 @@ class LineNumbers(tk.Canvas):
             i = self.text_widget.index(f"{i}+1line")
 
 
-class CompiladorGUI(tk.Tk):
+class CompiladorGUI(_TK_BASE):
     """Interface Gráfica Didática e Acadêmica para o Compilador AV3."""
     def __init__(self):
+        if not TKINTER_AVAILABLE:
+            raise RuntimeError("Pacote 'tkinter' não está disponível neste ambiente Python.")
         super().__init__()
         self.title("Compilador AV3 — Analisador de Código")
         self.geometry("1020x720")
@@ -82,16 +97,16 @@ class CompiladorGUI(tk.Tk):
 
         top_buttons = ttk.Frame(header_frame, style="Header.TFrame")
         top_buttons.pack(side=tk.RIGHT, fill=tk.Y)
-        ttk.Button(top_buttons, text="📂 Abrir (Ctrl+O)", style="Tool.TButton", command=self.on_open).pack(side=tk.LEFT, padx=4)
-        ttk.Button(top_buttons, text="💾 Salvar (Ctrl+S)", style="Tool.TButton", command=self.on_save).pack(side=tk.LEFT, padx=4)
+        ttk.Button(top_buttons, text="Abrir (Ctrl+O)", style="Tool.TButton", command=self.on_open).pack(side=tk.LEFT, padx=4)
+        ttk.Button(top_buttons, text="Salvar (Ctrl+S)", style="Tool.TButton", command=self.on_save).pack(side=tk.LEFT, padx=4)
 
         # 2. Toolbar de Ações
         toolbar = ttk.Frame(self, padding=(14, 8))
         toolbar.pack(fill=tk.X, side=tk.TOP)
 
-        ttk.Button(toolbar, text="▶ Analisar Código (F5)", style="Action.TButton", command=self.on_analyze).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(toolbar, text="🧹 Limpar Resultados (Ctrl+L)", style="Tool.TButton", command=self.on_clear).pack(side=tk.LEFT, padx=4)
-        ttk.Button(toolbar, text="📋 Copiar Tudo (Ctrl+Shift+C)", style="Tool.TButton", command=self.on_copy_all).pack(side=tk.LEFT, padx=4)
+        ttk.Button(toolbar, text="Analisar Código (F5)", style="Action.TButton", command=self.on_analyze).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(toolbar, text="Limpar Resultados (Ctrl+L)", style="Tool.TButton", command=self.on_clear).pack(side=tk.LEFT, padx=4)
+        ttk.Button(toolbar, text="Copiar Tudo (Ctrl+Shift+C)", style="Tool.TButton", command=self.on_copy_all).pack(side=tk.LEFT, padx=4)
 
         self.file_label_var = tk.StringVar(value="Nenhum arquivo aberto")
         ttk.Label(toolbar, textvariable=self.file_label_var, foreground="#6c757d", font=("Segoe UI", 9, "italic")).pack(side=tk.RIGHT, padx=6)
@@ -553,8 +568,21 @@ class CompiladorGUI(tk.Tk):
 
 
 def main():
-    app = CompiladorGUI()
-    app.mainloop()
+    """
+    Tenta iniciar a interface nativa Tkinter. Caso o tkinter não esteja instalado
+    ou não haja servidor gráfico (X11/Wayland/Display), faz fallback automático
+    para a Interface Web Local no navegador sem quebrar com Traceback.
+    """
+    try:
+        if not TKINTER_AVAILABLE:
+            raise ImportError("Módulo 'tkinter' indisponível.")
+        app = CompiladorGUI()
+        app.mainloop()
+    except (ImportError, Exception) as exc:
+        print(f"[AVISO] Interface Tkinter indisponível ({exc}).")
+        print("[FALLBACK] Iniciando automaticamente a Interface Web Local no navegador...")
+        from .web_gui import start_web_gui
+        start_web_gui()
 
 
 if __name__ == "__main__":
