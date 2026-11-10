@@ -6,41 +6,12 @@ Este documento define formalmente os componentes léxicos, sintáticos e semânt
 
 ## 1. Fase A: Especificação Léxica (Concluída)
 
-<<<<<<< HEAD
-Cada token preserva seu tipo, lexema original, linha e coluna:
-
-| Token | Padrão / Descrição | Exemplo |
-| :--- | :--- | :--- |
-| `KEYWORD_INT` | Palavra reservada `int` | `int` |
-| `KEYWORD_STRING` | Palavra reservada `String` | `String` |
-| `IDENTIFIER` | `[a-zA-Z_$][a-zA-Z0-9_$]*` | `total`, `_contador`, `$orcamentoGlobal` |
-| `NUMBER` | Sequência de dígitos decimais `[0-9]+` ou ponto flutuante `[0-9]+\.[0-9]+` | `10`, `42`, `3.14` |
-| `STRING_LITERAL` | Caracteres delimitados por aspas duplas `"..."` (com suporte a escapes) | `"Gustavo"`, `"ola"` |
-| `CHAR_LITERAL` | Caractere único ou escape delimitado por aspas simples `'...'` | `'Z'`, `'\n'`, `'\''` |
-| `ASSIGN` | Operador de atribuição `=` | `=` |
-| `PLUS` | Operador aritmético de soma `+` | `+` |
-| `MINUS` | Operador aritmético de subtração `-` | `-` |
-| `DIVIDE` | Operador aritmético de divisão `/` | `/` |
-| `SEMICOLON` | Delimitador de fim de comando `;` | `;` |
-| `COMMA` | Vírgula `,` | `,` |
-| `DOT` | Ponto `.` | `.` |
-| `LPAREN` | Abre parênteses `(` | `(` |
-| `RPAREN` | Fecha parênteses `)` | `)` |
-| `LBRACE` | Abre chaves `{` | `{` |
-| `RBRACE` | Fecha chaves `}` | `}` |
-| `LBRACKET` | Abre colchetes `[` | `[` |
-| `RBRACKET` | Fecha colchetes `]` | `]` |
-| `EOF` | Fim de arquivo | `""` |
-=======
 O analisador léxico (`src/lexer.py`) reconhece todas as construções léxicas comuns da linguagem Java:
 - **Espaços e Comentários**: espaços, tabulações, quebras LF e CRLF, comentários de linha (`//`), de bloco (`/* ... */`) e Javadoc (`/** ... */`);
 - **Delimitadores**: `(`, `)`, `{`, `}`, `[`, `]`, `;`, `,`, `.`, `@`, `?`, `:`;
 - **Operadores (*Maximal Munch*)**: `=`, `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=`, `>>>=`, `+`, `-`, `*`, `/`, `%`, `++`, `--`, `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||`, `!`, `&`, `|`, `^`, `~`, `<<`, `>>`, `>>>`, `->`, `::`, `...`;
 - **Palavras-Chave Reservadas**: 50 palavras-chave oficiais do Java;
 - **Literais**: booleanos (`true`, `false`), nulo (`null`), inteiros (dec, hex `0x`, bin `0b`, oct `0`, sufixo `L`), reais (`float`/`double`, notação científica `1e10`), `char` (`'a'`) e `String` (`"..."`).
->>>>>>> ba7ca9076e818d78e8d714d5e78ed7c05ebef71a
-
-> **Comentários**: Comentários de linha (`// ...`) e comentários de bloco (`/* ... */`, incluindo múltiplas linhas) são reconhecidos e ignorados pelo analisador léxico antes da regra do operador `/`.
 
 ---
 
@@ -68,13 +39,9 @@ Uma unidade de compilação consiste em:
 
 <TypeDecl> ::= <Modifiers> (<ClassDecl> | <InterfaceDecl> | <EnumDecl>)
 
-<<<<<<< HEAD
-<Expressao> ::= <Termo> (("+" | "-" | "/") <Termo>)*
-=======
 <Modifiers> ::= ("public" | "protected" | "private" | "static" | "final"
                | "abstract" | "synchronized" | "native" | "transient"
                | "volatile" | "strictfp")*
->>>>>>> ba7ca9076e818d78e8d714d5e78ed7c05ebef71a
 
 <ClassDecl> ::= "class" <IDENTIFIER> ["extends" <TypeRef>]
                 ["implements" <TypeRef> ("," <TypeRef>)*]
