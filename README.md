@@ -1,10 +1,6 @@
 # compilador_av3
 
-<<<<<<< HEAD
 Compilador e analisador didático desenvolvido em Python para a avaliação AV3 da disciplina de Compiladores. O projeto está passando por uma expansão incremental para suportar as construções mais comuns da linguagem Java, preservando a arquitetura em camadas e o funcionamento tanto em terminal (CLI) quanto via interface gráfica (Tkinter).
-=======
-Compilador e analisador didático desenvolvido em Python para a avaliação AV3 da disciplina de Compiladores. O projeto implementa um subconjunto restrito, previsível e robusto de uma linguagem imperativa inspirada em Java.
->>>>>>> 699adc702266cdba69b359b1a6c0ceaf5a472dbd
 
 ---
 
@@ -30,18 +26,7 @@ Análise Semântica
 
 ## 2. Status Atual da Evolução para Java
 
-<<<<<<< HEAD
 O projeto adota uma abordagem incremental sólida, sem bibliotecas externas:
-=======
-- **Tipos**: `int`, `String`
-- **Literais**: Números inteiros (ex.: `10`) e strings delimitadas por aspas duplas (ex.: `"João"`).
-- **Identificadores**: Iniciam com letra ou `_`, seguidos de letras, dígitos ou `_`.
-- **Comandos**:
-  - Declaração simples: `int x;`, `String nome;`
-  - Declaração com inicialização: `int x = 10;`, `String nome = "João";`
-  - Atribuição: `x = 20;`, `nome = "Maria";`
-- **Expressões**: Literais, identificadores, parênteses `( )` e operadores aritméticos numéricos `+` e `-`.
->>>>>>> 699adc702266cdba69b359b1a6c0ceaf5a472dbd
 
 - **Fase A — Analisador Léxico (Concluída)**:
   - Suporte completo a comentários: linha (`//`), bloco (`/* ... */`) e Javadoc (`/** ... */`);

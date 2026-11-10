@@ -856,6 +856,16 @@ class TestIntegracaoGUIEAPI(unittest.TestCase):
             self.assertEqual(len(app.symbols_tree.get_children()), 4)
             self.assertIn("Program", app.ast_text.get("1.0", tk.END))
 
+            # 1.1 Copiar Tudo
+            copied = app.on_copy_all()
+            self.assertIn("=== CÓDIGO FONTE ===", copied)
+            self.assertIn("=== TOKENS ===", copied)
+            self.assertIn("=== TABELA DE SÍMBOLOS ===", copied)
+            self.assertIn("=== AST ===", copied)
+            self.assertIn("=== SEMÂNTICA ===", copied)
+            self.assertIn("=== ERROS ===", copied)
+            self.assertEqual(app.status_var.get(), "Tudo copiado para a área de transferência!")
+
             # 2. Re-análise sem vazamento ou acúmulo de estado
             app.on_analyze()
             self.assertEqual(len(app.tokens_tree.get_children()), 11)
