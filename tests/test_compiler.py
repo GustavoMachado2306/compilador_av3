@@ -119,7 +119,10 @@ class TestCompiladorOficial(unittest.TestCase):
         lexer = Lexer(source)
         tokens = lexer.tokenize()
 
+<<<<<<< HEAD
         # Tolerância a falhas: não interrompe com exceção, registra erro e continua até EOF
+=======
+>>>>>>> ba7ca9076e818d78e8d714d5e78ed7c05ebef71a
         self.assertEqual(len(lexer.errors), 1)
         err = lexer.errors[0]
         self.assertEqual(err.line, 1)
@@ -127,6 +130,12 @@ class TestCompiladorOficial(unittest.TestCase):
         self.assertEqual(err.character, "#")
         self.assertIn("[ERRO LÉXICO]", str(err))
         self.assertIn("Caractere inválido: '#'", str(err))
+<<<<<<< HEAD
+=======
+
+        # Tolerância a falhas: continua processando até EOF
+        self.assertEqual([t.lexeme for t in tokens], ["int", "x", "=", "10", "5", ";", ""])
+>>>>>>> ba7ca9076e818d78e8d714d5e78ed7c05ebef71a
         self.assertEqual(tokens[-1].type, TokenType.EOF)
 
     def test_10_string_nao_fechada(self):
@@ -350,7 +359,7 @@ class TestCompiladorOficial(unittest.TestCase):
         sym_str = st.lookup("String")
         self.assertIsNotNone(sym_str)
         self.assertEqual(sym_str["name"], "String")
-        self.assertEqual(sym_str["category"], "palavra_reservada")
+        self.assertEqual(sym_str["category"], "tipo")
         self.assertEqual(sym_str["type"], "tipo")
         self.assertEqual(sym_str["line"], "-")
         self.assertEqual(sym_str["order"], 2)
@@ -482,17 +491,29 @@ class TestEstresseERobustez(unittest.TestCase):
     # -------------------------------------------------------------
 
     def test_39_caracteres_invalidos_individuais(self):
+<<<<<<< HEAD
         chars_invalidos = ['#', '\\', '`']
+=======
+        # Caracteres que não pertencem ao léxico da linguagem Java
+        chars_invalidos = ['#', '`', '\\', '§', '°']
+>>>>>>> ba7ca9076e818d78e8d714d5e78ed7c05ebef71a
         for ch in chars_invalidos:
             source = f"int a = 1 {ch} 2;"
             lexer = Lexer(source)
             tokens = lexer.tokenize()
+<<<<<<< HEAD
             self.assertEqual(len(lexer.errors), 1, msg=f"Falha ao registrar erro em '{ch}'")
+=======
+            self.assertEqual(len(lexer.errors), 1, msg=f"Falha ao registrar erro para '{ch}'")
+>>>>>>> ba7ca9076e818d78e8d714d5e78ed7c05ebef71a
             err = lexer.errors[0]
             self.assertEqual(err.character, ch)
+            self.assertEqual(err.line, 1)
+            self.assertEqual(err.column, 11)
             self.assertIn(f"Caractere inválido: {ch!r}", str(err))
             self.assertEqual(tokens[-1].type, TokenType.EOF)
 
+<<<<<<< HEAD
     def test_39d_identificadores_com_cifrao_e_sublinhado(self):
         source = "int $orcamentoGlobal = 100;\nint _contador = $orcamentoGlobal + 1;\nint var$1_2 = _contador;"
         tokens = Lexer(source).tokenize()
@@ -595,6 +616,13 @@ class TestEstresseERobustez(unittest.TestCase):
         lexer_bloco = Lexer("int x = 10; /* comentario sem fim")
         lexer_bloco.tokenize()
         self.assertEqual(len(lexer_bloco.errors), 1)
+=======
+    def test_39_b_identificadores_com_cifrao_e_underscore(self):
+        source = "int $var = 1; int _aux = 2; int x$y_z = 3; int $ = 4; int _ = 5;"
+        tokens = Lexer(source).tokenize()
+        ids = [t.lexeme for t in tokens if t.type == TokenType.IDENTIFIER]
+        self.assertEqual(ids, ["$var", "_aux", "x$y_z", "$", "_"])
+>>>>>>> ba7ca9076e818d78e8d714d5e78ed7c05ebef71a
 
     # -------------------------------------------------------------
     # 4. TESTES DE STRINGS MALFORMADAS
@@ -1014,7 +1042,7 @@ class TestIntegracaoGUIEAPI(unittest.TestCase):
         # Ordem 2: String
         self.assertEqual(all_syms[1]["order"], 2)
         self.assertEqual(all_syms[1]["name"], "String")
-        self.assertEqual(all_syms[1]["category"], "palavra_reservada")
+        self.assertEqual(all_syms[1]["category"], "tipo")
         self.assertEqual(all_syms[1]["type"], "tipo")
         self.assertEqual(all_syms[1]["line"], "-")
 
@@ -1177,6 +1205,47 @@ class TestIntegracaoGUIEAPI(unittest.TestCase):
         # 'validoAntes', 'validoDepois' e 'validoDepois += validoAntes' foram preservados na AST parcial
         self.assertGreaterEqual(len(method_node.body.statements), 2)
         self.assertTrue(any(isinstance(s, CompoundAssign) for s in method_node.body.statements))
+
+
+class TestPromocaoImplicitaWidening(unittest.TestCase):
+    """Testes específicos para promoção implícita (widening) e literais double/float."""
+
+    def test_atribuicao_int_para_double_aceita(self):
+        source = "double x = 10; double y = 42; y = 100;"
+        res = analyze_source(source)
+        self.assertEqual(len(res.semantic_errors), 0, f"Erros inesperados: {res.semantic_errors}")
+        self.assertTrue(res.success)
+
+    def test_atribuicao_literal_double_aceita(self):
+        source = "double pi = 3.1415; double d = 2.0;"
+        res = analyze_source(source)
+        self.assertEqual(len(res.semantic_errors), 0, f"Erros inesperados: {res.semantic_errors}")
+        self.assertTrue(res.success)
+
+    def test_operacoes_mistas_int_double_promovidas_para_double(self):
+        source = """
+        int a = 10;
+        double b = 2.5;
+        double soma = a + b;
+        double sub = b - a;
+        double mult = a * b;
+        double div = a / b;
+        """
+        res = analyze_source(source)
+        self.assertEqual(len(res.semantic_errors), 0, f"Erros inesperados: {res.semantic_errors}")
+        self.assertTrue(res.success)
+
+    def test_atribuicao_invalida_double_para_int_rejeitada(self):
+        source = "double d = 3.1415;\nint x = d;"
+        res = analyze_source(source)
+        self.assertFalse(res.success)
+        self.assertTrue(any("não é possível atribuir double a 'x' do tipo int" in err for err in res.semantic_errors))
+
+    def test_operacao_mista_atribuida_a_int_rejeitada(self):
+        source = "int a = 10;\ndouble b = 2.5;\nint c = a + b;"
+        res = analyze_source(source)
+        self.assertFalse(res.success)
+        self.assertTrue(any("não é possível atribuir double a 'c' do tipo int" in err for err in res.semantic_errors))
 
 
 if __name__ == "__main__":

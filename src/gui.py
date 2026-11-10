@@ -521,7 +521,11 @@ class CompiladorGUI(tk.Tk):
             # 5. Preenchimento da Aba Geral de Erros
             if result.has_errors:
                 erros_lista = []
+<<<<<<< HEAD
                 if getattr(result, "lexical_errors", None):
+=======
+                if result.lexical_errors:
+>>>>>>> ba7ca9076e818d78e8d714d5e78ed7c05ebef71a
                     for le in result.lexical_errors:
                         erros_lista.append(str(le))
                 elif result.lexical_error:

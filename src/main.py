@@ -27,6 +27,7 @@ class AnalysisResult:
 
     @property
     def has_errors(self) -> bool:
+<<<<<<< HEAD
         return bool(
             self.lexical_error
             or self.lexical_errors
@@ -34,6 +35,9 @@ class AnalysisResult:
             or self.syntactic_errors
             or self.semantic_errors
         )
+=======
+        return bool(self.lexical_error or self.lexical_errors or self.syntactic_error or self.semantic_errors)
+>>>>>>> ba7ca9076e818d78e8d714d5e78ed7c05ebef71a
 
 
 def analyze_source(source: str) -> AnalysisResult:
@@ -53,11 +57,19 @@ def analyze_source(source: str) -> AnalysisResult:
         return result
 
     if lexer.errors:
+<<<<<<< HEAD
         result.lexical_errors = list(lexer.errors)
         result.lexical_error = lexer.errors[0]
         return result
 
     # 2. Análise Sintática (com recuperação em modo pânico)
+=======
+        result.lexical_error = lexer.errors[0]
+        result.lexical_errors = list(lexer.errors)
+        return result
+
+    # 2. Análise Sintática
+>>>>>>> ba7ca9076e818d78e8d714d5e78ed7c05ebef71a
     parser = Parser(result.tokens)
     try:
         ast = parser.parse()
@@ -144,10 +156,17 @@ def run_file(path):
     for token in result.tokens:
         print(token)
     if result.lexical_errors:
+<<<<<<< HEAD
         for lex_err in result.lexical_errors:
             print(f"\n{lex_err}")
         return 1
     if result.lexical_error:
+=======
+        for err in result.lexical_errors:
+            print(f"\n{err}")
+        return 1
+    elif result.lexical_error:
+>>>>>>> ba7ca9076e818d78e8d714d5e78ed7c05ebef71a
         print(f"\n{result.lexical_error}")
         return 1
 
