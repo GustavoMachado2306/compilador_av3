@@ -91,6 +91,7 @@ class CompiladorGUI(tk.Tk):
 
         ttk.Button(toolbar, text="▶ Analisar Código (F5)", style="Action.TButton", command=self.on_analyze).pack(side=tk.LEFT, padx=(0, 6))
         ttk.Button(toolbar, text="🧹 Limpar Resultados (Ctrl+L)", style="Tool.TButton", command=self.on_clear).pack(side=tk.LEFT, padx=4)
+        ttk.Button(toolbar, text="📋 Copiar Tudo (Ctrl+Shift+C)", style="Tool.TButton", command=self.on_copy_all).pack(side=tk.LEFT, padx=4)
 
         self.file_label_var = tk.StringVar(value="Nenhum arquivo aberto")
         ttk.Label(toolbar, textvariable=self.file_label_var, foreground="#6c757d", font=("Segoe UI", 9, "italic")).pack(side=tk.RIGHT, padx=6)
@@ -298,6 +299,8 @@ class CompiladorGUI(tk.Tk):
         self.bind("<F5>", lambda e: self.on_analyze())
         self.bind("<Control-l>", lambda e: self.on_clear())
         self.bind("<Control-L>", lambda e: self.on_clear())
+        self.bind("<Control-Shift-c>", lambda e: self.on_copy_all())
+        self.bind("<Control-Shift-C>", lambda e: self.on_copy_all())
 
         # Selecionar tudo no editor (Ctrl+A)
         self.editor.bind("<Control-a>", self._select_all)
@@ -411,6 +414,60 @@ class CompiladorGUI(tk.Tk):
         self._set_readonly_text(self.errors_text, "(Aguardando análise)")
         self.set_status("Pronto")
 
+    def on_copy_all(self):
+        """Copia o código-fonte e todos os resultados das abas para a área de transferência."""
+        try:
+            sections = []
+
+            # 1. Código Fonte
+            source = self.get_editor_text()
+            sections.append(f"=== CÓDIGO FONTE ===\n{source if source.strip() else '(vazio)'}")
+
+            # 2. Tokens
+            token_items = self.tokens_tree.get_children()
+            if token_items:
+                tok_lines = [f"{'#':<5} {'Tipo':<20} {'Lexema':<22} {'Linha':<7} {'Coluna':<7}", "-" * 65]
+                for item in token_items:
+                    vals = self.tokens_tree.item(item, "values")
+                    tok_lines.append(f"{str(vals[0]):<5} {str(vals[1]):<20} {str(vals[2]):<22} {str(vals[3]):<7} {str(vals[4]):<7}")
+                sections.append("=== TOKENS ===\n" + "\n".join(tok_lines))
+            else:
+                sections.append("=== TOKENS ===\n(Nenhum token gerado)")
+
+            # 3. Tabela de Símbolos
+            sym_items = self.symbols_tree.get_children()
+            if sym_items:
+                sym_lines = [f"{'Ordem':<7} {'Identificador':<20} {'Categoria':<20} {'Tipo':<12} {'Linha':<7}", "-" * 70]
+                for item in sym_items:
+                    vals = self.symbols_tree.item(item, "values")
+                    sym_lines.append(f"{str(vals[0]):<7} {str(vals[1]):<20} {str(vals[2]):<20} {str(vals[3]):<12} {str(vals[4]):<7}")
+                sections.append("=== TABELA DE SÍMBOLOS ===\n" + "\n".join(sym_lines))
+            else:
+                sections.append("=== TABELA DE SÍMBOLOS ===\n(Vazia)")
+
+            # 4. AST
+            ast_content = self.ast_text.get("1.0", "end-1c").strip()
+            sections.append(f"=== AST ===\n{ast_content if ast_content else '(Vazia)'}")
+
+            # 5. Semântica
+            sem_content = self.semantic_text.get("1.0", "end-1c").strip()
+            sections.append(f"=== SEMÂNTICA ===\n{sem_content if sem_content else '(Vazia)'}")
+
+            # 6. Erros
+            err_content = self.errors_text.get("1.0", "end-1c").strip()
+            sections.append(f"=== ERROS ===\n{err_content if err_content else '(Nenhum erro)'}")
+
+            full_text = "\n\n".join(sections)
+            self.clipboard_clear()
+            self.clipboard_append(full_text)
+            self.update_idletasks()
+            self.set_status("Tudo copiado para a área de transferência!")
+            return full_text
+        except Exception as exc:
+            self.set_status("Erro ao copiar para a área de transferência")
+            messagebox.showerror("Erro ao Copiar", f"Não foi possível copiar o conteúdo:\n{exc}")
+            return ""
+
     def on_analyze(self):
         """Executa a análise do código e preenche as abas do compilador."""
         try:
@@ -464,9 +521,15 @@ class CompiladorGUI(tk.Tk):
             # 5. Preenchimento da Aba Geral de Erros
             if result.has_errors:
                 erros_lista = []
-                if result.lexical_error:
+                if getattr(result, "lexical_errors", None):
+                    for le in result.lexical_errors:
+                        erros_lista.append(str(le))
+                elif result.lexical_error:
                     erros_lista.append(str(result.lexical_error))
-                if result.syntactic_error:
+                if getattr(result, "syntactic_errors", None):
+                    for syn_err in result.syntactic_errors:
+                        erros_lista.append(str(syn_err))
+                elif result.syntactic_error:
                     erros_lista.append(str(result.syntactic_error))
                 for se in result.semantic_errors:
                     erros_lista.append(str(se))

@@ -115,38 +115,41 @@ class TestCompiladorOficial(unittest.TestCase):
         self.assertIsInstance(ast.statements[1], Assignment)
 
     def test_09_caractere_invalido(self):
-        source = "int x = 10 @ 5;"
+        source = "int x = 10 # 5;"
         lexer = Lexer(source)
-        with self.assertRaises(LexicalError) as cm:
-            lexer.tokenize()
+        tokens = lexer.tokenize()
 
-        err = cm.exception
+        # Tolerância a falhas: não interrompe com exceção, registra erro e continua até EOF
+        self.assertEqual(len(lexer.errors), 1)
+        err = lexer.errors[0]
         self.assertEqual(err.line, 1)
         self.assertEqual(err.column, 12)
-        self.assertEqual(err.character, "@")
+        self.assertEqual(err.character, "#")
         self.assertIn("[ERRO LÉXICO]", str(err))
-        self.assertIn("Caractere inválido: '@'", str(err))
+        self.assertIn("Caractere inválido: '#'", str(err))
+        self.assertEqual(tokens[-1].type, TokenType.EOF)
 
     def test_10_string_nao_fechada(self):
         source = 'String nome = "Gustavo;'
         lexer = Lexer(source)
-        with self.assertRaises(LexicalError) as cm:
-            lexer.tokenize()
+        tokens = lexer.tokenize()
 
-        err = cm.exception
+        self.assertEqual(len(lexer.errors), 1)
+        err = lexer.errors[0]
         self.assertEqual(err.line, 1)
         self.assertEqual(err.column, 15)
         self.assertIn("[ERRO LÉXICO]", str(err))
         self.assertIn("String não fechada", str(err))
+        self.assertEqual(tokens[-1].type, TokenType.EOF)
 
     def test_11_declaracao_sem_expressao(self):
         source = "int x = ;"
         tokens = Lexer(source).tokenize()
         parser = Parser(tokens)
-        with self.assertRaises(SyntacticError) as cm:
-            parser.parse()
+        parser.parse()
 
-        err = cm.exception
+        self.assertGreaterEqual(len(parser.errors), 1)
+        err = parser.errors[0]
         self.assertEqual(err.line, 1)
         self.assertEqual(err.column, 9)
         self.assertEqual(err.found, ";")
@@ -157,10 +160,10 @@ class TestCompiladorOficial(unittest.TestCase):
         source = "x = ;"
         tokens = Lexer(source).tokenize()
         parser = Parser(tokens)
-        with self.assertRaises(SyntacticError) as cm:
-            parser.parse()
+        parser.parse()
 
-        err = cm.exception
+        self.assertGreaterEqual(len(parser.errors), 1)
+        err = parser.errors[0]
         self.assertEqual(err.line, 1)
         self.assertEqual(err.column, 5)
         self.assertEqual(err.found, ";")
@@ -171,10 +174,10 @@ class TestCompiladorOficial(unittest.TestCase):
         source = "x = 10 +"
         tokens = Lexer(source).tokenize()
         parser = Parser(tokens)
-        with self.assertRaises(SyntacticError) as cm:
-            parser.parse()
+        parser.parse()
 
-        err = cm.exception
+        self.assertGreaterEqual(len(parser.errors), 1)
+        err = parser.errors[0]
         self.assertEqual(err.line, 1)
         self.assertEqual(err.found, "EOF")
         self.assertIn("Era esperado uma expressão após '+'.", str(err))
@@ -183,10 +186,10 @@ class TestCompiladorOficial(unittest.TestCase):
         source = "int = 10;"
         tokens = Lexer(source).tokenize()
         parser = Parser(tokens)
-        with self.assertRaises(SyntacticError) as cm:
-            parser.parse()
+        parser.parse()
 
-        err = cm.exception
+        self.assertGreaterEqual(len(parser.errors), 1)
+        err = parser.errors[0]
         self.assertEqual(err.line, 1)
         self.assertEqual(err.column, 5)
         self.assertEqual(err.found, "=")
@@ -196,10 +199,10 @@ class TestCompiladorOficial(unittest.TestCase):
         source = "int x = (10 + 2;"
         tokens = Lexer(source).tokenize()
         parser = Parser(tokens)
-        with self.assertRaises(SyntacticError) as cm:
-            parser.parse()
+        parser.parse()
 
-        err = cm.exception
+        self.assertGreaterEqual(len(parser.errors), 1)
+        err = parser.errors[0]
         self.assertEqual(err.line, 1)
         self.assertEqual(err.column, 16)
         self.assertEqual(err.found, ";")
@@ -209,10 +212,10 @@ class TestCompiladorOficial(unittest.TestCase):
         source = "x 10;"
         tokens = Lexer(source).tokenize()
         parser = Parser(tokens)
-        with self.assertRaises(SyntacticError) as cm:
-            parser.parse()
+        parser.parse()
 
-        err = cm.exception
+        self.assertGreaterEqual(len(parser.errors), 1)
+        err = parser.errors[0]
         self.assertEqual(err.line, 1)
         self.assertEqual(err.column, 3)
         self.assertEqual(err.found, "10")
@@ -479,14 +482,119 @@ class TestEstresseERobustez(unittest.TestCase):
     # -------------------------------------------------------------
 
     def test_39_caracteres_invalidos_individuais(self):
-        chars_invalidos = ['@', '#', '$', '%', '&', '*', '/', '\\', '?', ':', '!', '~', '`', '[', ']', '{', '}', ',']
+        chars_invalidos = ['#', '\\', '`']
         for ch in chars_invalidos:
             source = f"int a = 1 {ch} 2;"
-            with self.assertRaises(LexicalError, msg=f"Falha ao rejeitar '{ch}'") as cm:
-                Lexer(source).tokenize()
-            err = cm.exception
+            lexer = Lexer(source)
+            tokens = lexer.tokenize()
+            self.assertEqual(len(lexer.errors), 1, msg=f"Falha ao registrar erro em '{ch}'")
+            err = lexer.errors[0]
             self.assertEqual(err.character, ch)
             self.assertIn(f"Caractere inválido: {ch!r}", str(err))
+            self.assertEqual(tokens[-1].type, TokenType.EOF)
+
+    def test_39d_identificadores_com_cifrao_e_sublinhado(self):
+        source = "int $orcamentoGlobal = 100;\nint _contador = $orcamentoGlobal + 1;\nint var$1_2 = _contador;"
+        tokens = Lexer(source).tokenize()
+        ids = [t.lexeme for t in tokens if t.type == TokenType.IDENTIFIER]
+        self.assertEqual(ids, ["$orcamentoGlobal", "_contador", "$orcamentoGlobal", "var$1_2", "_contador"])
+        ast = Parser(tokens).parse()
+        symbols = SymbolTable()
+        errors = SemanticAnalyzer(symbols).analyze(ast)
+        self.assertEqual(len(errors), 0)
+        self.assertTrue(symbols.exists("$orcamentoGlobal"))
+        self.assertTrue(symbols.exists("_contador"))
+        self.assertTrue(symbols.exists("var$1_2"))
+
+    def test_39e_char_literal_e_string_literal(self):
+        source = r"""'Z' '\n' '\t' '\'' '\\' "texto" """
+        tokens = Lexer(source).tokenize()
+        self.assertEqual([t.type for t in tokens], [
+            TokenType.CHAR_LITERAL,
+            TokenType.CHAR_LITERAL,
+            TokenType.CHAR_LITERAL,
+            TokenType.CHAR_LITERAL,
+            TokenType.CHAR_LITERAL,
+            TokenType.STRING_LITERAL,
+            TokenType.EOF,
+        ])
+        self.assertEqual(tokens[0].lexeme, "Z")
+        self.assertEqual(tokens[1].lexeme, "\n")
+        self.assertEqual(tokens[2].lexeme, "\t")
+        self.assertEqual(tokens[3].lexeme, "'")
+        self.assertEqual(tokens[4].lexeme, "\\")
+        self.assertEqual(tokens[5].lexeme, "texto")
+
+        # Literais de char inválidos registram erro sem interromper a execução
+        for invalido in ["''", "'ab'", "'a", "'\\'"]:
+            lexer = Lexer(invalido)
+            lexer.tokenize()
+            self.assertGreater(len(lexer.errors), 0, msg=f"Deveria registrar erro em: {invalido!r}")
+
+    def test_39c_delimitadores_e_pontuacao_java(self):
+        source = "{ ( [ ; , . @ ] ) } System.out.println 3.14 0xFF 0b1010 077"
+        tokens = Lexer(source).tokenize()
+        self.assertEqual([t.type for t in tokens], [
+            TokenType.LBRACE,
+            TokenType.LPAREN,
+            TokenType.LBRACKET,
+            TokenType.SEMICOLON,
+            TokenType.COMMA,
+            TokenType.DOT,
+            TokenType.AT,
+            TokenType.RBRACKET,
+            TokenType.RPAREN,
+            TokenType.RBRACE,
+            TokenType.IDENTIFIER,
+            TokenType.DOT,
+            TokenType.IDENTIFIER,
+            TokenType.DOT,
+            TokenType.IDENTIFIER,
+            TokenType.FLOAT_LITERAL,
+            TokenType.HEX_LITERAL,
+            TokenType.BINARY_LITERAL,
+            TokenType.OCTAL_LITERAL,
+            TokenType.EOF,
+        ])
+        self.assertEqual(tokens[15].lexeme, "3.14")
+        self.assertEqual(tokens[16].lexeme, "0xFF")
+        self.assertEqual(tokens[17].lexeme, "0b1010")
+        self.assertEqual(tokens[18].lexeme, "077")
+
+    def test_39b_comentarios_e_operador_divisao(self):
+        # 1. Comentário de linha
+        source_linha = "// Comentario inicial\nint x = 10; // Comentario no fim da linha\n"
+        tokens_linha = Lexer(source_linha).tokenize()
+        self.assertEqual([t.type for t in tokens_linha], [
+            TokenType.KEYWORD_INT,
+            TokenType.IDENTIFIER,
+            TokenType.ASSIGN,
+            TokenType.NUMBER,
+            TokenType.SEMICOLON,
+            TokenType.EOF,
+        ])
+        self.assertEqual(tokens_linha[0].line, 2)
+
+        # 2. Comentário de bloco (múltiplas linhas)
+        source_bloco = "/* Bloco\nde multiplas\nlinhas */\nint y = 20 /* inline */ / 2;"
+        tokens_bloco = Lexer(source_bloco).tokenize()
+        self.assertEqual([t.type for t in tokens_bloco], [
+            TokenType.KEYWORD_INT,
+            TokenType.IDENTIFIER,
+            TokenType.ASSIGN,
+            TokenType.NUMBER,
+            TokenType.DIVIDE,
+            TokenType.NUMBER,
+            TokenType.SEMICOLON,
+            TokenType.EOF,
+        ])
+        self.assertEqual(tokens_bloco[0].line, 4)
+        self.assertEqual(tokens_bloco[4].lexeme, "/")
+
+        # 3. Comentário de bloco não fechado registra erro léxico controlado sem interromper
+        lexer_bloco = Lexer("int x = 10; /* comentario sem fim")
+        lexer_bloco.tokenize()
+        self.assertEqual(len(lexer_bloco.errors), 1)
 
     # -------------------------------------------------------------
     # 4. TESTES DE STRINGS MALFORMADAS
@@ -503,8 +611,10 @@ class TestEstresseERobustez(unittest.TestCase):
             '"texto sem fim',
         ]
         for caso in casos:
-            with self.assertRaises(LexicalError, msg=f"Deveria falhar em: {caso!r}"):
-                Lexer(caso).tokenize()
+            lexer = Lexer(caso)
+            tokens = lexer.tokenize()
+            self.assertGreater(len(lexer.errors), 0, msg=f"Deveria registrar erro em: {caso!r}")
+            self.assertEqual(tokens[-1].type, TokenType.EOF)
 
     # -------------------------------------------------------------
     # 5. TESTES DE PARSER MALFORMADO (COMBINAÇÕES EXTREMAS)
@@ -513,7 +623,6 @@ class TestEstresseERobustez(unittest.TestCase):
     def test_41_combinacoes_sintaticas_malformadas(self):
         entradas_invalidas = [
             "=",
-            ";",
             "+",
             "-",
             "(",
@@ -542,14 +651,10 @@ class TestEstresseERobustez(unittest.TestCase):
             "String String;",
         ]
         for caso in entradas_invalidas:
-            try:
-                tokens = Lexer(caso).tokenize()
-                parser = Parser(tokens)
-                with self.assertRaises(SyntacticError, msg=f"Deveria falhar sintaticamente em: {caso!r}"):
-                    parser.parse()
-            except LexicalError:
-                # Se falhar no lexer, já foi rejeitado antes do parser
-                pass
+            tokens = Lexer(caso).tokenize()
+            parser = Parser(tokens)
+            parser.parse()
+            self.assertGreater(len(parser.errors), 0, msg=f"Deveria registrar erro sintático em: {caso!r}")
 
     # -------------------------------------------------------------
     # 6. TESTES SEMÂNTICOS DE MALFORMAÇÃO E TIPOS
@@ -603,8 +708,8 @@ class TestEstresseERobustez(unittest.TestCase):
             Token(TokenType.EOF, "", 1, 6)
         ]
         parser = Parser(tokens)
-        with self.assertRaises(SyntacticError):
-            parser.parse()
+        parser.parse()
+        self.assertGreater(len(parser.errors), 0)
 
     # -------------------------------------------------------------
     # 8. TESTES DE ARQUIVO E FORMATOS (CRLF, BOM, PERMISSÕES)
@@ -706,9 +811,9 @@ class TestEstresseERobustez(unittest.TestCase):
         source = f"int x = {expr};"
         tokens = Lexer(source).tokenize()
         parser = Parser(tokens)
-        with self.assertRaises(SyntacticError) as cm:
-            parser.parse()
-        err = cm.exception
+        parser.parse()
+        self.assertGreater(len(parser.errors), 0)
+        err = parser.errors[0]
         self.assertIn("limite de aninhamento", str(err).lower())
 
     # -------------------------------------------------------------
@@ -784,7 +889,7 @@ class TestIntegracaoGUIEAPI(unittest.TestCase):
         self.assertEqual(len(res.semantic_errors), 0)
 
     def test_56_analyze_source_api_erro_lexico(self):
-        source = "int a = 10 @ 5;"
+        source = "int a = 10 # 5;"
         res = analyze_source(source)
         self.assertFalse(res.success)
         self.assertTrue(res.has_errors)
@@ -841,6 +946,16 @@ class TestIntegracaoGUIEAPI(unittest.TestCase):
             self.assertEqual(len(app.symbols_tree.get_children()), 4)
             self.assertIn("Program", app.ast_text.get("1.0", tk.END))
 
+            # 1.1 Copiar Tudo
+            copied = app.on_copy_all()
+            self.assertIn("=== CÓDIGO FONTE ===", copied)
+            self.assertIn("=== TOKENS ===", copied)
+            self.assertIn("=== TABELA DE SÍMBOLOS ===", copied)
+            self.assertIn("=== AST ===", copied)
+            self.assertIn("=== SEMÂNTICA ===", copied)
+            self.assertIn("=== ERROS ===", copied)
+            self.assertEqual(app.status_var.get(), "Tudo copiado para a área de transferência!")
+
             # 2. Re-análise sem vazamento ou acúmulo de estado
             app.on_analyze()
             self.assertEqual(len(app.tokens_tree.get_children()), 11)
@@ -848,7 +963,7 @@ class TestIntegracaoGUIEAPI(unittest.TestCase):
 
             # 3. Análise com erro léxico
             app.editor.delete("1.0", tk.END)
-            app.editor.insert("1.0", "int x = 10 @ 5;")
+            app.editor.insert("1.0", "int x = 10 # 5;")
             app.on_analyze()
             self.assertIn("[ERRO LÉXICO]", app.errors_text.get("1.0", tk.END))
 
@@ -916,6 +1031,152 @@ class TestIntegracaoGUIEAPI(unittest.TestCase):
         self.assertEqual(all_syms[3]["category"], "variavel")
         self.assertEqual(all_syms[3]["type"], "String")
         self.assertEqual(all_syms[3]["line"], 2)
+
+    def test_63_estrutura_java_completa_com_skip_no_parser(self):
+        source = """
+        // Comentário de cabeçalho
+        package br.edu.compilador;
+        import java.util.*;
+
+        /* Comentário de bloco
+           em múltiplas linhas */
+        public class TesteManual {
+            public static void main(String[] args) {
+                int _contador = 10;
+                double $orcamentoGlobal = 1500.75;
+                char status = 'Z';
+                String nome = "Gustavo";
+
+                if (_contador > 0) {
+                    _contador = _contador + 5;
+                    System.out.println(nome);
+                }
+
+                while (_contador < 20) {
+                    _contador++;
+                }
+            }
+        }
+        """
+        res = analyze_source(source)
+        self.assertTrue(res.success, msg=f"Erros inesperados: {res.lexical_error} | {res.syntactic_error} | {res.semantic_errors}")
+        self.assertIsNotNone(res.ast)
+        self.assertEqual(len(res.ast.statements), 3)  # PackageNode, ImportNode, ClassNode
+        self.assertIn("Classe (public class TesteManual)", res.ast.pretty())
+        self.assertIn("Metodo (public static void main(String[] args))", res.ast.pretty())
+        self.assertTrue(res.symbol_table.exists("_contador"))
+        self.assertTrue(res.symbol_table.exists("$orcamentoGlobal"))
+        self.assertTrue(res.symbol_table.exists("status"))
+        self.assertTrue(res.symbol_table.exists("nome"))
+
+    def test_64_precedencia_expressoes_e_panic_mode(self):
+        source = """
+        public class Calculadora {
+            public static int executar(int base) {
+                int x = 10 + 2 * 3;
+                int y = (x << 1) & 0xFF | 0b1010 ^ 077;
+                boolean ativo = x >= 10 && y != 0 || !false;
+                do {
+                    x += 1;
+                } while (x < 20);
+                for (int i = 0; i < 5; i++) {
+                    y -= i;
+                }
+                return x + y + base;
+            }
+        }
+        """
+        res = analyze_source(source)
+        self.assertTrue(res.success, msg=f"Erros: {res.syntactic_error} | {res.semantic_errors}")
+        self.assertTrue(res.symbol_table.exists("x"))
+        self.assertTrue(res.symbol_table.exists("y"))
+        self.assertTrue(res.symbol_table.exists("ativo"))
+        self.assertTrue(res.symbol_table.exists("i"))
+
+    def test_65_switch_try_catch_arrays_e_concatenacao(self):
+        source = """
+        package app.core;
+        import java.io.*;
+
+        public class ProcessadorDados extends Base implements Runnable {
+            public static void main(String args[]) {
+                int[] valores = new int[5];
+                valores[0] = 10;
+                int primeiro = valores[0];
+                double convertido = (double) primeiro;
+                String msg = "Valor: " + primeiro;
+                msg += " pronto";
+
+                switch (primeiro) {
+                    case 10:
+                        valores[0] += 5;
+                        break;
+                    default:
+                        valores[0] = 0;
+                        break;
+                }
+
+                try {
+                    System.out.println("Processando: " + msg);
+                } catch (Exception e) {
+                    System.out.println(e);
+                } finally {
+                    primeiro--;
+                }
+            }
+        }
+        """
+        res = analyze_source(source)
+        self.assertTrue(res.success, msg=f"Erros: {res.lexical_error} | {res.syntactic_error} | {res.semantic_errors}")
+        pretty_ast = res.ast.pretty()
+        self.assertIn("Switch", pretty_ast)
+        self.assertIn("Try", pretty_ast)
+        self.assertIn("Catch (Exception e)", pretty_ast)
+        self.assertIn("Finally", pretty_ast)
+        self.assertIn("AcessoArray", pretty_ast)
+        self.assertIn("Atribuicao (+=)", pretty_ast)
+
+    def test_66_ast_nodes_completos_e_panic_mode_parcial(self):
+        from src.ast_nodes import (
+            ClassDecl,
+            MethodDecl,
+            Block,
+            IfStmt,
+            WhileStmt,
+            ForStmt,
+            DoWhileStmt,
+            ReturnStmt,
+            BreakStmt,
+            ContinueStmt,
+            MethodCall,
+            UnaryOp,
+            CompoundAssign,
+            ArrayAccess,
+        )
+        # Verifica exportação de todos os nós solicitados e recuperação em Modo Pânico
+        source = """
+        public class Demo {
+            public void rodar() {
+                int validoAntes = 10;
+                int erroSintatico = ;
+                int validoDepois = 20;
+                validoDepois += validoAntes;
+            }
+        }
+        """
+        tokens = Lexer(source).tokenize()
+        parser = Parser(tokens)
+        ast = parser.parse()
+        self.assertEqual(len(parser.errors), 1)
+        # Mesmo com erro na linha intermediária, a AST parcial contém a classe, método e comandos válidos
+        cls_node = ast.statements[0]
+        self.assertIsInstance(cls_node, ClassDecl)
+        method_node = cls_node.members[0]
+        self.assertIsInstance(method_node, MethodDecl)
+        self.assertIsInstance(method_node.body, Block)
+        # 'validoAntes', 'validoDepois' e 'validoDepois += validoAntes' foram preservados na AST parcial
+        self.assertGreaterEqual(len(method_node.body.statements), 2)
+        self.assertTrue(any(isinstance(s, CompoundAssign) for s in method_node.body.statements))
 
 
 if __name__ == "__main__":

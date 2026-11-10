@@ -12,16 +12,26 @@ Cada token preserva seu tipo, lexema original, linha e coluna:
 | :--- | :--- | :--- |
 | `KEYWORD_INT` | Palavra reservada `int` | `int` |
 | `KEYWORD_STRING` | Palavra reservada `String` | `String` |
-| `IDENTIFIER` | `[a-zA-Z_][a-zA-Z0-9_]*` | `total`, `_x1` |
-| `NUMBER` | Sequência de dígitos decimais `[0-9]+` | `10`, `42` |
-| `STRING_LITERAL` | Caracteres delimitados por aspas duplas `"..."` | `"Gustavo"`, `"ola"` |
+| `IDENTIFIER` | `[a-zA-Z_$][a-zA-Z0-9_$]*` | `total`, `_contador`, `$orcamentoGlobal` |
+| `NUMBER` | Sequência de dígitos decimais `[0-9]+` ou ponto flutuante `[0-9]+\.[0-9]+` | `10`, `42`, `3.14` |
+| `STRING_LITERAL` | Caracteres delimitados por aspas duplas `"..."` (com suporte a escapes) | `"Gustavo"`, `"ola"` |
+| `CHAR_LITERAL` | Caractere único ou escape delimitado por aspas simples `'...'` | `'Z'`, `'\n'`, `'\''` |
 | `ASSIGN` | Operador de atribuição `=` | `=` |
 | `PLUS` | Operador aritmético de soma `+` | `+` |
 | `MINUS` | Operador aritmético de subtração `-` | `-` |
+| `DIVIDE` | Operador aritmético de divisão `/` | `/` |
 | `SEMICOLON` | Delimitador de fim de comando `;` | `;` |
+| `COMMA` | Vírgula `,` | `,` |
+| `DOT` | Ponto `.` | `.` |
 | `LPAREN` | Abre parênteses `(` | `(` |
 | `RPAREN` | Fecha parênteses `)` | `)` |
+| `LBRACE` | Abre chaves `{` | `{` |
+| `RBRACE` | Fecha chaves `}` | `}` |
+| `LBRACKET` | Abre colchetes `[` | `[` |
+| `RBRACKET` | Fecha colchetes `]` | `]` |
 | `EOF` | Fim de arquivo | `""` |
+
+> **Comentários**: Comentários de linha (`// ...`) e comentários de bloco (`/* ... */`, incluindo múltiplas linhas) são reconhecidos e ignorados pelo analisador léxico antes da regra do operador `/`.
 
 ---
 
@@ -39,7 +49,7 @@ Cada token preserva seu tipo, lexema original, linha e coluna:
 
 <Atribuicao> ::= <Identificador> "=" <Expressao> ";"
 
-<Expressao> ::= <Termo> (("+" | "-") <Termo>)*
+<Expressao> ::= <Termo> (("+" | "-" | "/") <Termo>)*
 
 <Termo> ::= <Identificador>
           | <Numero>

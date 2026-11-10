@@ -19,13 +19,21 @@ class AnalysisResult:
     ast: Optional[Program] = None
     symbol_table: Optional[SymbolTable] = None
     lexical_error: Optional[LexicalError] = None
+    lexical_errors: List[LexicalError] = field(default_factory=list)
     syntactic_error: Optional[SyntacticError] = None
+    syntactic_errors: List[SyntacticError] = field(default_factory=list)
     semantic_errors: List[str] = field(default_factory=list)
     success: bool = False
 
     @property
     def has_errors(self) -> bool:
-        return bool(self.lexical_error or self.syntactic_error or self.semantic_errors)
+        return bool(
+            self.lexical_error
+            or self.lexical_errors
+            or self.syntactic_error
+            or self.syntactic_errors
+            or self.semantic_errors
+        )
 
 
 def analyze_source(source: str) -> AnalysisResult:
@@ -34,22 +42,39 @@ def analyze_source(source: str) -> AnalysisResult:
         source = ""
     result = AnalysisResult(source=source)
 
-    # 1. Análise Léxica
+    # 1. Análise Léxica (com recuperação de erros até o EOF)
     lexer = Lexer(source)
     try:
         result.tokens = lexer.tokenize()
     except LexicalError as err:
         result.lexical_error = err
+        result.lexical_errors = [err]
         result.tokens = err.tokens or getattr(lexer, "tokens", [])
         return result
 
-    # 2. Análise Sintática
+    if lexer.errors:
+        result.lexical_errors = list(lexer.errors)
+        result.lexical_error = lexer.errors[0]
+        return result
+
+    # 2. Análise Sintática (com recuperação em modo pânico)
     parser = Parser(result.tokens)
     try:
-        result.ast = parser.parse()
+        ast = parser.parse()
     except SyntacticError as err:
         result.syntactic_error = err
+        result.syntactic_errors = [err]
         return result
+
+    if parser.errors:
+        result.syntactic_errors = list(parser.errors)
+        result.syntactic_error = parser.errors[0]
+        if ast and ast.statements:
+            result.ast = ast
+        else:
+            return result
+    else:
+        result.ast = ast
 
     # 3. Tabela de Símbolos e Análise Semântica
     symbols = SymbolTable()
@@ -118,6 +143,10 @@ def run_file(path):
     print("\n=== ANÁLISE LÉXICA ===")
     for token in result.tokens:
         print(token)
+    if result.lexical_errors:
+        for lex_err in result.lexical_errors:
+            print(f"\n{lex_err}")
+        return 1
     if result.lexical_error:
         print(f"\n{result.lexical_error}")
         return 1
