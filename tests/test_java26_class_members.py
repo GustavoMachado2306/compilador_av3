@@ -948,6 +948,119 @@ class TestJava26ClassMembersS3(unittest.TestCase):
         self.assertEqual(res.symbol_table.get_symbol("vetor")["type"], "int[]")
         self.assertEqual(res.symbol_table.get_symbol("gerarCoordenadas")["type"], "int[][][][]")
 
+    def test_86_uso_invalido_super_early_construction_context(self):
+        source = """
+        class Base {
+            int campoBase = 10;
+            Base(int x) {}
+            int obter() { return 1; }
+        }
+        class Exemplo extends Base {
+            Exemplo(int x) {
+                int y = super.campoBase + super.obter();
+                super(x);
+            }
+        }
+        """
+        res = analyze_source(source)
+        self.assertFalse(res.success)
+        self.assertTrue(any("super" in str(e) and "early construction context" in str(e) for e in res.semantic_errors))
+
+    def test_87_acesso_implicito_campo_instancia_prologo(self):
+        source = """
+        class Base {
+            Base(int x) {}
+        }
+        class Exemplo extends Base {
+            int contador;
+            Exemplo() {
+                contador = 5;
+                super(1);
+            }
+        }
+        """
+        res = analyze_source(source)
+        self.assertFalse(res.success)
+        self.assertTrue(any("contador" in str(e) and "early construction context" in str(e) for e in res.semantic_errors))
+
+    def test_88_chamada_implicita_metodo_instancia_prologo(self):
+        source = """
+        class Base {
+            Base(int x) {}
+        }
+        class Exemplo extends Base {
+            int calcular() { return 42; }
+            Exemplo() {
+                int r = calcular();
+                super(r);
+            }
+        }
+        """
+        res = analyze_source(source)
+        self.assertFalse(res.success)
+        self.assertTrue(any("calcular" in str(e) and "early construction context" in str(e) for e in res.semantic_errors))
+
+    def test_89_this_em_argumentos_invocacao_construtor(self):
+        source = """
+        class Base {
+            Base(Object ref) {}
+        }
+        class Exemplo extends Base {
+            int valor;
+            Exemplo() {
+                super(this);
+            }
+            Exemplo(int a) {
+                this(this.valor);
+            }
+        }
+        """
+        res = analyze_source(source)
+        self.assertFalse(res.success)
+        self.assertTrue(len(res.semantic_errors) >= 2)
+        self.assertTrue(all("early construction context" in str(e) for e in res.semantic_errors))
+
+    def test_90_referencia_instancia_argumentos_super_e_this(self):
+        source = """
+        class Base {
+            Base(int x) {}
+        }
+        class Exemplo extends Base {
+            int instanciaCampo = 1;
+            int instanciaMetodo() { return 2; }
+            Exemplo() {
+                super(instanciaCampo);
+            }
+            Exemplo(int a) {
+                this(instanciaMetodo());
+            }
+        }
+        """
+        res = analyze_source(source)
+        self.assertFalse(res.success)
+        self.assertTrue(any("instanciaCampo" in str(e) and "early construction context" in str(e) for e in res.semantic_errors))
+        self.assertTrue(any("instanciaMetodo" in str(e) and "early construction context" in str(e) for e in res.semantic_errors))
+
+    def test_91_membros_estaticos_e_locais_validos_no_early_construction_context(self):
+        source = """
+        class Base {
+            Base(int x) {}
+        }
+        class Exemplo extends Base {
+            static final int CONST = 10;
+            static int validar(int v) { return v + CONST; }
+            int campoNormal;
+            Exemplo(int entrada) {
+                int ajustado = validar(entrada);
+                super(ajustado + CONST);
+                this.campoNormal = ajustado;
+            }
+        }
+        """
+        res = analyze_source(source)
+        self.assertTrue(res.success, f"Erros inesperados: {res.semantic_errors}")
+        self.assertEqual(len(res.semantic_errors), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

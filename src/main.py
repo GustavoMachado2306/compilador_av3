@@ -22,6 +22,7 @@ class AnalysisResult:
     lexical_errors: List[LexicalError] = field(default_factory=list)
     syntactic_error: Optional[SyntacticError] = None
     semantic_errors: List[str] = field(default_factory=list)
+    unresolved_checks: List[str] = field(default_factory=list)
     success: bool = False
 
     @property
@@ -29,7 +30,7 @@ class AnalysisResult:
         return bool(self.lexical_error or self.lexical_errors or self.syntactic_error or self.semantic_errors)
 
 
-def analyze_source(source: str) -> AnalysisResult:
+def analyze_source(source: str, enable_preview_primitive_patterns: bool = False) -> AnalysisResult:
     """Executa o pipeline completo do compilador sobre uma string e retorna um AnalysisResult."""
     if source is None:
         source = ""
@@ -51,7 +52,7 @@ def analyze_source(source: str) -> AnalysisResult:
         return result
 
     # 2. Análise Sintática
-    parser = Parser(result.tokens)
+    parser = Parser(result.tokens, enable_preview_primitive_patterns=enable_preview_primitive_patterns)
     try:
         result.ast = parser.parse()
     except SyntacticError as err:
@@ -60,10 +61,11 @@ def analyze_source(source: str) -> AnalysisResult:
 
     # 3. Tabela de Símbolos e Análise Semântica
     symbols = SymbolTable()
-    analyzer = SemanticAnalyzer(symbols)
+    analyzer = SemanticAnalyzer(symbols, enable_preview_primitive_patterns=enable_preview_primitive_patterns)
     errors = analyzer.analyze(result.ast)
     result.symbol_table = symbols
     result.semantic_errors = errors
+    result.unresolved_checks = list(getattr(analyzer, "unresolved_checks", []))
 
     result.success = not result.has_errors
     return result

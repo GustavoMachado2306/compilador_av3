@@ -253,10 +253,12 @@ O isolamento léxico de escopo garante que variáveis declaradas em um método, 
 2. **Símbolos Externos e Qualificados**: Expressões qualificadas externas (ex.: `System.out.println(...)`), `this.campo`, membros de arrays (`arr.length`) e métodos de objetos não geram falsos erros de variáveis não declaradas.
 3. **Detecção de Duplicidade**: Proibição de declarar duas variáveis locais, parâmetros ou campos com o mesmo nome dentro do mesmo escopo ativo.
 4. **Limitações Conhecidas (Não Implementado nesta Fase)**:
-   - Não há inferência de tipos completa em expressões complexas (polimorfismo e generics avançados);
+   - Não há inferência de tipos completa em expressões complexas, *poly expressions* completas em lambdas/`switch` nem *generics* avançados (Etapa S8);
    - Não há resolução de sobrecarga de métodos baseada em assinaturas de tipos;
-   - Não há promoção aritmética implícita ou autoboxing/unboxing automático completo;
-   - Não substitui a gramática exaustiva da especificação completa da JVM/JLS.
+   - Não há resolução automática de membros herdados entre tipos distintos (`extends` / `implements`) sem qualificação explícita (`Interface.CONSTANTE`);
+   - *Pattern matching* (`Pattern`, `TypePattern`, `RecordPattern`, `MatchAllPattern`, `Guard`/`when`, `PatternCaseLabel`, `PatternInstanceOfExpression`) e exaustividade/dominância implementados na Etapa S7; padrões com tipos primitivos em `instanceof`, `switch` ou componentes de `RecordPattern`, além de seletores/constantes de `boolean`/`long`/`float`/`double`, pertencem ao preview (JEP 530, desabilitado por padrão, com suporte apenas parcial sob `enable_preview_primitive_patterns=True`) e `SwitchExpression` completa como *poly-expression* pertence à Etapa S8;
+   - Não há análise completa de *definite assignment* / fluxo de dados nem promoção aritmética implícita/autoboxing completo;
+   - Não substitui a gramática exaustiva e o *type checker* completo da especificação da JVM/JLS.
 
 ---
 
@@ -389,3 +391,96 @@ eturn_type.array_dimensions) e as dimensões posteriores ao MethodDeclarator (me
    - Em construtores com invocação explícita de super(...) ou 	his(...), as instruções do prólogo e os argumentos da invocação ocorrem no *early construction context*.
    - É rejeitado com erro semântico qualquer uso de 	his, 	his.campo, 	his.metodo() ou acesso/atribuição a campos e métodos de instância no prólogo.
    - Construtores sem invocação explícita realizam a chamada implicitamente no início, não constituindo contexto precoce de construção.
+
+
+### 8.5. Etapa S4 — Interfaces Normais, Enums e Records (Concluída)
+
+Reconhecimento integral e validação contextual das construções do Grupo D (exceto `AnnotationInterfaceDeclaration` / `@interface`, reservada à Etapa S5), em conformidade com a JLS SE 26 (§8.9, §8.10, §9.1–§9.5 e Capítulo 19):
+
+1. **Interfaces Normais (`InterfaceDeclaration`, `InterfaceBody`, `InterfaceExtends`, `InterfacePermits`)**:
+   - Suporte a modificadores de interface (`public`, `protected`, `private`, `abstract`, `static`, `strictfp`, `sealed`, `non-sealed`) e anotações precedentes;
+   - Rejeição sintática de cláusula `implements`, construtores e blocos inicializadores (`{}` / `static {}`) em interfaces;
+   - **Constantes (`InterfaceConstantDeclaration`)**: obrigatoriedade de inicializador (`=`), suporte a múltiplos declaradores e dimensões de array por declarador, com modificadores implícitos `public static final` registrados com categoria `constante_interface`;
+   - **Métodos (`InterfaceMethodDeclaration`)**: métodos abstratos sem corpo (`;`) e métodos `default`, `static`, `private` e `private static` com corpo obrigatório, além de `TypeParameters`, `ReceiverParameter`, varargs e dimensões pós-parênteses;
+   - Rejeição semântica de `final interface`, visibilidades inválidas no nível superior e combinações conflitantes (`default static`, `default abstract`, `static abstract`, `private abstract`, `protected`/`final`/`synchronized`/`native`).
+2. **Enums (`EnumDeclaration`, `EnumBody`, `EnumConstantList`, `EnumConstant`, `EnumConstantBody`, `EnumBodyDeclarations`)**:
+   - Suporte a modificadores, anotações e cláusula `implements` (com rejeição sintática de `extends`);
+   - Constantes com argumentos opcionais `(args)`, anotações, vírgula final opcional (*trailing comma*) e corpos específicos de constante (`EnumConstantBody`) capazes de declarar campos, métodos e sobrescritas;
+   - Membros após `;`: campos, métodos (inclusive abstratos), inicializadores estáticos/de instância, tipos aninhados e construtores implícita ou explicitamente `private`;
+   - Validações semânticas: proíbe `abstract`/`final`/`sealed`/`non-sealed` em `enum`, proíbe construtores `public`/`protected`, proíbe `super(...)` em construtores de `enum`, proíbe construtores em `EnumConstantBody` e proíbe duplicidade ou reatribuição de constantes.
+3. **Records (`RecordDeclaration`, `RecordHeader`, `RecordComponentList`, `RecordComponent`, `VariableArityRecordComponent`, `RecordBody`)**:
+   - Suporte ao identificador contextual `record` (preservando uso legítimo como nome de variável, parâmetro, campo ou método em classes comuns e unidades ordinárias/compactas);
+   - Cabeçalho com lista de componentes genéricos/anotados e componente varargs posicional obrigatório na última posição (`VariableArityRecordComponent` com anotações opcionais antes de `...`);
+   - Validações semânticas de records: proíbe `extends` (sintático), `abstract`/`sealed`/`non-sealed`, campos de instância, inicializadores de instância, métodos `abstract`/`native`, componentes com nome `_` ou nomes reservados de `java.lang.Object` (`clone`, `finalize`, `getClass`, `hashCode`, `notify`, `notifyAll`, `toString`, `wait`) e reatribuição externa de componentes `final`.
+4. **Construtores de Records (JLS §8.10.4)**:
+   - **Implícito (`has_implicit_canonical_constructor`)**: quando nenhum construtor canônico explícito é declarado;
+   - **Canônico Normal (`NormalCanonicalConstructor`)**: correspondência exata de tipo, aridade, varargs e nome dos componentes do cabeçalho; proíbe `throws`, type parameters, `receiver_parameter`, `this(...)` / `super(...)` e visibilidade mais restrita que a do record;
+   - **Compacto (`CompactConstructorDeclaration`)**: sem lista formal de parâmetros (`has_formal_parameter_list=False`), derivando parâmetros (`derived_parameters`) dos componentes (com reatribuição permitida sobre os parâmetros derivados); proíbe `return`, atribuição direta via `this.<campo>`, `this(...)`/`super(...)`, `throws`, type parameters e visibilidade inferior à do record;
+   - **Não Canônico (`NonCanonicalRecordConstructor`)**: exige delegação via `this(...)`, proíbe `super(...)` e preserva *Flexible Constructor Bodies* (`prologue` / `this(...)` / `epilogue`) sujeitos ao *early construction context*.
+5. **Tipos Aninhados e Locais**:
+   - Análise recursiva de `class`, `interface`, `enum`, `record` e `@interface` aninhados em quaisquer declarações de tipo ou blocos locais (rejeitando `@interface` local em métodos/blocos segundo a JLS §14.3).
+
+### 8.6. Etapa S5 — Annotations e Annotation Interfaces + Auditoria S4 Herdada (Concluída)
+
+Reconhecimento sintático e validação semântica das construções do Grupo E (JLS SE 26 §9.6, §9.7, §4.11 e Capítulo 19), além do fechamento da auditoria semântica herdada da Etapa S4:
+
+1. **Declarações `@interface` (JLS §9.6)**:
+   - Nós estruturados `AnnotationInterfaceDeclaration`, `AnnotationInterfaceBody`, `AnnotationInterfaceMemberDeclaration`, `AnnotationInterfaceElementDeclaration`, `AnnotationInterfaceElementModifier` e `AnnotationDefaultValue` (alias `DefaultValue`);
+   - Suporte a constantes (`InterfaceConstantDeclaration`), elementos sem parâmetros, dimensões pós-parênteses (`String lista() []`), valores `default` e tipos aninhados;
+   - Rejeição sintática de `extends`, `type_parameters`, `permits`, parâmetros formais, cláusula `throws` e corpo em elementos;
+   - Rejeição semântica de elemento duplicado, nomes reservados de `Object`/`Annotation` (`toString`, `hashCode`, `equals`, `annotationType`, etc.), tipo `void`, tipos de retorno não permitidos (`Object`, `List<String>`, classes comuns, arrays com `> 1` dimensão), ciclos diretos ou indiretos entre `@interface`, modificadores proibidos (`private`/`protected`/`static`/`final`/`default` em elementos; `final`/`sealed`/`non-sealed`/`static` inválidos e `@interface` local) e `default null` ou array aninhado `{{...}}`.
+2. **Annotations de Uso, `ElementValue` e `ClassLiteral` (JLS §9.7, §15.8.2)**:
+   - Distinção normativa entre `MarkerAnnotation` (`@A`), `SingleElementAnnotation` (`@A(val)`) e `NormalAnnotation` (`@A()`, `@A(k = v, ...)` com `ElementValuePairList` e `ElementValuePair`);
+   - Suporte a `ElementValue`, `ElementValueList` e `ElementValueArrayInitializer` (com *trailing comma* permitido em `{...}`, e rejeitado em lista de pares `k=v,`);
+   - Suporte a `ClassLiteral` (`String.class`, `int.class`, `void.class`, `String[].class`, `int[][].class`, `java.lang.String[].class`).
+3. **Type Annotations e Separação Pré/Pós-Modificadores (JLS §4.11, §9.7.4)**:
+   - Separação entre anotações anteriores a modificadores (exclusivas de declaração, como `@Override public String m()`) e anotações adjacentes ao tipo (`public @TypeUse String m()`, `Outer.@B Inner<@C T>`);
+   - Anotações em dimensões de arrays (`int @A [] @B []`, `int x @A []`, `int m() @A []`), wildcards (`? extends @A Number`), `extends`/`implements`/`throws`, casts, `instanceof`, `new @A Tipo()` / `new int @A [n]`, `ReceiverParameter`, `TypeParameter` e reticências de varargs (`String @VarArgs ... args`).
+4. **Validação Semântica de Annotations (JLS §9.6.3–§9.6.4, §9.7)**:
+   - `@Target`: verificação em declarações (`TYPE`, `FIELD`, `METHOD`, `PARAMETER`, `CONSTRUCTOR`, `LOCAL_VARIABLE`, `ANNOTATION_TYPE`, `PACKAGE`, `MODULE`, `RECORD_COMPONENT`, `TYPE_PARAMETER`) e em contextos de `TYPE_USE`, rejeitando `TYPE_USE` antes de `void` ou de modificadores de declaração, bem como anotações restritas a declarações em contextos puros de tipo;
+   - `@Repeatable`: validação do container (`value()` retornando array do repetível, sem elementos obrigatórios extras sem `default`, `@Retention` compatível e `@Target` subconjunto), rejeição de repetição não-repetível (inclusive `@Override`/`@Deprecated`) e proibição de mistura direta entre `@R` e `@Container({@R})` na mesma declaração;
+   - Presença de elementos obrigatórios, chaves desconhecidas ou duplicadas, obrigatoriedade de `value()` em `SingleElementAnnotation`, validação de constantes em tempo de compilação e compatibilidade de tipos (com *shorthand* de elemento único para arrays `T[]`).
+   - **Limitação declarada**: a resolução semântica de definições `@interface` ocorre em unidade de compilação única (com suporte nativo embutido às anotações padrão do JDK como `@Override`, `@Deprecated`, `@SuppressWarnings`, `@Target`, `@Retention`, `@Repeatable`, etc.), sem carregamento de `.class`/JAR externos nem avaliação algébrica inter-classes de constantes arbitrárias.
+5. **Auditoria Semântica Herdada da Etapa S4 (Enums & Records)**:
+   - Enums com métodos `abstract` agora exigem ao menos uma constante e que cada constante possua `EnumConstantBody` implementando o método abstrato;
+   - Accessors explícitos de componentes de `record` validam visibilidade `public`, ausência de `static`, ausência de parâmetros de tipo genéricos, ausência de `throws` e tipo de retorno idêntico ao do componente.
+
+### 8.7. Etapa S6 — Blocos, Declarações Locais e Instruções Completas (Concluída)
+
+Reconhecimento gramatical e validação contextual das construções do **Capítulo 14 da JLS Java SE 26** (excluindo *pattern matching* da S7 e integração completa de `SwitchExpression` como expressão polimórfica da S8):
+
+1. **Blocos, Declarações Locais e Tipos Locais (JLS §14.2–§14.4)**:
+   - Hierarquia normativa preservando compatibilidade: `BlockStatement`, `LocalClassOrInterfaceDeclaration`, `Statement`, `LocalVariableType` e `LocalVariableDeclarationStatement` (alias para `LocalVariableDeclaration`);
+   - Intercalação livre de variáveis locais, classes/interfaces/enums/records locais (`is_local=True`) e instruções executáveis dentro de blocos e corpos de construtores (`parse_constructor_body` utilizando `block_statement()`);
+   - Suporte completo a `var` (apenas um declarador, inicializador obrigatório, sem `[]`, sem `{...}`, sem `null`, sem lambda/method reference sem target type, sem autorreferência e proibido em campos, retornos, parâmetros ou `catch`), além de variáveis não nomeadas `_` (JEP 456) sem registro referenciável na tabela de símbolos;
+   - Validação de tipos locais (`class`, `interface`, `enum`, `record`), proibição de `@interface` local, rejeição de modificadores proibidos (`public`, `protected`, `private`, `static`, `sealed`, `non-sealed`), duplicidade em escopos aninhados vs reutilização em blocos irmãos disjuntos e colisão com tipo envolvente.
+2. **Controle de Fluxo, Desambiguação e Laços (JLS §14.5–§14.17)**:
+   - Distinção estrita entre `Statement` e `StatementNoShortIf` garantindo a associação do *dangling `else`* ao `if` mais próximo;
+   - Validação sintática rigorosa de `StatementExpression` em `ExpressionStatement`, `ForInit`/`ForUpdate` (`StatementExpressionList`) e `SwitchRule` com `->`;
+   - `LabeledStatement` (com desambiguação `LabeledStatementNoShortIf`), detecção de labels duplicados em escopos aninhados, `break [label]`, `continue [label]` (exigindo alvo iterativo) e `return [expr]` contextualizado por método `void`/não-`void`, construtor, inicializador e `SwitchExpression`.
+3. **Exceções, Switch Statements e `yield` Contextual (JLS §14.11, §14.20, §14.21)**:
+   - `TryStatement` / `TryWithResourcesStatement` (`ResourceSpecification` com `;` final opcional, `ResourceList`, `Resource` por declaração com/sem `var` ou referência Java 9+, escopo de recurso isolado ao corpo `try`) e `CatchClause` com `CatchType` multi-catch (`T1 | T2`), validação de alternativas incompatíveis e cláusulas inalcançáveis;
+   - `SwitchStatement`, `SwitchBlock`, `SwitchBlockStatementGroup` (`:`) e `SwitchRule` (`->` com bloco, `throw` ou `StatementExpression`), `CaseLabel`, `DefaultLabel`, `CaseConstantList`, `case null` e `case null, default`, duplicidades, constantes válidas e exaustividade em `case null` / `SwitchExpression` (enums locais ou globais e `default`);
+   - `YieldStatement` com desambiguação contextual de `yield` e bloqueio de escapes através de lambdas, métodos ou construtores; reconhecimento auxiliar mínimo de `SwitchExpression` apenas para contextualizar `yield` na S6, preservando *patterns* (`when`, `TypePattern`, `RecordPattern`, `UnnamedPattern`) para a Etapa S7 e tipagem polimórfica completa de `SwitchExpression` para a Etapa S8.
+
+### 8.8. Etapa S7 — Patterns, Pattern Matching e Switch Moderno (Concluída)
+
+Implementação completa das construções estáveis de *pattern matching* do Java SE 26 segundo JLS §§6.3, 14.11, 14.30, 15.20.2 e 15.28.1 (Capítulo 19), mantendo a separação estrita de recursos preview e limites de tipos externos:
+
+1. **Nós da AST e Parser Recursivo (`Pattern`, `TypePattern`, `RecordPattern`, `Guard`)**:
+   - Novos nós em `src/ast_nodes.py`: `ComponentPattern`, `Pattern`, `PatternVariable`, `TypePattern` (suporte a `@Annotation`, `final`, genéricos/arrays e `_`), `ComponentPatternList`, `RecordPattern`, `MatchAllPattern`, `Guard`, `PatternCaseLabel` e `PatternInstanceOfExpression` (preservando `InstanceOfExpression` para comparações clássicas de tipo).
+   - Lookahead determinístico em `src/parser.py` desambiguando `instanceof Type` vs `instanceof Type id` vs `instanceof Record(...)` e labels de `switch` (`case CasePattern {, CasePattern} [Guard]`, `case null [, default]`, constantes e `default`), com guarda de profundidade (`max_pattern_depth = 128`).
+   - `when` permanece `IDENTIFIER` em `src/lexer.py` (palavra-chave estritamente contextual em `Guard`), preservando `when` como nome válido de variável, campo, parâmetro e variável de pattern.
+2. **Separação Estrita de Preview (JEP 530 — Auditoria S7.1)**:
+   - **Modo Estável Java SE 26 (`enable_preview_primitive_patterns=False`, padrão):** rejeita tipos primitivos em `TypePattern` / `instanceof` de nível superior (`o instanceof int x`), em labels de `switch` (`case int x ->`), **em componentes primitivos dentro de `RecordPattern` (`Ponto(int x, int y)`)**, em `instanceof` clássico com tipo primitivo (`o instanceof int`), e em seletores/constantes de `switch` para `boolean`, `long`, `float` e `double` (`case true`, `case false`, `case 10L`, `case 1.5`). Preserva como estáveis `TypePattern` com `ReferenceType` (inclusive arrays como `int[]`), componentes `var` e `_` (`MatchAllPattern`) dentro de `RecordPattern` mesmo quando o `record` declara campos primitivos (`Numero(var v)`, `Numero(_)`), além de seletores `int`/`byte`/`short`/`char`/`String`/enums/referência. `var` em nível superior e `case null` sobre seletor primitivo não-array permanecem sempre proibidos.
+   - **Subconjunto Preview Implementado (`enable_preview_primitive_patterns=True`):** habilita patterns primitivos em `instanceof`, `switch` e componentes de `RecordPattern`, `instanceof` clássico com primitivos, seletores `boolean`/`long`/`float`/`double` e suas constantes, *flow-scoping* de bindings primitivos, compatibilidade/disjunção básica (conversões numéricas, wrappers, `Number`, `Object`, rejeitando tipos impossíveis como `String`/`boolean`), dominância básica (mesmo tipo e `Object`) e exaustividade booleana (`true`/`false`), mantendo todas as validações de aridade, duplicidade e *flow-scoping*.
+   - **Limitações do Preview JEP 530:** habilitar `enable_preview_primitive_patterns=True` **não** implica suporte completo à JEP 530; não cobre a matriz completa de conversão incondicionalmente exata de JLS §5.7.1–§5.7.2 para dominância entre primitivos distintos, verificação completa de faixa de constantes para exaustividade numérica (`byte`/`short`/`char`), nem todas as interações avançadas de *unboxing + narrowing*.
+3. **Escopo Sensível ao Fluxo (`Flow Scoping` — JLS §6.3)**:
+   - Modelagem completa de introdução condicional `(true_vars, false_vars)` em `!`, `&&`, `||`, `?:` e `PatternInstanceOfExpression`.
+   - Propagação controlada por conclusão normal/abrupta (`_stmt_completes_normally`) em `if`/`else`, `while`, `for` (condição, atualização, corpo e saída sem `break` alvo), isolamento obrigatório em `do-while` (corpo analisado antes da condição), captura em lambdas e isolamento estrito entre grupos `:` e regras `->` de `switch`, sem jamais vazar variáveis de pattern para a tabela de símbolos global.
+4. **Validação de Records, Dominância e Exaustividade**:
+   - **Records**: exige resolução para declaração `record` (global, aninhada ou local), aridade exata de componentes, substituição de argumentos genéricos do record para inferência de `var`/compatibilidade e rejeição de anotações diretamente sobre o `ReferenceType` de `RecordPattern` (permitindo anotações em componentes e `TypePattern`).
+   - **Dominância (JLS §14.30.3 / §14.11.1)**: verifica hierarquia de subtipos (declarados e embutidos), dominância recursiva de `RecordPattern` (incluindo record pattern incondicional sobre `TypePattern`), guards constantes `true` vs não-constantes/`false`, dominância de pattern sobre constantes e `default`/`case null, default`, e preservação da compatibilidade tradicional de `default` antes de constantes sem patterns.
+   - **Exaustividade (JLS §14.11.1.1 / §14.11.2 / §15.28.1)**: verifica cobertura completa em `SwitchExpression` e *enhanced* `SwitchStatement`, incluindo hierarquias `sealed` multinível (com `permits` explícito ou implícito na unidade), decomposição recursiva de componentes de `record`, `enum`, exclusão de branches com guard não constante, mantendo `unresolved_checks` para tipos/hierarquias externas fora da unidade atual.
+5. **Auditoria Semântica Herdada S6**:
+   - Confirmado e testado explicitamente o funcionamento válido de `break rotulado;` em blocos rotulados (`externo: { if (condicao) { break externo; } }`), restrição de `continue` a laços e isolamento de labels/laços através de lambdas, métodos, construtores, inicializadores e `SwitchExpression`.

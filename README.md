@@ -93,23 +93,42 @@ O projeto adota uma abordagem incremental sólida, sem bibliotecas externas:
     - As 5 categorias de imports da JLS: `SingleTypeImport`, `TypeImportOnDemand`, `SingleStaticImport`, `StaticImportOnDemand` e `SingleModuleImport` (`import module java.base;`);
     - Declaração de módulos (`ModuleDeclaration`) e diretivas normativas: `RequiresDirective` (`transitive`, `static`), `ExportsDirective` (`to`), `OpensDirective` (`to`), `UsesDirective` e `ProvidesDirective` (`with`);
     - Suporte a palavras-chave contextuais sem poluição da tabela de palavras reservadas globais.
-  - **Etapa S3 — Classes, Campos, Métodos, Construtores e Inicializadores (Concluída)**:
-    - 100% das produções do Grupo C (JLS §8 e §19) implementadas e cobertas por testes (`tests/test_java26_class_members.py`);
+  - **Etapa S3 & S3.1 — Classes, Campos, Métodos, Construtores e Inicializadores (Concluída)**:
+    - Produções do Grupo C (JLS §8 e §19) e JEP 513 implementadas e cobertas por testes (`tests/test_java26_class_members.py`);
     - Correção normativa de `CompactCompilationUnit` exigindo ao menos uma declaração de método e restringindo elementos pré-método a `ClassMemberDeclarationNoMethod`;
     - Declarações múltiplas de variáveis em campos (`VariableDeclaratorList`) e identificadores não nomeados (`_`);
     - Parâmetros de recepção (`ReceiverParameter` — `this`), dimensões no retorno (`int m()[][]`), varargs (`...`) e modificadores de parâmetros;
     - Construtores genéricos com type parameters (`<T> Nome(...)`);
-    - Implementação de *Flexible Constructor Bodies* (JLS §8.8.7 e JEP 513) dividindo o corpo em `prologue`, `constructor_invocation` (`this(...)` / `super(...)`) e `epilogue`;
+    - Implementação de *Flexible Constructor Bodies* (JLS §8.8.7 e JEP 513) dividindo o corpo em `prologue`, `constructor_invocation` (`this(...)` / `super(...)`) e `epilogue`, com validação semântica de *early construction context*;
     - Inicializadores de instância (`{ ... }`) e estáticos (`static { ... }`);
     - Classes aninhadas com análise de escopo recursivo.
+  - **Etapa S4 — Interfaces Normais, Enums e Records (Concluída)**:
+    - Produções centrais do Grupo D (JLS §8.9, §8.10, §9.1–§9.5 e §19, exceto `@interface` da Etapa S5) cobertas por 4 novas suítes dedicadas (`tests/test_java26_interfaces.py`, `tests/test_java26_enums.py`, `tests/test_java26_records.py`, `tests/test_java26_record_constructors.py`);
+    - Interfaces normais (`InterfaceDeclaration`, `InterfaceBody`, `InterfaceExtends`, `InterfacePermits`, constantes implícitas `public static final` e métodos `abstract`, `default`, `static` e `private`);
+    - Enums completos (`EnumDeclaration`, `EnumBody`, `EnumConstantList`, argumentos, anotações, *trailing comma*, `EnumConstantBody` específico da constante e `EnumBodyDeclarations` com construtores `private`);
+    - Records (`RecordDeclaration`, `RecordHeader`, `RecordComponent`, `VariableArityRecordComponent`, identificador contextual `record` e restrições de campos/métodos);
+    - Construtores de records (`NormalCanonicalConstructor`, `CompactConstructorDeclaration`, `NonCanonicalRecordConstructor` e detecção de canônico implícito).
+  - **Etapa S5 — Annotations e Annotation Interfaces (Concluída)**:
+    - Produções do Grupo E (JLS §9.6, §9.7, §4.11 e §19) implementadas e cobertas por 4 novas suítes (`tests/test_java26_annotation_interfaces.py`, `tests/test_java26_annotations.py`, `tests/test_java26_type_annotations.py`, `tests/test_java26_annotation_semantics.py`);
+    - Declarações `@interface` (`AnnotationInterfaceDeclaration`, `AnnotationInterfaceBody`, `AnnotationInterfaceElementDeclaration`, `AnnotationDefaultValue`, constantes, dimensões pós-parênteses e tipos aninhados);
+    - Annotations normais (`NormalAnnotation` com `ElementValuePairList`/`ElementValuePair`), simples (`SingleElementAnnotation`), marcadoras (`MarkerAnnotation`), inicializadores `{...}` (`ElementValueArrayInitializer`) e literais de classe (`ClassLiteral`: `String.class`, `int.class`, `void.class`, `String[].class`);
+    - *Type Annotations* completos (generics, wildcards, `Outer.@B Inner`, arrays multidimensionais anotados, casts, `instanceof`, `new @Ann`, varargs `...`, `ReceiverParameter`, `TypeParameter` e separação pré/pós-modificadores);
+    - Validações semânticas de `@Target`, `@Repeatable` (e contrato do container), elementos obrigatórios, chaves duplicadas/desconhecidas, constantes em tempo de compilação, compatibilidade de tipos, ciclos de `@interface` e auditoria herdada S4 (métodos abstratos em `enum` e accessors explícitos de `record`).
+    - Não realiza resolução de `@interface` em arquivos/JARs externos fora da unidade atual (além das anotações padrão integradas do JDK).
+  - **Etapa S6 — Blocos, Declarações Locais e Instruções Completas (Concluída)**:
+    - Produções do Grupo G (JLS §14 e Capítulo 19) cobertas por 8 novas suítes dedicadas (`tests/test_java26_blocks.py`, `tests/test_java26_local_declarations.py`, `tests/test_java26_local_types.py`, `tests/test_java26_control_statements.py`, `tests/test_java26_loops_labels.py`, `tests/test_java26_try_statements.py`, `tests/test_java26_switch_statements.py`, `tests/test_java26_statement_semantics.py`);
+    - `Block`, `BlockStatement`, `LocalClassOrInterfaceDeclaration` (`class`, `interface`, `enum`, `record` locais + rejeição de `@interface` local), `LocalVariableDeclaration`, `LocalVariableType` (`var` com todas as restrições JLS §14.4.1 e variáveis `_` não nomeadas JEP 456);
+    - `Statement`, `StatementNoShortIf` (resolução formal de *dangling `else`*), `StatementExpression` rigorosa, `LabeledStatement`, `EmptyStatement`, `AssertStatement`, `ThrowStatement`, `SynchronizedStatement`, `ReturnStatement`, `BreakStatement`, `ContinueStatement`, laços (`while`, `do/while`, `for` com listas múltiplas `StatementExpressionList`, `enhanced for` com `var` e `_`);
+    - `TryStatement` / `TryWithResourcesStatement` (`ResourceSpecification` com `;` final opcional, recursos por declaração/var/referência Java 9+), `CatchClause` com `CatchType` multi-catch, `SwitchStatement` com grupos `:` e switch rules `->`, `CaseConstantList`, `case null`, `case null, default` e `YieldStatement` com `SwitchExpression` auxiliar mínima (patterns/guards na Etapa S7 e expressão switch *poly-expression* completa na S8).
+  - **Etapa S7 & Auditoria S7.1 — Patterns, Pattern Matching, Switch Moderno e Separação de Preview (Concluída)**:
+    - Produções estáveis do Grupo H (JLS §§6.3, 14.11, 14.30, 15.20.2 e 15.28.1) cobertas por 9 suítes dedicadas (`tests/test_java26_patterns.py`, `tests/test_java26_record_patterns.py`, `tests/test_java26_instanceof_patterns.py`, `tests/test_java26_pattern_scope.py`, `tests/test_java26_switch_patterns.py`, `tests/test_java26_pattern_dominance.py`, `tests/test_java26_switch_exhaustiveness.py`, `tests/test_java26_pattern_semantics.py`, `tests/test_java26_pattern_preview_separation.py`);
+    - `Pattern`, `TypePattern` (com `@Annotation`, `final`, genéricos/arrays e `_`), `RecordPattern` (aninhamento, `var`, genéricos, aridade e proibições de annotations sobre o tipo do record), `ComponentPatternList`, `ComponentPattern`, `MatchAllPattern` (`_`), `Guard` (`when` estritamente contextual), `PatternCaseLabel` e `PatternInstanceOfExpression` (preservando `InstanceOfExpression`);
+    - Escopo sensível ao fluxo (*flow-scoping* JLS §6.3) em `!`, `&&`, `||`, `?:`, `if`/`else`, `while`, `for`, `do-while`, `switch` (sem vazar para a tabela de símbolos global), regras de dominância recursiva (JLS §14.30.3 / §14.11.1) e exaustividade incluindo hierarquias `sealed` multinível e decomposição recursiva de records;
+    - Separação estrita de preview JEP 530 (desabilitado por padrão via `enable_preview_primitive_patterns=False`): rejeita tipos primitivos em `instanceof`, `switch` labels, componentes primitivos de `RecordPattern` (`Ponto(int x, int y)`), `instanceof` clássico com primitivo e seletores/constantes `boolean`/`long`/`float`/`double`, mantendo `var` e `_` em `RecordPattern` mesmo para campos primitivos; a flag opcional `enable_preview_primitive_patterns=True` habilita apenas um subconjunto parcial de preview (sem matriz integral JLS §5.7.1–§5.7.2 nem exaustividade por faixa numérica); registro honesto de tipos externos em `unresolved_checks` e auditoria herdada S6 (`break rotulado;` em blocos).
 
 - **Fases Futuras (Próximos Passos)**:
-  - Etapa S4: Interfaces, enums e records (JLS §8.9, §8.10, §9);
-  - Etapa S5: Annotations e declarações de tipos anotados (JLS §9.6, §9.7);
-  - Etapa S6: Blocos, instruções e controle de fluxo avançado (JLS §14);
-  - Etapa S7: Switch aprimorado e Pattern Matching (JLS §14.11, §14.30);
-  - Etapa S8: Expressões completas e primárias modernas (JLS §15);
-  - Etapa S9: Unidades compactas, classes implícitas e recuperação de erros (JLS §7.3).
+  - Etapa S8: Expressões completas e integração integral de `SwitchExpression` (JLS §15);
+  - Etapa S9: Auditoria final e consolidação integral das etapas S1–S8.
 
 ---
 
@@ -119,32 +138,63 @@ O projeto adota uma abordagem incremental sólida, sem bibliotecas externas:
 compilador_av3/
 ├── README.md
 ├── SPEC.md
+├── docs/
+│   └── JAVA26_SYNTAX_COVERAGE.md
 ├── examples/
 │   ├── exemplo_fase_a.java
-│   ├── Pessoa.java               # Exemplo de classe Java completa (Fase B)
-│   ├── FluxoJava.java            # Exemplo com instruções e controle de fluxo (Fase C)
-│   ├── ExpressoesJava.java       # Exemplo com expressões, precedência, arrays e casts (Fase D)
-│   └── exemplo_classes_s3.java   # Exemplo completo da Etapa S3 (construtores flexíveis, inicializadores, etc.)
+│   ├── Pessoa.java                             # Exemplo de classe Java completa (Fase B)
+│   ├── FluxoJava.java                          # Exemplo com instruções e controle de fluxo (Fase C)
+│   ├── ExpressoesJava.java                     # Exemplo com expressões, precedência, arrays e casts (Fase D)
+│   ├── exemplo_classes_s3.java                 # Exemplo completo da Etapa S3 (construtores flexíveis, inicializadores, etc.)
+│   ├── exemplo_interfaces_enums_records_s4.java# Exemplo integrado da Etapa S4 (interfaces, enums, records e construtores)
+│   ├── exemplo_annotations_s5.java             # Exemplo integrado da Etapa S5 (@interface, annotations, @Repeatable e type annotations)
+│   ├── exemplo_instrucoes_s6.java              # Exemplo integrado da Etapa S6 (blocos, var, tipos locais, try-with-resources, switch e yield)
+│   └── exemplo_pattern_matching_s7.java        # Exemplo integrado da Etapa S7 (TypePattern, RecordPattern, when, sealed e switch exaustivo)
 ├── src/
 │   ├── __init__.py
-│   ├── token.py                  # Enum de tokens e dataclass Token
-│   ├── lexer.py                  # Analisador léxico Java completo (Fase A)
-│   ├── symbol_table.py           # Tabela de símbolos com escopos e categorias
-│   ├── parser.py                 # Analisador sintático de comandos, tipos e expressões (Fases B, C, D e Etapas S1-S3)
-│   ├── ast_nodes.py              # Nós da AST com pretty-printing hierárquico
-│   ├── semantic.py               # Validador semântico com suporte a escopos locais e expressões
-│   ├── main.py                   # Pipeline unificado e CLI (arquitetura tripla)
-│   ├── gui.py                    # Interface gráfica Tkinter com fallback automático
-│   └── web_gui.py                # Interface Web Local zero-dependências (http.server)
+│   ├── token.py                                # Enum de tokens e dataclass Token
+│   ├── lexer.py                                # Analisador léxico Java completo (Fase A)
+│   ├── symbol_table.py                         # Tabela de símbolos com escopos e categorias
+│   ├── parser.py                               # Analisador sintático (Fases B–D e Etapas S1–S7)
+│   ├── ast_nodes.py                            # Nós da AST com pretty-printing hierárquico e to_dict()
+│   ├── semantic.py                             # Validador semântico (escopos, flow-scoping S7, dominância e exaustividade)
+│   ├── main.py                                 # Pipeline unificado e CLI (arquitetura tripla)
+│   ├── gui.py                                  # Interface gráfica Tkinter com fallback automático
+│   └── web_gui.py                              # Interface Web Local zero-dependências (http.server)
 └── tests/
-    ├── test_compiler.py                 # 73 testes: testes didáticos e de robustez (regressão)
-    ├── test_lexer_java.py               # 58 testes: suíte de testes dedicada ao léxico Java
-    ├── test_syntax_java.py              # 26 testes: suíte de testes de sintaxe e declarações
-    ├── test_statements_java.py          # 25 testes: suíte de testes de controle de fluxo
-    ├── test_expressions_java.py         # 29 testes: suíte de testes de expressões e precedência
-    ├── test_java26_names_types.py       # 20 testes: suíte da Etapa S1 (JLS §4 e §6)
-    ├── test_java26_compilation_units.py # 50 testes: suíte da Etapa S2 (JLS §7 e §19)
-    └── test_java26_class_members.py     # 87 testes: suíte da Etapa S3 (JLS §8, JEP 513 e S3.1) (JLS §8 e JEP 513)
+    ├── test_compiler.py                        # 73 testes: testes didáticos e de robustez (regressão)
+    ├── test_lexer_java.py                      # 58 testes: suíte de testes dedicada ao léxico Java
+    ├── test_syntax_java.py                     # 26 testes: suíte de testes de sintaxe e declarações
+    ├── test_statements_java.py                 # 25 testes: suíte de testes de controle de fluxo
+    ├── test_expressions_java.py                # 29 testes: suíte de testes de expressões e precedência
+    ├── test_java26_names_types.py              # 20 testes: suíte da Etapa S1 (JLS §4 e §6)
+    ├── test_java26_compilation_units.py        # 50 testes: suíte da Etapa S2 (JLS §7 e §19)
+    ├── test_java26_class_members.py            # 93 testes: suíte da Etapa S3 e S3.1 (JLS §8 e JEP 513)
+    ├── test_java26_interfaces.py               # 28 testes: suíte da Etapa S4 — Interfaces Normais (JLS §9.1–§9.5)
+    ├── test_java26_enums.py                    # 26 testes: suíte da Etapa S4 — Enums e Corpos de Constantes (JLS §8.9)
+    ├── test_java26_records.py                  # 24 testes: suíte da Etapa S4 — Records e Componentes (JLS §8.10)
+    ├── test_java26_record_constructors.py      # 22 testes: suíte da Etapa S4 — Construtores de Records (JLS §8.10.4)
+    ├── test_java26_annotation_interfaces.py    # 17 testes: suíte da Etapa S5 — Declarações @interface e Elementos (JLS §9.6)
+    ├── test_java26_annotations.py              # 11 testes: suíte da Etapa S5 — Marker, Single-Element, Normal e ClassLiteral (JLS §9.7)
+    ├── test_java26_type_annotations.py         # 10 testes: suíte da Etapa S5 — Type Annotations e Separação de Modificadores (JLS §4.11)
+    ├── test_java26_annotation_semantics.py     # 12 testes: suíte da Etapa S5 — Semântica (@Target/@Repeatable/Constantes) e Auditoria S4
+    ├── test_java26_blocks.py                   # 11 testes: suíte da Etapa S6 — Blocos e Escopo Local (JLS §14.2)
+    ├── test_java26_local_declarations.py       # 17 testes: suíte da Etapa S6 — Declarações Locais, Arrays, 'var' e '_' (JLS §14.4)
+    ├── test_java26_local_types.py              # 11 testes: suíte da Etapa S6 — Tipos Locais class/interface/enum/record (JLS §14.3)
+    ├── test_java26_control_statements.py       # 12 testes: suíte da Etapa S6 — ExpressionStatement, Dangling Else, Assert, Yield (JLS §14)
+    ├── test_java26_loops_labels.py             #  9 testes: suíte da Etapa S6 — Laços Tradicionais/Aprimorados e Rótulos (JLS §14.7, §14.12–§14.16)
+    ├── test_java26_try_statements.py           #  7 testes: suíte da Etapa S6 — Try/Catch/Multicatch e Try-with-Resources (JLS §14.20)
+    ├── test_java26_switch_statements.py        #  9 testes: suíte da Etapa S6 — Switch Statements ':' / '->', case null e Yield (JLS §14.11)
+    ├── test_java26_statement_semantics.py      #  8 testes: suíte da Etapa S6 — Semântica Contextual e Integração S1–S6
+    ├── test_java26_patterns.py                 #  7 testes: suíte da Etapa S7 — Patterns, Unnamed '_' e 'when' contextual (JLS §14.30)
+    ├── test_java26_record_patterns.py          #  9 testes: suíte da Etapa S7 — Record Patterns, aridade, aninhamento e genéricos
+    ├── test_java26_instanceof_patterns.py      #  6 testes: suíte da Etapa S7 — PatternInstanceOfExpression vs clássico (JLS §15.20.2)
+    ├── test_java26_pattern_scope.py            #  8 testes: suíte da Etapa S7 — Flow-Scoping (JLS §6.3) em expressões e instruções
+    ├── test_java26_switch_patterns.py          #  7 testes: suíte da Etapa S7 — Switch com patterns, guards 'when' e case null
+    ├── test_java26_pattern_dominance.py        #  5 testes: suíte da Etapa S7 — Regras de dominância em switch e records (JLS §14.11.1 / §14.30.3)
+    ├── test_java26_switch_exhaustiveness.py         #  6 testes: suíte da Etapa S7 — Exaustividade sealed, enums e records (JLS §14.11.2 / §15.28.1)
+    ├── test_java26_pattern_semantics.py             #  6 testes: suíte da Etapa S7 — Auditoria S6, Preview JEP 530 e Fronteira Externa
+    └── test_java26_pattern_preview_separation.py    # 10 testes: suíte S7.1 — Separação Estável Java SE 26 vs Preview JEP 530
 ```
 
 ---
@@ -196,7 +246,7 @@ python -m src.main examples/ExpressoesJava.java
 
 ## 5. Como Executar os Testes
 
-Execute a suíte completa de testes automatizados (**368 testes ao todo, 100% aprovados**):
+Execute a suíte completa de testes automatizados (**672 testes ao todo, 100% aprovados**):
 
 ```bash
 python -m unittest discover tests
@@ -205,12 +255,37 @@ python -m unittest discover tests
 Ou execute cada suíte individualmente:
 
 ```bash
-python -m unittest -v tests/test_compiler.py                 # 73 testes
-python -m unittest -v tests/test_lexer_java.py               # 58 testes
-python -m unittest -v tests/test_syntax_java.py              # 26 testes
-python -m unittest -v tests/test_statements_java.py          # 25 testes
-python -m unittest -v tests/test_expressions_java.py         # 29 testes
-python -m unittest -v tests/test_java26_names_types.py       # 20 testes
-python -m unittest -v tests/test_java26_compilation_units.py # 50 testes
-python -m unittest -v tests/test_java26_class_members.py     # 87 testes
+python -m unittest -v tests/test_compiler.py                        # 73 testes
+python -m unittest -v tests/test_lexer_java.py                      # 58 testes
+python -m unittest -v tests/test_syntax_java.py                     # 26 testes
+python -m unittest -v tests/test_statements_java.py                 # 25 testes
+python -m unittest -v tests/test_expressions_java.py                # 29 testes
+python -m unittest -v tests/test_java26_names_types.py              # 20 testes
+python -m unittest -v tests/test_java26_compilation_units.py        # 50 testes
+python -m unittest -v tests/test_java26_class_members.py            # 93 testes (87 S3 + 6 S3.1)
+python -m unittest -v tests/test_java26_interfaces.py               # 28 testes
+python -m unittest -v tests/test_java26_enums.py                    # 26 testes
+python -m unittest -v tests/test_java26_records.py                  # 24 testes
+python -m unittest -v tests/test_java26_record_constructors.py      # 22 testes
+python -m unittest -v tests/test_java26_annotation_interfaces.py    # 17 testes
+python -m unittest -v tests/test_java26_annotations.py              # 11 testes
+python -m unittest -v tests/test_java26_type_annotations.py         # 10 testes
+python -m unittest -v tests/test_java26_annotation_semantics.py     # 12 testes
+python -m unittest -v tests/test_java26_blocks.py                   # 11 testes
+python -m unittest -v tests/test_java26_local_declarations.py       # 17 testes
+python -m unittest -v tests/test_java26_local_types.py              # 11 testes
+python -m unittest -v tests/test_java26_control_statements.py       # 12 testes
+python -m unittest -v tests/test_java26_loops_labels.py             #  9 testes
+python -m unittest -v tests/test_java26_try_statements.py           #  7 testes
+python -m unittest -v tests/test_java26_switch_statements.py        #  9 testes
+python -m unittest -v tests/test_java26_statement_semantics.py      #  8 testes
+python -m unittest -v tests/test_java26_patterns.py                 #  7 testes
+python -m unittest -v tests/test_java26_record_patterns.py          #  9 testes
+python -m unittest -v tests/test_java26_instanceof_patterns.py      #  6 testes
+python -m unittest -v tests/test_java26_pattern_scope.py            #  8 testes
+python -m unittest -v tests/test_java26_switch_patterns.py          #  7 testes
+python -m unittest -v tests/test_java26_pattern_dominance.py        #  5 testes
+python -m unittest -v tests/test_java26_switch_exhaustiveness.py    #  6 testes
+python -m unittest -v tests/test_java26_pattern_semantics.py             #  6 testes
+python -m unittest -v tests/test_java26_pattern_preview_separation.py    # 10 testes
 ```
