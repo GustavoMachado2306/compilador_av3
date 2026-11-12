@@ -152,18 +152,428 @@ class SemanticAnalyzer:
         "Serializable": ["Object"],
         "Cloneable": ["Object"],
         "Runnable": ["Object"],
+        "Callable": ["Object"],
+        "Comparator": ["Object"],
+        "Function": ["Object"],
+        "BiFunction": ["Object"],
+        "Consumer": ["Object"],
+        "BiConsumer": ["Object"],
+        "Supplier": ["Object"],
+        "Predicate": ["Object"],
+        "BiPredicate": ["Object"],
+        "UnaryOperator": ["Function", "Object"],
+        "BinaryOperator": ["BiFunction", "Object"],
+        "IntFunction": ["Object"],
+        "ToIntFunction": ["Object"],
+        "IntUnaryOperator": ["Object"],
+        "IntBinaryOperator": ["Object"],
+        "IntPredicate": ["Object"],
+        "IntConsumer": ["Object"],
+        "IntSupplier": ["Object"],
+        "Stream": ["Object"],
+        "PrintStream": ["Object"],
+        "InputStream": ["Object"],
+        "System": ["Object"],
+        "Math": ["Object"],
+        "Collections": ["Object"],
+        "Arrays": ["Object"],
+        "Objects": ["Object"],
         "Throwable": ["Serializable", "Object"],
     }
+    TYPE_SYMBOL_CATEGORIES = frozenset({
+        "tipo", "classe", "interface", "enum", "record", "annotation_interface",
+    })
     BUILTIN_FINAL_TYPES = frozenset({
         "String", "Integer", "Long", "Double", "Float", "Byte", "Short", "Boolean", "Character", "Void",
+    })
+    BUILTIN_INTERFACE_TYPES = frozenset({
+        "CharSequence", "Appendable", "Iterable", "Collection", "List", "Set", "Map",
+        "Comparable", "Serializable", "Cloneable", "Runnable", "Callable", "Comparator",
+        "Function", "BiFunction", "Consumer", "BiConsumer", "Supplier", "Predicate",
+        "BiPredicate", "UnaryOperator", "BinaryOperator", "IntFunction", "ToIntFunction",
+        "IntUnaryOperator", "IntBinaryOperator", "IntPredicate", "IntConsumer", "IntSupplier",
+        "Stream",
     })
     BUILTIN_CLASS_TYPES = frozenset({
         "Object", "String", "StringBuilder", "StringBuffer", "Number",
         "Integer", "Long", "Double", "Float", "Byte", "Short", "Boolean",
         "Character", "Void", "ArrayList", "LinkedList", "HashSet", "HashMap",
         "Optional", "Record", "Enum", "Throwable", "Exception",
-        "RuntimeException", "Error",
+        "RuntimeException", "Error", "PrintStream", "InputStream",
+        "System", "Math", "Collections", "Arrays", "Objects",
     })
+    PRIMITIVE_TO_WRAPPER = {
+        "byte": "Byte",
+        "short": "Short",
+        "char": "Character",
+        "int": "Integer",
+        "long": "Long",
+        "float": "Float",
+        "double": "Double",
+        "boolean": "Boolean",
+    }
+    INTEGRAL_PRIMITIVES = frozenset({"byte", "short", "char", "int", "long"})
+    INTEGER_RANGES = {
+        "byte": (-128, 127),
+        "short": (-32768, 32767),
+        "char": (0, 65535),
+    }
+    WIDENING_PRIMITIVE_TARGETS = {
+        "byte": frozenset({"short", "int", "long", "float", "double"}),
+        "short": frozenset({"int", "long", "float", "double"}),
+        "char": frozenset({"int", "long", "float", "double"}),
+        "int": frozenset({"long", "float", "double"}),
+        "long": frozenset({"float", "double"}),
+        "float": frozenset({"double"}),
+    }
+    BUILTIN_TYPE_PARAMS = {
+        "List": ["E"],
+        "ArrayList": ["E"],
+        "LinkedList": ["E"],
+        "Set": ["E"],
+        "HashSet": ["E"],
+        "Collection": ["E"],
+        "Iterable": ["T"],
+        "Optional": ["T"],
+        "Stream": ["T"],
+        "Map": ["K", "V"],
+        "HashMap": ["K", "V"],
+        "Comparable": ["T"],
+        "Comparator": ["T"],
+        "Function": ["T", "R"],
+        "BiFunction": ["T", "U", "R"],
+        "Consumer": ["T"],
+        "BiConsumer": ["T", "U"],
+        "Supplier": ["T"],
+        "Predicate": ["T"],
+        "BiPredicate": ["T", "U"],
+        "UnaryOperator": ["T"],
+        "BinaryOperator": ["T"],
+        "IntFunction": ["R"],
+        "ToIntFunction": ["T"],
+        "Callable": ["V"],
+    }
+    # Mapa: nome_interface -> (param_types, return_type, type_params)
+    BUILTIN_FUNCTIONAL_INTERFACES = {
+        "Runnable": ([], "void", []),
+        "Callable": ([], "V", ["V"]),
+        "Comparable": (["T"], "int", ["T"]),
+        "Comparator": (["T", "T"], "int", ["T"]),
+        "Function": (["T"], "R", ["T", "R"]),
+        "BiFunction": (["T", "U"], "R", ["T", "U", "R"]),
+        "Consumer": (["T"], "void", ["T"]),
+        "BiConsumer": (["T", "U"], "void", ["T", "U"]),
+        "Supplier": ([], "T", ["T"]),
+        "Predicate": (["T"], "boolean", ["T"]),
+        "BiPredicate": (["T", "U"], "boolean", ["T", "U"]),
+        "UnaryOperator": (["T"], "T", ["T"]),
+        "BinaryOperator": (["T", "T"], "T", ["T"]),
+        "IntFunction": (["int"], "R", ["R"]),
+        "ToIntFunction": (["T"], "int", ["T"]),
+        "IntUnaryOperator": (["int"], "int", []),
+        "IntBinaryOperator": (["int", "int"], "int", []),
+        "IntPredicate": (["int"], "boolean", []),
+        "IntConsumer": (["int"], "void", []),
+        "IntSupplier": ([], "int", []),
+    }
+    # Mapa: tipo -> {campo: (tipo_campo, is_static, is_final)}
+    BUILTIN_FIELDS = {
+        "System": {
+            "out": ("PrintStream", True, True),
+            "err": ("PrintStream", True, True),
+            "in": ("InputStream", True, True),
+        },
+        "Math": {
+            "PI": ("double", True, True),
+            "E": ("double", True, True),
+        },
+        "Integer": {
+            "MAX_VALUE": ("int", True, True),
+            "MIN_VALUE": ("int", True, True),
+        },
+        "Long": {
+            "MAX_VALUE": ("long", True, True),
+            "MIN_VALUE": ("long", True, True),
+        },
+        "Double": {
+            "MAX_VALUE": ("double", True, True),
+            "MIN_VALUE": ("double", True, True),
+        },
+    }
+    # Assinaturas embutidas: tipo -> nome_metodo -> lista de dicts {params, ret, static, varargs, tparams}
+    BUILTIN_METHODS = {
+        "Object": {
+            "toString": [{"params": [], "ret": "String", "static": False, "varargs": False, "tparams": []}],
+            "equals": [{"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "hashCode": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+            "getClass": [{"params": [], "ret": "Class", "static": False, "varargs": False, "tparams": []}],
+            "notify": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": []}],
+            "notifyAll": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": []}],
+            "wait": [
+                {"params": [], "ret": "void", "static": False, "varargs": False, "tparams": []},
+                {"params": ["long"], "ret": "void", "static": False, "varargs": False, "tparams": []},
+            ],
+        },
+        "CharSequence": {
+            "length": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+            "charAt": [{"params": ["int"], "ret": "char", "static": False, "varargs": False, "tparams": []}],
+            "isEmpty": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "subSequence": [{"params": ["int", "int"], "ret": "CharSequence", "static": False, "varargs": False, "tparams": []}],
+        },
+        "String": {
+            "length": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+            "isEmpty": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "isBlank": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "charAt": [{"params": ["int"], "ret": "char", "static": False, "varargs": False, "tparams": []}],
+            "substring": [
+                {"params": ["int"], "ret": "String", "static": False, "varargs": False, "tparams": []},
+                {"params": ["int", "int"], "ret": "String", "static": False, "varargs": False, "tparams": []},
+            ],
+            "toUpperCase": [{"params": [], "ret": "String", "static": False, "varargs": False, "tparams": []}],
+            "toLowerCase": [{"params": [], "ret": "String", "static": False, "varargs": False, "tparams": []}],
+            "trim": [{"params": [], "ret": "String", "static": False, "varargs": False, "tparams": []}],
+            "strip": [{"params": [], "ret": "String", "static": False, "varargs": False, "tparams": []}],
+            "contains": [{"params": ["CharSequence"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "startsWith": [{"params": ["String"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "endsWith": [{"params": ["String"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "equalsIgnoreCase": [{"params": ["String"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "compareTo": [{"params": ["String"], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+            "indexOf": [
+                {"params": ["int"], "ret": "int", "static": False, "varargs": False, "tparams": []},
+                {"params": ["String"], "ret": "int", "static": False, "varargs": False, "tparams": []},
+            ],
+            "lastIndexOf": [
+                {"params": ["int"], "ret": "int", "static": False, "varargs": False, "tparams": []},
+                {"params": ["String"], "ret": "int", "static": False, "varargs": False, "tparams": []},
+            ],
+            "replace": [{"params": ["CharSequence", "CharSequence"], "ret": "String", "static": False, "varargs": False, "tparams": []}],
+            "split": [{"params": ["String"], "ret": "String[]", "static": False, "varargs": False, "tparams": []}],
+            "concat": [{"params": ["String"], "ret": "String", "static": False, "varargs": False, "tparams": []}],
+            "formatted": [{"params": ["Object..."], "ret": "String", "static": False, "varargs": True, "tparams": []}],
+            "toCharArray": [{"params": [], "ret": "char[]", "static": False, "varargs": False, "tparams": []}],
+            "valueOf": [
+                {"params": ["int"], "ret": "String", "static": True, "varargs": False, "tparams": []},
+                {"params": ["long"], "ret": "String", "static": True, "varargs": False, "tparams": []},
+                {"params": ["double"], "ret": "String", "static": True, "varargs": False, "tparams": []},
+                {"params": ["boolean"], "ret": "String", "static": True, "varargs": False, "tparams": []},
+                {"params": ["char"], "ret": "String", "static": True, "varargs": False, "tparams": []},
+                {"params": ["Object"], "ret": "String", "static": True, "varargs": False, "tparams": []},
+            ],
+            "format": [{"params": ["String", "Object..."], "ret": "String", "static": True, "varargs": True, "tparams": []}],
+            "join": [{"params": ["CharSequence", "CharSequence..."], "ret": "String", "static": True, "varargs": True, "tparams": []}],
+        },
+        "StringBuilder": {
+            "append": [
+                {"params": ["String"], "ret": "StringBuilder", "static": False, "varargs": False, "tparams": []},
+                {"params": ["int"], "ret": "StringBuilder", "static": False, "varargs": False, "tparams": []},
+                {"params": ["double"], "ret": "StringBuilder", "static": False, "varargs": False, "tparams": []},
+                {"params": ["char"], "ret": "StringBuilder", "static": False, "varargs": False, "tparams": []},
+                {"params": ["Object"], "ret": "StringBuilder", "static": False, "varargs": False, "tparams": []},
+            ],
+            "length": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+        },
+        "StringBuffer": {
+            "append": [
+                {"params": ["String"], "ret": "StringBuffer", "static": False, "varargs": False, "tparams": []},
+                {"params": ["Object"], "ret": "StringBuffer", "static": False, "varargs": False, "tparams": []},
+            ],
+            "length": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+        },
+        "Math": {
+            "max": [
+                {"params": ["int", "int"], "ret": "int", "static": True, "varargs": False, "tparams": []},
+                {"params": ["long", "long"], "ret": "long", "static": True, "varargs": False, "tparams": []},
+                {"params": ["float", "float"], "ret": "float", "static": True, "varargs": False, "tparams": []},
+                {"params": ["double", "double"], "ret": "double", "static": True, "varargs": False, "tparams": []},
+            ],
+            "min": [
+                {"params": ["int", "int"], "ret": "int", "static": True, "varargs": False, "tparams": []},
+                {"params": ["long", "long"], "ret": "long", "static": True, "varargs": False, "tparams": []},
+                {"params": ["float", "float"], "ret": "float", "static": True, "varargs": False, "tparams": []},
+                {"params": ["double", "double"], "ret": "double", "static": True, "varargs": False, "tparams": []},
+            ],
+            "abs": [
+                {"params": ["int"], "ret": "int", "static": True, "varargs": False, "tparams": []},
+                {"params": ["long"], "ret": "long", "static": True, "varargs": False, "tparams": []},
+                {"params": ["float"], "ret": "float", "static": True, "varargs": False, "tparams": []},
+                {"params": ["double"], "ret": "double", "static": True, "varargs": False, "tparams": []},
+            ],
+            "sqrt": [{"params": ["double"], "ret": "double", "static": True, "varargs": False, "tparams": []}],
+            "pow": [{"params": ["double", "double"], "ret": "double", "static": True, "varargs": False, "tparams": []}],
+            "round": [
+                {"params": ["double"], "ret": "long", "static": True, "varargs": False, "tparams": []},
+                {"params": ["float"], "ret": "int", "static": True, "varargs": False, "tparams": []},
+            ],
+        },
+        "PrintStream": {
+            "println": [
+                {"params": [], "ret": "void", "static": False, "varargs": False, "tparams": []},
+                {"params": ["boolean"], "ret": "void", "static": False, "varargs": False, "tparams": []},
+                {"params": ["char"], "ret": "void", "static": False, "varargs": False, "tparams": []},
+                {"params": ["int"], "ret": "void", "static": False, "varargs": False, "tparams": []},
+                {"params": ["long"], "ret": "void", "static": False, "varargs": False, "tparams": []},
+                {"params": ["double"], "ret": "void", "static": False, "varargs": False, "tparams": []},
+                {"params": ["String"], "ret": "void", "static": False, "varargs": False, "tparams": []},
+                {"params": ["Object"], "ret": "void", "static": False, "varargs": False, "tparams": []},
+            ],
+            "print": [
+                {"params": ["int"], "ret": "void", "static": False, "varargs": False, "tparams": []},
+                {"params": ["String"], "ret": "void", "static": False, "varargs": False, "tparams": []},
+                {"params": ["Object"], "ret": "void", "static": False, "varargs": False, "tparams": []},
+            ],
+            "printf": [{"params": ["String", "Object..."], "ret": "PrintStream", "static": False, "varargs": True, "tparams": []}],
+        },
+        "Integer": {
+            "parseInt": [{"params": ["String"], "ret": "int", "static": True, "varargs": False, "tparams": []}],
+            "valueOf": [
+                {"params": ["int"], "ret": "Integer", "static": True, "varargs": False, "tparams": []},
+                {"params": ["String"], "ret": "Integer", "static": True, "varargs": False, "tparams": []},
+            ],
+            "intValue": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+            "doubleValue": [{"params": [], "ret": "double", "static": False, "varargs": False, "tparams": []}],
+            "compareTo": [{"params": ["Integer"], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+            "compare": [{"params": ["int", "int"], "ret": "int", "static": True, "varargs": False, "tparams": []}],
+        },
+        "Long": {
+            "parseLong": [{"params": ["String"], "ret": "long", "static": True, "varargs": False, "tparams": []}],
+            "valueOf": [{"params": ["long"], "ret": "Long", "static": True, "varargs": False, "tparams": []}],
+            "longValue": [{"params": [], "ret": "long", "static": False, "varargs": False, "tparams": []}],
+        },
+        "Double": {
+            "parseDouble": [{"params": ["String"], "ret": "double", "static": True, "varargs": False, "tparams": []}],
+            "valueOf": [{"params": ["double"], "ret": "Double", "static": True, "varargs": False, "tparams": []}],
+            "doubleValue": [{"params": [], "ret": "double", "static": False, "varargs": False, "tparams": []}],
+            "intValue": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+        },
+        "Boolean": {
+            "parseBoolean": [{"params": ["String"], "ret": "boolean", "static": True, "varargs": False, "tparams": []}],
+            "valueOf": [{"params": ["boolean"], "ret": "Boolean", "static": True, "varargs": False, "tparams": []}],
+            "booleanValue": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+        },
+        "Collection": {
+            "size": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+            "isEmpty": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "contains": [{"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "add": [{"params": ["E"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "remove": [{"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "clear": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": []}],
+            "stream": [{"params": [], "ret": "Stream<E>", "static": False, "varargs": False, "tparams": []}],
+        },
+        "List": {
+            "get": [{"params": ["int"], "ret": "E", "static": False, "varargs": False, "tparams": []}],
+            "set": [{"params": ["int", "E"], "ret": "E", "static": False, "varargs": False, "tparams": []}],
+            "add": [
+                {"params": ["E"], "ret": "boolean", "static": False, "varargs": False, "tparams": []},
+                {"params": ["int", "E"], "ret": "void", "static": False, "varargs": False, "tparams": []},
+            ],
+            "remove": [
+                {"params": ["int"], "ret": "E", "static": False, "varargs": False, "tparams": []},
+                {"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": []},
+            ],
+            "of": [
+                {"params": [], "ret": "List<E>", "static": True, "varargs": False, "tparams": ["E"]},
+                {"params": ["E"], "ret": "List<E>", "static": True, "varargs": False, "tparams": ["E"]},
+                {"params": ["E", "E"], "ret": "List<E>", "static": True, "varargs": False, "tparams": ["E"]},
+                {"params": ["E..."], "ret": "List<E>", "static": True, "varargs": True, "tparams": ["E"]},
+            ],
+        },
+        "Set": {
+            "of": [
+                {"params": [], "ret": "Set<E>", "static": True, "varargs": False, "tparams": ["E"]},
+                {"params": ["E..."], "ret": "Set<E>", "static": True, "varargs": True, "tparams": ["E"]},
+            ],
+        },
+        "Map": {
+            "get": [{"params": ["Object"], "ret": "V", "static": False, "varargs": False, "tparams": []}],
+            "put": [{"params": ["K", "V"], "ret": "V", "static": False, "varargs": False, "tparams": []}],
+            "containsKey": [{"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "containsValue": [{"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "size": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+            "isEmpty": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "keySet": [{"params": [], "ret": "Set<K>", "static": False, "varargs": False, "tparams": []}],
+        },
+        "Optional": {
+            "get": [{"params": [], "ret": "T", "static": False, "varargs": False, "tparams": []}],
+            "isPresent": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "isEmpty": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "orElse": [{"params": ["T"], "ret": "T", "static": False, "varargs": False, "tparams": []}],
+            "of": [{"params": ["T"], "ret": "Optional<T>", "static": True, "varargs": False, "tparams": ["T"]}],
+            "ofNullable": [{"params": ["T"], "ret": "Optional<T>", "static": True, "varargs": False, "tparams": ["T"]}],
+            "empty": [{"params": [], "ret": "Optional<T>", "static": True, "varargs": False, "tparams": ["T"]}],
+        },
+        "Collections": {
+            "emptyList": [{"params": [], "ret": "List<T>", "static": True, "varargs": False, "tparams": ["T"]}],
+            "singletonList": [{"params": ["T"], "ret": "List<T>", "static": True, "varargs": False, "tparams": ["T"]}],
+            "sort": [{"params": ["List<T>"], "ret": "void", "static": True, "varargs": False, "tparams": ["T"]}],
+        },
+        "Arrays": {
+            "asList": [{"params": ["T..."], "ret": "List<T>", "static": True, "varargs": True, "tparams": ["T"]}],
+            "sort": [{"params": ["int[]"], "ret": "void", "static": True, "varargs": False, "tparams": []}],
+        },
+        "Objects": {
+            "requireNonNull": [{"params": ["T"], "ret": "T", "static": True, "varargs": False, "tparams": ["T"]}],
+            "equals": [{"params": ["Object", "Object"], "ret": "boolean", "static": True, "varargs": False, "tparams": []}],
+        },
+        "Function": {
+            "apply": [{"params": ["T"], "ret": "R", "static": False, "varargs": False, "tparams": []}],
+        },
+        "BiFunction": {
+            "apply": [{"params": ["T", "U"], "ret": "R", "static": False, "varargs": False, "tparams": []}],
+        },
+        "Consumer": {
+            "accept": [{"params": ["T"], "ret": "void", "static": False, "varargs": False, "tparams": []}],
+        },
+        "BiConsumer": {
+            "accept": [{"params": ["T", "U"], "ret": "void", "static": False, "varargs": False, "tparams": []}],
+        },
+        "Supplier": {
+            "get": [{"params": [], "ret": "T", "static": False, "varargs": False, "tparams": []}],
+        },
+        "Predicate": {
+            "test": [{"params": ["T"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+        },
+        "BiPredicate": {
+            "test": [{"params": ["T", "U"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+        },
+        "UnaryOperator": {
+            "apply": [{"params": ["T"], "ret": "T", "static": False, "varargs": False, "tparams": []}],
+        },
+        "BinaryOperator": {
+            "apply": [{"params": ["T", "T"], "ret": "T", "static": False, "varargs": False, "tparams": []}],
+        },
+        "Callable": {
+            "call": [{"params": [], "ret": "V", "static": False, "varargs": False, "tparams": []}],
+        },
+        "Runnable": {
+            "run": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": []}],
+        },
+        "Comparator": {
+            "compare": [{"params": ["T", "T"], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+        },
+        "IntUnaryOperator": {
+            "applyAsInt": [{"params": ["int"], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+        },
+        "IntBinaryOperator": {
+            "applyAsInt": [{"params": ["int", "int"], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+        },
+        "IntPredicate": {
+            "test": [{"params": ["int"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+        },
+    }
+    BUILTIN_CONSTRUCTORS = {
+        "Object": [[]],
+        "String": [[], ["String"], ["char[]"]],
+        "StringBuilder": [[], ["int"], ["String"]],
+        "StringBuffer": [[], ["int"], ["String"]],
+        "ArrayList": [[], ["int"], ["Collection"]],
+        "LinkedList": [[], ["Collection"]],
+        "HashSet": [[], ["int"], ["Collection"]],
+        "HashMap": [[], ["int"], ["Map"]],
+        "Exception": [[], ["String"]],
+        "RuntimeException": [[], ["String"]],
+        "IllegalArgumentException": [[], ["String"]],
+        "IllegalStateException": [[], ["String"]],
+    }
 
     def __init__(self, symbol_table, enable_preview_primitive_patterns: bool = False):
         self.symbols = symbol_table
@@ -191,6 +601,13 @@ class SemanticAnalyzer:
         self._local_declared_type_scopes: List[Dict[str, Tuple[str, ASTNode]]] = []
         self._enclosing_type_names: List[str] = []
         self._current_type_is_local: bool = False
+        self._in_static_context: bool = False
+        self._lambda_scope_floor_stack: List[int] = []
+        self._pending_lambda_captures: List[Tuple[str, Dict[str, Any], int]] = []
+        self._lambda_return_exprs_stack: List[List[Optional[ASTNode]]] = []
+        self._inferred_types: Dict[int, str] = {}
+        self._switch_yield_exprs_stack: List[List[Tuple[Optional[ASTNode], int]]] = []
+        self._switch_expected_type_stack: List[Optional[str]] = []
 
     def _save_exec_context(self) -> Dict[str, Any]:
         return {
@@ -208,6 +625,12 @@ class SemanticAnalyzer:
             "type_scopes": self._local_type_scopes,
             "decl_type_scopes": self._local_declared_type_scopes,
             "local_type_flag": self._current_type_is_local,
+            "in_static": self._in_static_context,
+            "lambda_floors": self._lambda_scope_floor_stack,
+            "lambda_captures": self._pending_lambda_captures,
+            "lambda_rets": self._lambda_return_exprs_stack,
+            "switch_yields": self._switch_yield_exprs_stack,
+            "switch_expected": self._switch_expected_type_stack,
         }
 
     def _restore_exec_context(self, saved: Dict[str, Any]):
@@ -225,6 +648,12 @@ class SemanticAnalyzer:
         self._local_type_scopes = saved["type_scopes"]
         self._local_declared_type_scopes = saved["decl_type_scopes"]
         self._current_type_is_local = saved["local_type_flag"]
+        self._in_static_context = saved["in_static"]
+        self._lambda_scope_floor_stack = saved["lambda_floors"]
+        self._pending_lambda_captures = saved["lambda_captures"]
+        self._lambda_return_exprs_stack = saved["lambda_rets"]
+        self._switch_yield_exprs_stack = saved["switch_yields"]
+        self._switch_expected_type_stack = saved["switch_expected"]
 
     def _enter_exec_context(
         self,
@@ -234,6 +663,7 @@ class SemanticAnalyzer:
         compact_names: Optional[Set[str]] = None,
         share_locals: bool = False,
         switch_expr_depth: int = 0,
+        is_static: Optional[bool] = None,
     ) -> Dict[str, Any]:
         saved = self._save_exec_context()
         self._in_early_construction_context = False
@@ -245,19 +675,32 @@ class SemanticAnalyzer:
         self._callable_kind = kind
         self._current_return_type = return_type
         self._active_labels = {}
+        if is_static is not None:
+            self._in_static_context = is_static
+        callable_roots = ("method", "constructor", "initializer", "field_initializer")
         if not share_locals:
-            self._local_var_scopes = [{}] if kind in ("method", "constructor", "initializer") else []
+            self._lambda_scope_floor_stack = []
+            self._pending_lambda_captures = []
+            self._lambda_return_exprs_stack = []
+            self._switch_yield_exprs_stack = []
+            self._switch_expected_type_stack = []
+            self._local_var_scopes = [{}] if kind in callable_roots else []
             if not self._current_type_is_local:
-                self._active_pattern_scopes = [{}] if kind in ("method", "constructor", "initializer") else []
-                self._local_declared_type_scopes = [{}] if kind in ("method", "constructor", "initializer") else []
+                self._active_pattern_scopes = [{}] if kind in callable_roots else []
+                self._local_declared_type_scopes = [{}] if kind in callable_roots else []
             else:
                 self._active_pattern_scopes = list(self._active_pattern_scopes) + (
-                    [{}] if kind in ("method", "constructor", "initializer") else []
+                    [{}] if kind in callable_roots else []
                 )
                 self._local_declared_type_scopes = list(self._local_declared_type_scopes) + (
-                    [{}] if kind in ("method", "constructor", "initializer") else []
+                    [{}] if kind in callable_roots else []
                 )
-            self._local_type_scopes = [{}] if kind in ("method", "constructor", "initializer") else []
+            self._local_type_scopes = [{}] if kind in callable_roots else []
+        else:
+            self._lambda_scope_floor_stack = list(self._lambda_scope_floor_stack)
+            self._lambda_return_exprs_stack = list(self._lambda_return_exprs_stack)
+            self._switch_yield_exprs_stack = list(self._switch_yield_exprs_stack)
+            self._switch_expected_type_stack = list(self._switch_expected_type_stack)
         return saved
 
     def analyze(self, program: ASTNode) -> List[SemanticError]:
@@ -285,6 +728,13 @@ class SemanticAnalyzer:
         self._local_declared_type_scopes = []
         self._enclosing_type_names = []
         self._current_type_is_local = False
+        self._in_static_context = False
+        self._lambda_scope_floor_stack = []
+        self._pending_lambda_captures = []
+        self._lambda_return_exprs_stack = []
+        self._inferred_types = {}
+        self._switch_yield_exprs_stack = []
+        self._switch_expected_type_stack = []
         if not program:
             return self.errors
 
@@ -524,6 +974,7 @@ class SemanticAnalyzer:
         dup_noun = "Constante" if is_interface_constant else "Campo"
 
         if not decls and hasattr(member, "name"):
+            eff_type = None
             if member.name == "_":
                 self.errors.append(
                     SemanticError("O identificador '_' não pode ser utilizado como nome de campo (JLS §8.3 / JEP 456).", member.line)
@@ -541,7 +992,16 @@ class SemanticAnalyzer:
                 ):
                     self.errors.append(SemanticError(f"{dup_noun} '{member.name}' declarado novamente na {container_label}.", member.line))
             if member.initializer is not None:
-                self.check_expression(member.initializer)
+                init_ctx = self._enter_exec_context("field_initializer", return_type=None, is_static=is_static, share_locals=False)
+                try:
+                    if eff_type and eff_type != "var":
+                        self._check_expression_with_target(member.initializer, eff_type)
+                        self.check_assignment_type(eff_type, member.initializer, member.name, member.line)
+                    else:
+                        self.check_expression(member.initializer)
+                    self._check_lambda_capture_boundaries()
+                finally:
+                    self._restore_exec_context(init_ctx)
             return
 
         for decl in decls:
@@ -569,7 +1029,16 @@ class SemanticAnalyzer:
             ):
                 self.errors.append(SemanticError(f"{dup_noun} '{decl.name}' declarado novamente na {container_label}.", decl.line))
             if decl.initializer is not None:
-                self.check_expression(decl.initializer)
+                init_ctx = self._enter_exec_context("field_initializer", return_type=None, is_static=is_static, share_locals=False)
+                try:
+                    if eff_type and eff_type != "var":
+                        self._check_expression_with_target(decl.initializer, eff_type)
+                        self.check_assignment_type(eff_type, decl.initializer, decl.name, decl.line)
+                    else:
+                        self.check_expression(decl.initializer)
+                    self._check_lambda_capture_boundaries()
+                finally:
+                    self._restore_exec_context(init_ctx)
 
     def _analyze_method_member(self, member: MethodDeclaration):
         """Registra um método e analisa annotations, type parameters, parâmetros e corpo em escopo isolado."""
@@ -597,7 +1066,7 @@ class SemanticAnalyzer:
         is_static = "static" in member.modifiers
         self.symbols.declare(member.name, eff_ret_type, member.line, category="metodo", is_static=is_static)
         self.symbols.enter_scope()
-        saved_ctx = self._enter_exec_context("method", return_type=eff_ret_type)
+        saved_ctx = self._enter_exec_context("method", return_type=eff_ret_type, is_static=is_static)
         try:
             for p in member.parameters:
                 self._analyze_annotations(
@@ -616,7 +1085,7 @@ class SemanticAnalyzer:
                 for ea in getattr(p, "ellipsis_annotations", []):
                     self._analyze_annotations([ea], valid_targets={"TYPE_USE"})
                 if p.name != "_":
-                    p_type = getattr(p.type_ref, "full_name", p.type_ref.name) if hasattr(p, "type_ref") else "Object"
+                    p_type = self._resolve_param_effective_type(p)
                     self._register_local_var(
                         p.name,
                         p_type,
@@ -627,6 +1096,7 @@ class SemanticAnalyzer:
                     )
             if member.body:
                 self.analyze_block(member.body)
+            self._check_lambda_capture_boundaries()
         finally:
             self._restore_exec_context(saved_ctx)
         self.symbols.exit_scope()
@@ -678,6 +1148,7 @@ class SemanticAnalyzer:
             return_type=None,
             is_compact=is_compact,
             compact_names=derived_names if is_compact else set(),
+            is_static=False,
         )
         try:
             if is_compact and derived_components is not None:
@@ -708,7 +1179,7 @@ class SemanticAnalyzer:
                     for ea in getattr(p, "ellipsis_annotations", []):
                         self._analyze_annotations([ea], valid_targets={"TYPE_USE"})
                     if p.name != "_":
-                        p_type = getattr(p.type_ref, "full_name", p.type_ref.name) if hasattr(p, "type_ref") else "Object"
+                        p_type = self._resolve_param_effective_type(p)
                         self._register_local_var(
                             p.name,
                             p_type,
@@ -752,6 +1223,7 @@ class SemanticAnalyzer:
                             self.analyze_statement(s)
                 elif isinstance(member.body, Block):
                     self.analyze_block(member.body)
+            self._check_lambda_capture_boundaries()
         finally:
             self._restore_exec_context(saved_ctx)
 
@@ -786,9 +1258,14 @@ class SemanticAnalyzer:
                     )
             elif isinstance(member, (InstanceInitializer, StaticInitializer)):
                 if member.block:
-                    saved_ctx = self._enter_exec_context("initializer", return_type=None)
+                    saved_ctx = self._enter_exec_context(
+                        "initializer",
+                        return_type=None,
+                        is_static=isinstance(member, StaticInitializer),
+                    )
                     try:
                         self.analyze_block(member.block)
+                        self._check_lambda_capture_boundaries()
                     finally:
                         self._restore_exec_context(saved_ctx)
             elif isinstance(member, (ClassDeclaration, InterfaceDeclaration, EnumDeclaration, RecordDeclaration, AnnotationInterfaceDeclaration)):
@@ -833,6 +1310,7 @@ class SemanticAnalyzer:
             is_local=is_local,
         )
         self._analyze_annotations(getattr(cls_node, "annotations", []), valid_targets={"TYPE"})
+        self._check_functional_interface_annotation(cls_node, is_interface=False)
         self._check_type_parameters_annotations(getattr(cls_node, "type_parameters", []))
         if getattr(cls_node, "extends_type", None) is not None:
             self._check_type_ref_annotations(cls_node.extends_type)
@@ -861,6 +1339,7 @@ class SemanticAnalyzer:
         self._declare_type_symbol(iface_node.name, "interface", "interface", "Interface", iface_node.line)
         self._validate_type_modifiers(iface_node.modifiers, "interface", iface_node.name, iface_node.line, is_nested=is_nested, is_local=is_local)
         self._analyze_annotations(getattr(iface_node, "annotations", []), valid_targets={"TYPE"})
+        self._check_functional_interface_annotation(iface_node, is_interface=True)
         self._check_type_parameters_annotations(getattr(iface_node, "type_parameters", []))
         for etype in getattr(iface_node, "extends_types", []):
             self._check_type_ref_annotations(etype)
@@ -929,6 +1408,7 @@ class SemanticAnalyzer:
         self._declare_type_symbol(enum_node.name, "enum", "enum", "Enum", enum_node.line)
         self._validate_type_modifiers(enum_node.modifiers, "enum", enum_node.name, enum_node.line, is_nested=is_nested, is_local=is_local)
         self._analyze_annotations(getattr(enum_node, "annotations", []), valid_targets={"TYPE"})
+        self._check_functional_interface_annotation(enum_node, is_interface=False)
         for itype in getattr(enum_node, "implements_types", []):
             self._check_type_ref_annotations(itype)
         self.symbols.enter_scope()
@@ -999,6 +1479,7 @@ class SemanticAnalyzer:
         self._declare_type_symbol(rec_node.name, "record", "record", "Record", rec_node.line)
         self._validate_type_modifiers(rec_node.modifiers, "record", rec_node.name, rec_node.line, is_nested=is_nested, is_local=is_local)
         self._analyze_annotations(getattr(rec_node, "annotations", []), valid_targets={"TYPE"})
+        self._check_functional_interface_annotation(rec_node, is_interface=False)
         self._check_type_parameters_annotations(getattr(rec_node, "type_parameters", []))
         for itype in getattr(rec_node, "implements_types", []):
             self._check_type_ref_annotations(itype)
@@ -1056,17 +1537,19 @@ class SemanticAnalyzer:
                         SemanticError(f"Records não podem declarar inicializadores de instância em '{rec_node.name}' (JLS §8.10.2).", member.line)
                     )
                     if member.block:
-                        init_ctx = self._enter_exec_context("initializer", return_type=None)
+                        init_ctx = self._enter_exec_context("initializer", return_type=None, is_static=False)
                         try:
                             self.analyze_block(member.block)
+                            self._check_lambda_capture_boundaries()
                         finally:
                             self._restore_exec_context(init_ctx)
 
                 elif isinstance(member, StaticInitializer):
                     if member.block:
-                        init_ctx = self._enter_exec_context("initializer", return_type=None)
+                        init_ctx = self._enter_exec_context("initializer", return_type=None, is_static=True)
                         try:
                             self.analyze_block(member.block)
+                            self._check_lambda_capture_boundaries()
                         finally:
                             self._restore_exec_context(init_ctx)
 
@@ -2710,7 +3193,7 @@ class SemanticAnalyzer:
             return tkind in ("class", "record", "enum")
         if s in self.BUILTIN_CLASS_TYPES or s in self.KNOWN_EXCEPTION_PARENTS:
             return True
-        if s in ("CharSequence", "Appendable", "Iterable", "Collection", "List", "Set", "Map", "Comparable", "Serializable", "Cloneable", "Runnable"):
+        if s in self.BUILTIN_INTERFACE_TYPES:
             return False
         return None
 
@@ -2770,7 +3253,11 @@ class SemanticAnalyzer:
         sup_base, sup_dims = self._split_type_dims(sup_s)
         if sub_dims > 0 and sup_dims == 0:
             return sup_base in ("Object", "Cloneable", "Serializable")
-        if sub_dims != sup_dims:
+        if sub_dims > sup_dims and sup_dims > 0:
+            if sup_base in ("Object", "Cloneable", "Serializable"):
+                return True
+            return False
+        if sub_dims < sup_dims:
             return False
         if sub_dims > 0 and sup_dims > 0:
             if sub_base in self.PRIMITIVE_TYPES or sup_base in self.PRIMITIVE_TYPES:
@@ -2900,8 +3387,13 @@ class SemanticAnalyzer:
         b1, d1 = self._split_type_dims(s1)
         b2, d2 = self._split_type_dims(s2)
         if (d1 > 0 or d2 > 0) and d1 != d2:
+            min_b = b2 if d1 > d2 else b1
+            if min_b in ("Object", "Cloneable", "Serializable"):
+                return False
             return True
         if d1 > 0 and d2 > 0:
+            if b1 in self.PRIMITIVE_TYPES or b2 in self.PRIMITIVE_TYPES:
+                return b1 != b2
             return self._are_types_disjoint(b1, b2)
 
         if self._is_final_or_closed_leaf(t1) or self._is_final_or_closed_leaf(t2):
@@ -3689,8 +4181,8 @@ class SemanticAnalyzer:
         is_known = self._is_known_type(t0)
         return False, (not is_known)
 
-    def _analyze_switch_block(self, switch_node: ASTNode, is_expression: bool = False):
-        """Valida SwitchStatement e SwitchExpression (patterns, guards, dominância, escopo e exaustividade)."""
+    def _analyze_switch_block(self, switch_node: ASTNode, is_expression: bool = False, expected_type: Optional[str] = None):
+        """Valida SwitchStatement e SwitchExpression (patterns, guards, dominância, escopo, yield e exaustividade)."""
         self.check_expression(switch_node.expression)
         sb = getattr(switch_node, "switch_block", None)
         selector_type = self.infer_type(switch_node.expression)
@@ -3711,6 +4203,8 @@ class SemanticAnalyzer:
         self._active_pattern_scopes.append({})
         if not is_expression:
             self._switch_depth += 1
+        if is_expression:
+            self._switch_yield_exprs_stack.append([])
 
         enum_const_names = self._collect_all_enum_constant_names()
         seen_default_pos: Optional[Tuple[int, bool]] = None  # (line, is_null_default)
@@ -3923,6 +4417,13 @@ class SemanticAnalyzer:
                                 self.analyze_statement(rule.body)
                             elif rule.is_block and isinstance(rule.body, Block):
                                 self.analyze_block(rule.body)
+                                if is_expression and self._stmt_completes_normally(rule.body):
+                                    self.errors.append(
+                                        SemanticError(
+                                            "Bloco de regra em switch expression não pode concluir normalmente sem 'yield' ou 'throw' (JLS §15.28.1).",
+                                            getattr(rule, "line", 1),
+                                        )
+                                    )
                             elif rule.body is not None:
                                 rule_inner = rule.body.expression if isinstance(rule.body, ExpressionStatement) else rule.body
                                 if not is_expression and not self._is_statement_expression(rule_inner):
@@ -3932,7 +4433,12 @@ class SemanticAnalyzer:
                                             getattr(rule, "line", 1),
                                         )
                                     )
-                                self._check_expression_flow(rule_inner)
+                                if is_expression:
+                                    self._check_expression_with_target(rule_inner, expected_type)
+                                    if self._switch_yield_exprs_stack:
+                                        self._switch_yield_exprs_stack[-1].append((rule_inner, getattr(rule, "line", 1)))
+                                else:
+                                    self._check_expression_flow(rule_inner)
                         finally:
                             self._pop_pattern_scope()
                             self._local_declared_type_scopes.pop()
@@ -3992,7 +4498,14 @@ class SemanticAnalyzer:
                                     break
                             prev_grp_completes_normally = last_completes
                         else:
-                            prev_grp_completes_normally = False
+                            prev_grp_completes_normally = is_expression
+                    if is_expression and sb.statement_groups and prev_grp_completes_normally:
+                        self.errors.append(
+                            SemanticError(
+                                "Grupo 'case' em switch expression não pode concluir normalmente sem 'yield' ou 'throw' (JLS §15.28.1).",
+                                getattr(sb.statement_groups[-1], "line", getattr(switch_node, "line", 1)),
+                            )
+                        )
             else:
                 for case_clause in getattr(switch_node, "cases", []):
                     if isinstance(case_clause, SwitchCase):
@@ -4010,6 +4523,33 @@ class SemanticAnalyzer:
                         self.analyze_statement(def_block)
 
             # Regras de exaustividade (JLS §14.11.1.1 / §14.11.2 / §15.28.1)
+            if is_expression and self._switch_yield_exprs_stack:
+                yield_entries = self._switch_yield_exprs_stack.pop()
+                yield_nodes = [yn for yn, _ in yield_entries if yn is not None]
+                if expected_type and expected_type not in ("var", "desconhecido"):
+                    for y_expr, y_line in yield_entries:
+                        if y_expr is not None and not self._is_assignable_expr(expected_type, y_expr):
+                            yt = self.infer_type(y_expr) or "poly-expression"
+                            self.errors.append(
+                                SemanticError(
+                                    f"Valor produzido em ramo da switch expression ('{yt}') é incompatível com o tipo alvo '{expected_type}' (JLS §15.28.1).",
+                                    y_line,
+                                )
+                            )
+                    self._inferred_types[id(switch_node)] = expected_type
+                else:
+                    uni = self._unify_branch_types(yield_nodes, None)
+                    for y_expr, y_line in yield_entries:
+                        if y_expr is not None and self.infer_type(y_expr) == "void":
+                            self.errors.append(
+                                SemanticError(
+                                    "Ramo de switch expression não pode produzir tipo 'void' (JLS §15.28.1).",
+                                    y_line,
+                                )
+                            )
+                    if uni:
+                        self._inferred_types[id(switch_node)] = uni
+
             needs_exhaustiveness = is_expression or has_pattern_labels or (seen_null_line is not None)
             if needs_exhaustiveness:
                 is_exhaustive, unresolved_exhaust = self._check_switch_exhaustiveness(
@@ -4201,10 +4741,10 @@ class SemanticAnalyzer:
                                 d_line,
                             )
                         )
-                    elif isinstance(d_init, (LambdaExpression, MethodReference)):
+                    elif isinstance(d_init, (LambdaExpression, MethodReference)) or self._is_poly_expression(d_init):
                         self.errors.append(
                             SemanticError(
-                                f"Não é possível inferir o tipo de 'var {d_name}' a partir de lambda ou method reference sem tipo alvo explícito (JLS §14.4.1).",
+                                f"Não é possível inferir o tipo de 'var {d_name}' a partir de lambda, method reference ou expressão poly sem tipo alvo explícito (JLS §14.4.1).",
                                 d_line,
                             )
                         )
@@ -4217,6 +4757,14 @@ class SemanticAnalyzer:
                         )
                     self.check_expression(d_init)
                 inferred = self.infer_type(d_init) if d_init is not None else None
+                if inferred == "void":
+                    self.errors.append(
+                        SemanticError(
+                            f"Não é possível inferir tipo 'var' para '{d_name}' a partir de expressão 'void' (JLS §14.4.1).",
+                            d_line,
+                        )
+                    )
+                    inferred = None
                 eff_type = inferred if inferred else "var"
                 self._register_local_var(
                     d_name,
@@ -4248,7 +4796,7 @@ class SemanticAnalyzer:
                     )
                 )
             if d_init is not None:
-                self.check_expression(d_init)
+                self._check_expression_with_target(d_init, eff_type)
                 self.check_assignment_type(eff_type, d_init, d_name, d_line)
             is_const = is_final and d_init is not None and self._is_compile_time_constant_expr(d_init)
             self._register_local_var(
@@ -4260,6 +4808,12 @@ class SemanticAnalyzer:
                 category="variavel",
                 is_compile_constant=is_const,
             )
+            # Variável constante (JLS §4.12.4): guarda valor inteiro para estreitamento constante (JLS §5.2)
+            if is_const and eff_type in ("byte", "short", "char", "int") and self._local_var_scopes:
+                cv = self._eval_constant_int_literal(d_init)
+                info = self._local_var_scopes[-1].get(d_name)
+                if cv is not None and info is not None:
+                    info["const_value"] = cv
 
     def _check_stmt_list_with_flow(self, stmts: List[ASTNode]):
         """Analisa sequência de instruções propagando variáveis de pattern introduzidas no bloco (JLS §6.3.2)."""
@@ -4442,6 +4996,20 @@ class SemanticAnalyzer:
                     self.errors.append(
                         SemanticError("Construtor não pode retornar valor com expressão em 'return' (JLS §8.8.4 / §14.17).", line)
                     )
+            elif self._callable_kind == "lambda":
+                if self._lambda_return_exprs_stack:
+                    self._lambda_return_exprs_stack[-1].append(stmt.expression)
+                if self._current_return_type == "void" and stmt.expression is not None:
+                    self.errors.append(
+                        SemanticError("Expressão lambda com retorno 'void' não pode retornar valor em 'return' (JLS §15.27.3).", line)
+                    )
+                elif self._current_return_type not in (None, "void") and stmt.expression is None:
+                    self.errors.append(
+                        SemanticError(
+                            f"Expressão lambda com tipo de retorno '{self._current_return_type}' deve retornar valor em 'return' (JLS §15.27.3).",
+                            line,
+                        )
+                    )
             elif self._callable_kind == "method":
                 if self._current_return_type == "void" and stmt.expression is not None:
                     self.errors.append(
@@ -4455,7 +5023,19 @@ class SemanticAnalyzer:
                         )
                     )
             if stmt.expression is not None:
-                self.check_expression(stmt.expression)
+                ret_target = self._current_return_type if self._current_return_type not in (None, "void") else None
+                if ret_target:
+                    self._check_expression_with_target(stmt.expression, ret_target)
+                    if not self._is_type_variable(ret_target) and not self._is_assignable_expr(ret_target, stmt.expression):
+                        expr_t = self.infer_type(stmt.expression)
+                        self.errors.append(
+                            SemanticError(
+                                f"Tipo retornado incompatível: esperado '{ret_target}', encontrado '{expr_t}' (JLS §14.17 / §15.27.3).",
+                                line,
+                            )
+                        )
+                else:
+                    self.check_expression(stmt.expression)
 
         elif isinstance(stmt, YieldStatement):
             line = getattr(stmt, "line", 1)
@@ -4463,7 +5043,12 @@ class SemanticAnalyzer:
                 self.errors.append(
                     SemanticError("Instrução 'yield' só é permitida dentro de uma switch expression (JLS §14.21).", line)
                 )
-            self.check_expression(stmt.expression)
+                self.check_expression(stmt.expression)
+            else:
+                exp_t = self._switch_expected_type_stack[-1] if self._switch_expected_type_stack else None
+                self._check_expression_with_target(stmt.expression, exp_t)
+                if self._switch_yield_exprs_stack:
+                    self._switch_yield_exprs_stack[-1].append((stmt.expression, line))
 
         elif isinstance(stmt, BreakStatement):
             line = getattr(stmt, "line", 1)
@@ -4695,11 +5280,28 @@ class SemanticAnalyzer:
 
         elif isinstance(stmt, SynchronizedStatement):
             self.check_expression(stmt.lock)
+            lock_t = self.infer_type(stmt.lock)
+            if lock_t and (lock_t in self.PRIMITIVE_TYPES or lock_t == "void"):
+                self.errors.append(
+                    SemanticError(
+                        f"Expressão de bloqueio em 'synchronized' deve possuir tipo de referência (encontrado '{lock_t}' — JLS §14.19).",
+                        getattr(stmt, "line", 1),
+                    )
+                )
             if stmt.body is not None:
                 self.analyze_block(stmt.body)
 
         elif isinstance(stmt, ThrowStatement):
             self.check_expression(stmt.expression)
+            exc_t = self.infer_type(stmt.expression)
+            if exc_t:
+                if exc_t in self.PRIMITIVE_TYPES or exc_t == "void" or self._is_subtype(exc_t, "Throwable") is False:
+                    self.errors.append(
+                        SemanticError(
+                            f"Expressão em 'throw' deve ser subtipo de 'Throwable' (encontrado '{exc_t}' — JLS §14.18).",
+                            getattr(stmt, "line", 1),
+                        )
+                    )
 
         elif isinstance(stmt, AssertStatement):
             self._check_boolean_condition(stmt.condition, "assert", getattr(stmt, "line", 1))
@@ -4723,6 +5325,2111 @@ class SemanticAnalyzer:
             finally:
                 self._in_compact_constructor = saved_compact
 
+    def _record_unresolved(self, reason: str):
+        """Registra verificação pendente por ausência de classpath completo sem duplicatas."""
+        if reason and reason not in self.unresolved_checks:
+            self.unresolved_checks.append(reason)
+
+    def _current_enclosing_type(self) -> Optional[str]:
+        """Retorna o nome do tipo declarador mais interno em análise."""
+        return self._enclosing_type_names[-1] if self._enclosing_type_names else None
+
+    def _resolve_param_effective_type(self, param: ASTNode) -> str:
+        """Retorna o tipo efetivo de parâmetro formal (tratando varargs como array dentro do corpo)."""
+        raw = getattr(param, "effective_type", None)
+        if not raw and getattr(param, "type_ref", None) is not None:
+            raw = getattr(param.type_ref, "full_name", getattr(param.type_ref, "name", "Object"))
+        raw = raw or "Object"
+        if getattr(param, "is_varargs", False):
+            if raw.endswith("..."):
+                return raw[:-3] + "[]"
+            if not raw.endswith("[]"):
+                return raw + "[]"
+        return raw
+
+    @staticmethod
+    def _strip_leading_type_annotations(type_str: Optional[str]) -> Optional[str]:
+        """Remove anotações de tipo prefixadas mantendo genéricos e dimensões de array."""
+        if not type_str:
+            return None
+        s = type_str.strip()
+        while s.startswith("@"):
+            idx = 1
+            while idx < len(s) and (s[idx].isalnum() or s[idx] in "._$"):
+                idx += 1
+            if idx < len(s) and s[idx] == "(":
+                depth = 1
+                idx += 1
+                in_str = False
+                while idx < len(s) and depth > 0:
+                    ch = s[idx]
+                    if ch == '"' and s[idx - 1] != "\\":
+                        in_str = not in_str
+                    elif not in_str:
+                        if ch == "(":
+                            depth += 1
+                        elif ch == ")":
+                            depth -= 1
+                    idx += 1
+            s = s[idx:].lstrip()
+        return s or None
+
+    @staticmethod
+    def _strip_type_dims_full(type_str: Optional[str]) -> Tuple[str, int]:
+        """Separa dimensões de array finais preservando argumentos genéricos do tipo base."""
+        if not type_str:
+            return "", 0
+        s = type_str.strip()
+        dims = 0
+        while s.endswith("[]"):
+            dims += 1
+            s = s[:-2].strip()
+        return s, dims
+
+    def _is_type_variable(self, type_str: Optional[str]) -> bool:
+        """Identifica variáveis de tipo genérico não instanciadas (ex: T, E, R)."""
+        if not type_str:
+            return False
+        s, dims = self._strip_type_dims_full(self._strip_generics(type_str))
+        if not s or "." in s:
+            return False
+        if s in self.PRIMITIVE_TYPES or s in self.BUILTIN_TYPE_SUPERTYPES or s in self.KNOWN_EXCEPTION_PARENTS:
+            return False
+        if self._lookup_type_decl(s) is not None:
+            return False
+        return len(s) <= 2 and s[0].isupper()
+
+    def _unbox_type(self, type_str: Optional[str]) -> Optional[str]:
+        """Realiza unboxing para o primitivo correspondente quando aplicável (JLS §5.1.8)."""
+        if not type_str:
+            return None
+        s = self._simple_base_name(type_str)
+        if not s or s.endswith("[]"):
+            return None
+        if s in self.PRIMITIVE_TYPES:
+            return s
+        return self.WRAPPER_TO_PRIMITIVE.get(s)
+
+    def _box_type(self, type_str: Optional[str]) -> Optional[str]:
+        """Realiza boxing de tipo primitivo para sua classe wrapper (JLS §5.1.7)."""
+        if not type_str:
+            return None
+        s = self._simple_base_name(type_str)
+        if s in self.PRIMITIVE_TO_WRAPPER:
+            return self.PRIMITIVE_TO_WRAPPER[s]
+        return type_str
+
+    def _unboxed_numeric(self, type_str: Optional[str]) -> Optional[str]:
+        """Retorna o tipo primitivo numérico se type_str for primitivo numérico ou wrapper correspondente."""
+        prim = self._unbox_type(type_str)
+        if prim in self.NUMERIC_PRIMITIVE_TYPES:
+            return prim
+        return None
+
+    def _is_integral_type(self, type_str: Optional[str]) -> bool:
+        """Retorna True se type_str for tipo integral primitivo ou wrapper integral."""
+        return self._unbox_type(type_str) in self.INTEGRAL_PRIMITIVES
+
+    def _is_boolean_type(self, type_str: Optional[str]) -> bool:
+        """Retorna True se type_str for boolean ou Boolean."""
+        return self._unbox_type(type_str) == "boolean"
+
+    def _unary_numeric_promotion(self, type_str: Optional[str]) -> Optional[str]:
+        """Aplica promoção numérica unária da JLS §5.6 (byte/short/char -> int)."""
+        prim = self._unboxed_numeric(type_str)
+        if prim is None:
+            return None
+        if prim in ("byte", "short", "char", "int"):
+            return "int"
+        return prim
+
+    def _binary_numeric_promotion(self, left: Optional[str], right: Optional[str]) -> Optional[str]:
+        """Aplica promoção numérica binária da JLS §5.6."""
+        lp = self._unboxed_numeric(left)
+        rp = self._unboxed_numeric(right)
+        if lp is None or rp is None:
+            return None
+        if "double" in (lp, rp):
+            return "double"
+        if "float" in (lp, rp):
+            return "float"
+        if "long" in (lp, rp):
+            return "long"
+        return "int"
+
+    def _eval_constant_int_literal(self, expr: Optional[ASTNode]) -> Optional[int]:
+        """Avalia expressões constantes inteiras/char simples para checagem de narrowing (JLS §5.2)."""
+        if expr is None:
+            return None
+        if isinstance(expr, Literal):
+            kind = getattr(expr, "kind", "")
+            val = str(getattr(expr, "value", ""))
+            if kind == "CHAR":
+                if val.startswith("'") and val.endswith("'") and len(val) >= 3:
+                    inner = val[1:-1]
+                    if len(inner) == 1:
+                        return ord(inner)
+                    escapes = {"\\n": 10, "\\r": 13, "\\t": 9, "\\b": 8, "\\f": 12, "\\'": 39, '\\"': 34, "\\\\": 92}
+                    if inner in escapes:
+                        return escapes[inner]
+                return None
+            if kind in ("NUM", "INT"):
+                if val.endswith(("l", "L", "f", "F", "d", "D")) and not val.startswith(("0x", "0X")):
+                    return None
+                if "." in val or ("e" in val.lower() and not val.startswith(("0x", "0X"))):
+                    return None
+                if val.startswith(("0x", "0X")) and val.endswith(("l", "L")):
+                    return None
+                try:
+                    return int(val.replace("_", ""), 0)
+                except ValueError:
+                    return None
+        if isinstance(expr, Identifier):
+            info = self._find_local_var_info(expr.name)
+            if info is not None and info.get("is_final") and "const_value" in info:
+                return info["const_value"]
+            return None
+        if isinstance(expr, CastExpression):
+            tname = getattr(expr.target_type, "name", None)
+            tdims = getattr(expr.target_type, "array_dimensions", 0)
+            inner_val = self._eval_constant_int_literal(expr.expression)
+            if inner_val is None or tdims or getattr(expr, "additional_bounds", None):
+                return None
+            wrap = {"byte": (8, True), "short": (16, True), "char": (16, False), "int": (32, True)}
+            if tname in wrap:
+                bits, signed = wrap[tname]
+                v = inner_val & ((1 << bits) - 1)
+                if signed and v >= (1 << (bits - 1)):
+                    v -= 1 << bits
+                return v
+            return None
+        if isinstance(expr, UnaryOp):
+            inner_val = self._eval_constant_int_literal(expr.operand)
+            if inner_val is None:
+                return None
+            if expr.op == "+":
+                return inner_val
+            if expr.op == "-":
+                return -inner_val
+            if expr.op == "~":
+                return ~inner_val
+        if isinstance(expr, BinaryOp):
+            lv = self._eval_constant_int_literal(expr.left)
+            rv = self._eval_constant_int_literal(expr.right)
+            if lv is not None and rv is not None:
+                try:
+                    if expr.op == "+":
+                        return lv + rv
+                    if expr.op == "-":
+                        return lv - rv
+                    if expr.op == "*":
+                        return lv * rv
+                    if expr.op == "/" and rv != 0:
+                        return int(lv / rv)
+                    if expr.op == "%" and rv != 0:
+                        return int(lv - rv * int(lv / rv))
+                    if expr.op == "&":
+                        return lv & rv
+                    if expr.op == "|":
+                        return lv | rv
+                    if expr.op == "^":
+                        return lv ^ rv
+                    if expr.op == "<<" and 0 <= rv < 32:
+                        return lv << rv
+                    if expr.op == ">>" and 0 <= rv < 32:
+                        return lv >> rv
+                except ArithmeticError:
+                    return None
+        return None
+
+    def _is_constant_narrowing_compatible(self, target_prim: str, expr: Optional[ASTNode]) -> bool:
+        """Verifica se expressão constante int cabe em byte/short/char (JLS §5.2)."""
+        if target_prim not in self.INTEGER_RANGES or expr is None:
+            return False
+        src_t = self.infer_type(expr)
+        if src_t not in ("byte", "short", "char", "int", None):
+            return False
+        const_val = self._eval_constant_int_literal(expr)
+        if const_val is None:
+            return False
+        lo, hi = self.INTEGER_RANGES[target_prim]
+        return lo <= const_val <= hi
+
+    def _is_assignable_expr(self, target_type: Optional[str], expr: Optional[ASTNode]) -> bool:
+        """Verifica compatibilidade de atribuição incluindo boxing, unboxing e narrowing constante."""
+        if not target_type or expr is None:
+            return True
+        if isinstance(expr, (LambdaExpression, MethodReference)):
+            sam, _ = self._resolve_functional_interface(target_type)
+            return sam is not None
+        if isinstance(expr, ConditionalExpression):
+            return self._is_assignable_expr(target_type, expr.then_expr) and self._is_assignable_expr(target_type, expr.else_expr)
+        expr_type = self.infer_type(expr)
+        if expr_type is None:
+            return True
+        if self.is_assignable(target_type, expr_type):
+            return True
+        t_clean = self._strip_leading_type_annotations(target_type)
+        if t_clean in self.INTEGER_RANGES and self._is_constant_narrowing_compatible(t_clean, expr):
+            return True
+        wrapper_to_narrow = {"Byte": "byte", "Short": "short", "Character": "char"}
+        t_base = self._simple_base_name(t_clean) or t_clean
+        if t_base in wrapper_to_narrow and self._is_constant_narrowing_compatible(wrapper_to_narrow[t_base], expr):
+            return True
+        return False
+
+    def _lub_type(self, t1: Optional[str], t2: Optional[str]) -> Optional[str]:
+        """Computa o tipo unificado aproximado para ternário e switch expression (JLS §15.25 / §15.28)."""
+        if not t1:
+            return t2
+        if not t2:
+            return t1
+        if t1 == "var":
+            return t2
+        if t2 == "var":
+            return t1
+        if t1 == t2:
+            return t1
+        if t1 == "null":
+            return "Object" if t2 in self.PRIMITIVE_TYPES else t2
+        if t2 == "null":
+            return "Object" if t1 in self.PRIMITIVE_TYPES else t1
+
+        p1 = self._unbox_type(t1)
+        p2 = self._unbox_type(t2)
+        if p1 in self.NUMERIC_PRIMITIVE_TYPES and p2 in self.NUMERIC_PRIMITIVE_TYPES:
+            if t1 == "boolean" or t2 == "boolean":
+                return "Object"
+            if t1 not in self.PRIMITIVE_TYPES and t2 not in self.PRIMITIVE_TYPES:
+                # Ambos wrappers numéricos (ex: Integer e Double) -> Number
+                return "Number"
+            if {p1, p2} == {"byte", "short"}:
+                return "short"
+            if p1 in ("byte", "short", "char") and p2 == "int":
+                return "int"
+            if p2 in ("byte", "short", "char") and p1 == "int":
+                return "int"
+            return self._binary_numeric_promotion(p1, p2)
+        if p1 == "boolean" and p2 == "boolean":
+            return "boolean" if ("boolean" in (t1, t2)) else "Boolean"
+
+        b1 = self._box_type(t1) if t1 in self.PRIMITIVE_TYPES else t1
+        b2 = self._box_type(t2) if t2 in self.PRIMITIVE_TYPES else t2
+        if self._is_subtype(b1, b2) is True:
+            return b2
+        if self._is_subtype(b2, b1) is True:
+            return b1
+
+        # Busca superclasse comum mais próxima na hierarquia conhecida
+        ancestors1: List[str] = []
+        queue = [b1]
+        seen: Set[str] = set()
+        while queue:
+            cur = queue.pop(0)
+            cs = self._simple_base_name(cur) or ""
+            if cs in seen:
+                continue
+            seen.add(cs)
+            ancestors1.append(cs)
+            supers, _ = self._direct_supertypes(cur)
+            queue.extend(supers)
+        queue2 = [b2]
+        seen2: Set[str] = set()
+        while queue2:
+            cur = queue2.pop(0)
+            cs = self._simple_base_name(cur) or ""
+            if cs in seen2:
+                continue
+            seen2.add(cs)
+            if cs in ancestors1 and cs != "Object":
+                return cs
+            supers, _ = self._direct_supertypes(cur)
+            queue2.extend(supers)
+        return "Object"
+
+    def _substitute_type_vars(self, type_str: Optional[str], mapping: Dict[str, str]) -> Optional[str]:
+        """Substitui parâmetros de tipo genérico (T, E, K, V, R) por seus argumentos concretos."""
+        if not type_str or not mapping:
+            return type_str
+        s, dims = self._strip_type_dims_full(type_str)
+        base, args, _ = self._extract_generic_args(s)
+        if not args:
+            res = mapping.get(base or s, s)
+            return f"{res}{'[]' * dims}" if dims else res
+        new_args = [self._substitute_type_vars(a, mapping) or a for a in args]
+        base_res = mapping.get(base or "", base or "")
+        joined = ", ".join(new_args)
+        res = f"{base_res}<{joined}>"
+        return f"{res}{'[]' * dims}" if dims else res
+
+    def _type_var_mapping_for_type(self, type_str: Optional[str]) -> Dict[str, str]:
+        """Constrói mapeamento parametro_generico -> argumento para um tipo parametrizado."""
+        if not type_str:
+            return {}
+        base, args, _ = self._extract_generic_args(type_str)
+        if not base or not args:
+            return {}
+        simple = self._simple_base_name(base) or base
+        param_names: List[str] = []
+        tdecl = self._lookup_type_decl(simple)
+        if tdecl is not None:
+            _, tnode = tdecl
+            for tp in getattr(tnode, "type_parameters", []) or []:
+                tp_name = getattr(tp, "name", None)
+                if tp_name:
+                    param_names.append(tp_name)
+        elif simple in self.BUILTIN_TYPE_PARAMS:
+            param_names = list(self.BUILTIN_TYPE_PARAMS[simple])
+        return {pname: arg for pname, arg in zip(param_names, args)}
+
+    def _check_lambda_capture_boundaries(self):
+        """Valida ao sair de método/construtor/inicializador se variáveis capturadas foram reatribuídas (JLS §15.27.2)."""
+        reported: Set[int] = set()
+        for var_name, var_info, cap_line in self._pending_lambda_captures:
+            info_id = id(var_info)
+            if info_id in reported:
+                continue
+            if var_info.get("reassigned", False):
+                reported.add(info_id)
+                self.errors.append(
+                    SemanticError(
+                        f"Variável local ou parâmetro '{var_name}' capturado em expressão lambda deve ser 'final' ou efetivamente final (JLS §15.27.2).",
+                        cap_line,
+                    )
+                )
+        self._pending_lambda_captures = []
+
+    def _collect_type_fields(self, type_str: str) -> Tuple[Dict[str, Dict[str, Any]], bool]:
+        """Coleta campos declarados e herdados de um tipo junto com flag de hierarquia fechada."""
+        fields: Dict[str, Dict[str, Any]] = {}
+        visited: Set[str] = set()
+        queue: List[str] = [type_str]
+        fully_known = True
+
+        while queue:
+            cur = queue.pop(0)
+            cur_simple = self._simple_base_name(cur) or ""
+            if not cur_simple or cur_simple in visited or cur_simple.endswith("[]"):
+                continue
+            visited.add(cur_simple)
+            tvar_map = self._type_var_mapping_for_type(cur)
+
+            if cur_simple in self.BUILTIN_FIELDS:
+                for fname, (ftype, is_st, is_fin) in self.BUILTIN_FIELDS[cur_simple].items():
+                    fields.setdefault(
+                        fname,
+                        {"type": self._substitute_type_vars(ftype, tvar_map), "is_static": is_st, "is_final": is_fin, "category": "campo", "owner": cur_simple},
+                    )
+
+            tdecl = self._lookup_type_decl(cur_simple)
+            if tdecl is not None:
+                tkind, tnode = tdecl
+                if tkind == "enum":
+                    for const in getattr(tnode, "constants", []):
+                        if getattr(const, "name", None):
+                            fields.setdefault(
+                                const.name,
+                                {"type": cur_simple, "is_static": True, "is_final": True, "category": "constante_enum", "owner": cur_simple},
+                            )
+                elif tkind == "record":
+                    for comp in getattr(tnode, "components", []):
+                        if getattr(comp, "name", None):
+                            ctype = self._substitute_type_vars(comp.effective_type, tvar_map)
+                            fields.setdefault(
+                                comp.name,
+                                {"type": ctype, "is_static": False, "is_final": True, "category": "componente_record", "owner": cur_simple},
+                            )
+                for member in getattr(tnode, "members", []):
+                    if isinstance(member, FieldDeclaration):
+                        is_ifc_const = (tkind == "interface")
+                        is_st = True if is_ifc_const else ("static" in getattr(member, "modifiers", []))
+                        is_fin = True if is_ifc_const else ("final" in getattr(member, "modifiers", []))
+                        cat = "constante_interface" if is_ifc_const else "campo"
+                        decls = getattr(member, "declarators", None) or []
+                        if decls:
+                            for d in decls:
+                                if getattr(d, "name", None) and d.name != "_":
+                                    ftype = self._substitute_type_vars(d.effective_type, tvar_map)
+                                    fields.setdefault(d.name, {"type": ftype, "is_static": is_st, "is_final": is_fin, "category": cat, "owner": cur_simple})
+                        elif getattr(member, "name", None) and member.name != "_":
+                            raw_t = getattr(member, "effective_type", None) or self._normalize_type_str(getattr(member, "type_ref", None)) or "Object"
+                            ftype = self._substitute_type_vars(raw_t, tvar_map)
+                            fields.setdefault(member.name, {"type": ftype, "is_static": is_st, "is_final": is_fin, "category": cat, "owner": cur_simple})
+            elif cur_simple not in self.BUILTIN_TYPE_SUPERTYPES and cur_simple not in self.KNOWN_EXCEPTION_PARENTS:
+                fully_known = False
+
+            supers, is_ext = self._direct_supertypes(cur)
+            if is_ext:
+                fully_known = False
+            for s in supers:
+                sub_s = self._substitute_type_vars(s, tvar_map) or s
+                queue.append(sub_s)
+
+        return fields, fully_known
+
+    def _extract_method_sig(
+        self,
+        member: MethodDeclaration,
+        owner_name: str,
+        tvar_map: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Extrai assinatura normalizada de um nó MethodDeclaration."""
+        params: List[str] = []
+        is_varargs = False
+        raw_params = list(getattr(member, "parameters", []) or [])
+        for idx, p in enumerate(raw_params):
+            p_is_va = bool(getattr(p, "is_varargs", False))
+            raw_t = getattr(p, "effective_type", None)
+            if not raw_t and getattr(p, "type_ref", None) is not None:
+                raw_t = self._normalize_type_str(p.type_ref)
+            raw_t = raw_t or "Object"
+            if p_is_va and idx == len(raw_params) - 1:
+                is_varargs = True
+                if raw_t.endswith("..."):
+                    raw_t = raw_t[:-3]
+                elif raw_t.endswith("[]"):
+                    raw_t = raw_t[:-2]
+            if tvar_map:
+                raw_t = self._substitute_type_vars(raw_t, tvar_map) or raw_t
+            params.append(raw_t)
+
+        ret_t = getattr(member, "effective_return_type", None) or self._normalize_type_str(getattr(member, "return_type", None)) or "void"
+        if tvar_map:
+            ret_t = self._substitute_type_vars(ret_t, tvar_map) or ret_t
+        tparams = [getattr(tp, "name", "") for tp in (getattr(member, "type_parameters", []) or []) if getattr(tp, "name", "")]
+        return {
+            "params": params,
+            "ret": ret_t,
+            "static": "static" in getattr(member, "modifiers", []),
+            "varargs": is_varargs,
+            "tparams": tparams,
+            "owner": owner_name,
+            "is_abstract": "abstract" in getattr(member, "modifiers", []),
+            "node": member,
+        }
+
+    def _collect_type_methods(self, type_str: str, method_name: str) -> Tuple[List[Dict[str, Any]], bool, bool]:
+        """Coleta assinaturas de método no tipo e em sua hierarquia."""
+        methods: List[Dict[str, Any]] = []
+        seen_sigs: Set[Tuple[Tuple[str, ...], bool]] = set()
+        visited: Set[str] = set()
+        queue: List[str] = [type_str]
+        fully_known = True
+        is_declared = False
+
+        root_simple = self._simple_base_name(type_str) or ""
+        if self._lookup_type_decl(root_simple) is not None:
+            is_declared = True
+
+        # Arrays herdam apenas métodos de Object (e clone)
+        _, root_dims = self._strip_type_dims_full(type_str)
+        if root_dims > 0:
+            queue = ["Object"]
+
+        while queue:
+            cur = queue.pop(0)
+            cur_simple = self._simple_base_name(cur) or ""
+            if not cur_simple or cur_simple in visited:
+                continue
+            visited.add(cur_simple)
+            tvar_map = self._type_var_mapping_for_type(cur)
+
+            tdecl = self._lookup_type_decl(cur_simple)
+            if tdecl is not None:
+                tkind, tnode = tdecl
+                if tkind == "record":
+                    for comp in getattr(tnode, "components", []):
+                        if comp.name == method_name:
+                            ret = self._substitute_type_vars(comp.effective_type.replace("...", "[]"), tvar_map)
+                            key = ((), False)
+                            if key not in seen_sigs:
+                                seen_sigs.add(key)
+                                methods.append({"params": [], "ret": ret, "static": False, "varargs": False, "tparams": [], "owner": cur_simple})
+                elif tkind == "enum":
+                    if method_name == "values":
+                        key = ((), False)
+                        if key not in seen_sigs:
+                            seen_sigs.add(key)
+                            methods.append({"params": [], "ret": f"{cur_simple}[]", "static": True, "varargs": False, "tparams": [], "owner": cur_simple})
+                    elif method_name == "valueOf":
+                        key = (("String",), False)
+                        if key not in seen_sigs:
+                            seen_sigs.add(key)
+                            methods.append({"params": ["String"], "ret": cur_simple, "static": True, "varargs": False, "tparams": [], "owner": cur_simple})
+
+                for member in getattr(tnode, "members", []):
+                    if isinstance(member, MethodDeclaration) and member.name == method_name:
+                        sig = self._extract_method_sig(member, cur_simple, tvar_map)
+                        key = (tuple(sig["params"]), sig["varargs"])
+                        if key not in seen_sigs:
+                            seen_sigs.add(key)
+                            methods.append(sig)
+            elif cur_simple in self.BUILTIN_METHODS:
+                for bsig in self.BUILTIN_METHODS[cur_simple].get(method_name, []):
+                    bparams = []
+                    for bp in bsig["params"]:
+                        clean_p = bp[:-3] if bp.endswith("...") else bp
+                        bparams.append(self._substitute_type_vars(clean_p, tvar_map) or clean_p)
+                    bret = self._substitute_type_vars(bsig["ret"], tvar_map) or bsig["ret"]
+                    key = (tuple(bparams), bsig["varargs"])
+                    if key not in seen_sigs:
+                        seen_sigs.add(key)
+                        methods.append({
+                            "params": bparams,
+                            "ret": bret,
+                            "static": bsig["static"],
+                            "varargs": bsig["varargs"],
+                            "tparams": list(bsig.get("tparams", [])),
+                            "owner": cur_simple,
+                        })
+            elif cur_simple not in self.BUILTIN_TYPE_SUPERTYPES and cur_simple not in self.KNOWN_EXCEPTION_PARENTS:
+                fully_known = False
+
+            supers, is_ext = self._direct_supertypes(cur)
+            if is_ext:
+                fully_known = False
+            for s in supers:
+                sub_s = self._substitute_type_vars(s, tvar_map) or s
+                queue.append(sub_s)
+
+        return methods, fully_known, is_declared
+
+    def _collect_type_constructors(self, type_str: str) -> Tuple[List[Dict[str, Any]], bool, Optional[str]]:
+        """Coleta assinaturas de construtor de uma classe/record ou tipo embutido."""
+        simple = self._simple_base_name(type_str) or ""
+        tvar_map = self._type_var_mapping_for_type(type_str)
+        ctors: List[Dict[str, Any]] = []
+        tdecl = self._lookup_type_decl(simple)
+        if tdecl is not None:
+            tkind, tnode = tdecl
+            if tkind == "enum":
+                return [], True, "enum"
+            declared_ctors = [
+                m for m in getattr(tnode, "members", [])
+                if isinstance(m, (ConstructorDeclaration, CompactConstructorDeclaration, NormalCanonicalConstructor))
+            ]
+            if declared_ctors:
+                for cm in declared_ctors:
+                    if isinstance(cm, CompactConstructorDeclaration):
+                        cparams = [
+                            self._substitute_type_vars(c.effective_type.replace("...", "[]"), tvar_map) or c.effective_type
+                            for c in getattr(tnode, "components", [])
+                        ]
+                        ctors.append({"params": cparams, "ret": type_str, "static": False, "varargs": False, "tparams": [], "owner": simple})
+                    else:
+                        sig = self._extract_method_sig(cm, simple, tvar_map)
+                        sig["ret"] = type_str
+                        ctors.append(sig)
+            elif tkind == "record":
+                cparams = [
+                    self._substitute_type_vars(c.effective_type.replace("...", "[]"), tvar_map) or c.effective_type
+                    for c in getattr(tnode, "components", [])
+                ]
+                ctors.append({"params": cparams, "ret": type_str, "static": False, "varargs": False, "tparams": [], "owner": simple})
+            elif tkind == "interface":
+                return [], True, "interface"
+            else:
+                # Classe sem construtores explícitos possui construtor padrão sem parâmetros (JLS §8.8.9)
+                ctors.append({"params": [], "ret": type_str, "static": False, "varargs": False, "tparams": [], "owner": simple})
+            return ctors, True, tkind
+
+        if simple in self.BUILTIN_CONSTRUCTORS:
+            for plist in self.BUILTIN_CONSTRUCTORS[simple]:
+                ctors.append({"params": list(plist), "ret": type_str, "static": False, "varargs": False, "tparams": [], "owner": simple})
+            return ctors, True, "class"
+        if simple in self.BUILTIN_INTERFACE_TYPES:
+            return [], True, "interface"
+        if simple in self.KNOWN_EXCEPTION_PARENTS or simple in self.BUILTIN_CLASS_TYPES:
+            ctors.append({"params": [], "ret": type_str, "static": False, "varargs": False, "tparams": [], "owner": simple})
+            ctors.append({"params": ["String"], "ret": type_str, "static": False, "varargs": False, "tparams": [], "owner": simple})
+            return ctors, True, "class"
+        return [], False, None
+
+    def _check_functional_interface_annotation(self, type_node: ASTNode, is_interface: bool = False) -> None:
+        """Valida uso de @FunctionalInterface segundo JLS §9.6.4.9."""
+        annos = getattr(type_node, "annotations", []) or []
+        has_fi = any(
+            isinstance(a, Annotation) and a.name.split(".")[-1] == "FunctionalInterface"
+            for a in annos
+        )
+        if not has_fi:
+            return
+        name = getattr(type_node, "name", "<tipo>")
+        line = getattr(type_node, "line", 1)
+        if not is_interface:
+            self.errors.append(
+                SemanticError(
+                    f"'{name}' não é uma interface; @FunctionalInterface só pode anotar interfaces funcionais (JLS §9.6.4.9).",
+                    line,
+                )
+            )
+            return
+        sam, _ = self._resolve_functional_interface(name)
+        if sam is None:
+            self.errors.append(
+                SemanticError(
+                    f"Interface '{name}' anotada com @FunctionalInterface não é uma interface funcional válida (JLS §9.6.4.9).",
+                    line,
+                )
+            )
+
+    def _is_object_public_method_sig(self, name: str, sig: Dict[str, Any]) -> bool:
+        """Verifica se a assinatura corresponde a método público de java.lang.Object (JLS §9.8)."""
+        params = sig.get("params", [])
+        ret = sig.get("ret", "")
+        ret_simple = self._simple_base_name(ret) or ret
+        if name == "toString" and len(params) == 0 and ret_simple == "String":
+            return True
+        if name == "hashCode" and len(params) == 0 and ret_simple == "int":
+            return True
+        if name == "equals" and len(params) == 1 and ret_simple == "boolean":
+            p0 = self._simple_base_name(params[0]) or params[0]
+            if p0 == "Object":
+                return True
+        return False
+
+    def _resolve_functional_interface(self, target_type: Optional[str]) -> Tuple[Optional[Tuple[List[str], str]], bool]:
+        """Resolve a assinatura do método abstrato único (SAM) de uma interface funcional."""
+        if not target_type:
+            return None, False
+        clean = self._strip_leading_type_annotations(target_type)
+        simple = self._simple_base_name(clean)
+        if not simple or simple.endswith("[]") or simple in self.PRIMITIVE_TYPES:
+            return None, False
+
+        tvar_map = self._type_var_mapping_for_type(clean)
+        if simple in self.BUILTIN_FUNCTIONAL_INTERFACES:
+            raw_params, raw_ret, tparams = self.BUILTIN_FUNCTIONAL_INTERFACES[simple]
+            # Se target foi raw type (ex: Function sem <T,R>), substitui type vars por Object
+            eff_map = dict(tvar_map)
+            for tp in tparams:
+                eff_map.setdefault(tp, "Object")
+            resolved_params = [self._substitute_type_vars(p, eff_map) or p for p in raw_params]
+            resolved_ret = self._substitute_type_vars(raw_ret, eff_map) or raw_ret
+            return (resolved_params, resolved_ret), True
+
+        tdecl = self._lookup_type_decl(simple)
+        if tdecl is not None:
+            tkind, tnode = tdecl
+            if tkind != "interface":
+                return None, True
+            eff_map = dict(tvar_map)
+            for tp in (getattr(tnode, "type_parameters", []) or []):
+                tp_name = getattr(tp, "name", None)
+                if tp_name:
+                    eff_map.setdefault(tp_name, "Object")
+            abstract_methods: List[Dict[str, Any]] = []
+            concrete_default_keys: Set[Tuple[str, Tuple[str, ...]]] = set()
+            seen_abstract_sigs: Set[Tuple[str, Tuple[str, ...], str]] = set()
+            # Verifica métodos abstratos declarados na interface e herdadas
+            visited: Set[str] = set()
+            queue: List[str] = [clean]
+            while queue:
+                cur = queue.pop(0)
+                cs = self._simple_base_name(cur) or ""
+                if not cs or cs in visited:
+                    continue
+                visited.add(cs)
+                cdecl = self._lookup_type_decl(cs)
+                cmap = self._type_var_mapping_for_type(cur)
+                if cdecl is not None and cdecl[0] == "interface":
+                    for tp in (getattr(cdecl[1], "type_parameters", []) or []):
+                        tp_name = getattr(tp, "name", None)
+                        if tp_name:
+                            cmap.setdefault(tp_name, eff_map.get(tp_name, "Object"))
+                    for member in getattr(cdecl[1], "members", []):
+                        if isinstance(member, MethodDeclaration):
+                            mods = getattr(member, "modifiers", [])
+                            if "static" in mods or "private" in mods:
+                                continue
+                            sig = self._extract_method_sig(member, cs, cmap)
+                            if "default" in mods:
+                                concrete_default_keys.add((member.name, tuple(sig["params"])))
+                                continue
+                            # Métodos públicos de Object não contam como SAM (JLS §9.8)
+                            if self._is_object_public_method_sig(member.name, sig):
+                                continue
+                            if member.body is None or "abstract" in mods:
+                                key = (member.name, tuple(sig["params"]))
+                                if key in concrete_default_keys:
+                                    continue
+                                full_key = (member.name, tuple(sig["params"]), sig["ret"])
+                                if full_key not in seen_abstract_sigs:
+                                    seen_abstract_sigs.add(full_key)
+                                    abstract_methods.append(sig)
+                    for ext in getattr(cdecl[1], "extends_types", []):
+                        queue.append(self._substitute_type_vars(self._normalize_type_str(ext), cmap) or "")
+            if len(abstract_methods) == 1:
+                sam = abstract_methods[0]
+                return (sam["params"], sam["ret"]), True
+            return None, True
+
+        return None, False
+
+    def _is_poly_compatible_with_param(self, expr: ASTNode, param_type: str) -> bool:
+        """Verifica rapidamente compatibilidade estrutural de poly expression com interface funcional."""
+        sam, is_known = self._resolve_functional_interface(param_type)
+        if sam is None:
+            return not is_known and self._simple_base_name(param_type) not in self.PRIMITIVE_TYPES
+        sam_params, _ = sam
+        if isinstance(expr, LambdaExpression):
+            return len(expr.parameters) == len(sam_params)
+        if isinstance(expr, MethodReference):
+            return True
+        if isinstance(expr, ConditionalExpression):
+            return self._is_poly_compatible_with_param(expr.then_expr, param_type) and self._is_poly_compatible_with_param(expr.else_expr, param_type)
+        return True
+
+    def _score_param_match(
+        self,
+        param_type: str,
+        arg_expr: Optional[ASTNode],
+        arg_type: Optional[str],
+        phase: int,
+    ) -> Optional[int]:
+        """Pontua compatibilidade entre argumento e parâmetro formal na fase JLS §15.12.2 dada."""
+        if isinstance(arg_expr, (LambdaExpression, MethodReference)):
+            return 1 if self._is_poly_compatible_with_param(arg_expr, param_type) else None
+        if arg_type is None or param_type in ("var", "desconhecido") or arg_type in ("var", "desconhecido"):
+            return 2
+
+        p_clean = self._strip_leading_type_annotations(param_type) or param_type
+        a_clean = self._strip_leading_type_annotations(arg_type) or arg_type
+        p_simple = self._simple_base_name(p_clean) or p_clean
+        a_simple = self._simple_base_name(a_clean) or a_clean
+
+        if p_simple == a_simple:
+            if p_clean == a_clean:
+                return 0
+            compat = self._generic_args_compatible(a_clean, p_clean)
+            return 0 if compat is not False else None
+
+        if self._is_type_variable(p_simple) or self._is_type_variable(a_simple):
+            return 1
+
+        if a_simple == "null":
+            return 1 if p_simple not in self.PRIMITIVE_TYPES else None
+
+        p_is_prim = p_simple in self.PRIMITIVE_TYPES
+        a_is_prim = a_simple in self.PRIMITIVE_TYPES
+
+        if phase == 1:
+            # Fase 1 (Strict Invocation): apenas identidade, primitive widening ou subtipagem de referência
+            if p_is_prim and a_is_prim:
+                if p_simple in self.WIDENING_PRIMITIVE_TARGETS.get(a_simple, set()):
+                    return 1
+                return None
+            if (not p_is_prim) and (not a_is_prim):
+                sub = self._is_subtype(a_clean, p_clean)
+                if sub is True:
+                    return 1
+                if sub is None and not self._is_known_type(p_clean) and not self._is_known_type(a_clean):
+                    return 2
+                return None
+            return None
+
+        # Fase 2 / 3 (Loose / Varargs): permite boxing, unboxing e boxing + widening
+        if p_is_prim and a_is_prim:
+            if p_simple in self.WIDENING_PRIMITIVE_TARGETS.get(a_simple, set()):
+                return 1
+            return None
+        if p_is_prim and not a_is_prim:
+            a_unboxed = self.WRAPPER_TO_PRIMITIVE.get(a_simple)
+            if a_unboxed == p_simple:
+                return 2
+            if a_unboxed and p_simple in self.WIDENING_PRIMITIVE_TARGETS.get(a_unboxed, set()):
+                return 2
+            return None
+        if not p_is_prim and a_is_prim:
+            boxed = self.PRIMITIVE_TO_WRAPPER.get(a_simple)
+            if boxed:
+                if boxed == p_simple or p_simple == "Object" or self._is_subtype(boxed, p_clean) is True:
+                    return 2
+            return None
+
+        sub = self._is_subtype(a_clean, p_clean)
+        if sub is True:
+            return 1
+        if sub is None and (not self._is_known_type(p_clean) or not self._is_known_type(a_clean)):
+            return 2
+        return None
+
+    def _infer_method_type_vars(
+        self,
+        sig: Dict[str, Any],
+        arg_types: List[Optional[str]],
+        expected_return: Optional[str] = None,
+        explicit_targs: Optional[List[str]] = None,
+    ) -> Dict[str, str]:
+        """Infere mapa de argumentos de tipo para métodos genéricos e diamond operator."""
+        tparams = list(sig.get("tparams", []) or [])
+        mapping: Dict[str, str] = {}
+        if not tparams:
+            return mapping
+        if explicit_targs:
+            for tp, ta in zip(tparams, explicit_targs):
+                mapping[tp] = ta
+            return mapping
+
+        def bind_pattern(pat: str, concrete: Optional[str]):
+            if not pat or not concrete or concrete == "null":
+                return
+            pat_s, p_dims = self._strip_type_dims_full(pat)
+            con_s, c_dims = self._strip_type_dims_full(concrete)
+            if pat_s in tparams and p_dims == c_dims:
+                if p_dims > 0:
+                    mapping.setdefault(pat_s, con_s)
+                else:
+                    mapping.setdefault(pat_s, self._box_type(concrete) or concrete)
+                return
+            if pat_s in tparams and p_dims == 0:
+                mapping.setdefault(pat_s, self._box_type(concrete) or concrete)
+                return
+            p_base, p_args, _ = self._extract_generic_args(pat_s)
+            c_base, c_args, _ = self._extract_generic_args(con_s)
+            if p_args and c_args and len(p_args) == len(c_args):
+                for pa, ca in zip(p_args, c_args):
+                    bind_pattern(pa, ca)
+
+        for p, a_t in zip(sig["params"], arg_types):
+            bind_pattern(p, a_t)
+        if expected_return and sig.get("ret"):
+            bind_pattern(sig["ret"], expected_return)
+        for tp in tparams:
+            mapping.setdefault(tp, "Object")
+        return mapping
+
+    def _is_sig_more_specific(self, s1: Dict[str, Any], s2: Dict[str, Any]) -> bool:
+        """Determina se assinatura s1 é estritamente mais específica que s2 (JLS §15.12.2.5)."""
+        p1 = s1["params"]
+        p2 = s2["params"]
+        if len(p1) != len(p2):
+            return False
+        better_in_at_least_one = False
+        for t1, t2 in zip(p1, p2):
+            if t1 == t2:
+                continue
+            if t1 in self.PRIMITIVE_TYPES and t2 in self.PRIMITIVE_TYPES:
+                if t2 in self.WIDENING_PRIMITIVE_TARGETS.get(t1, set()):
+                    better_in_at_least_one = True
+                    continue
+                return False
+            if t1 not in self.PRIMITIVE_TYPES and t2 not in self.PRIMITIVE_TYPES:
+                if self._is_subtype(t1, t2) is True:
+                    better_in_at_least_one = True
+                    continue
+                return False
+            return False
+        return better_in_at_least_one
+
+    def _resolve_overload(
+        self,
+        candidates: List[Dict[str, Any]],
+        args: List[ASTNode],
+        line: int,
+        call_desc: str,
+        expected_return: Optional[str] = None,
+        explicit_targs: Optional[List[str]] = None,
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[str], Optional[Dict[str, str]]]:
+        """Executa resolução de sobrecarga em 3 fases (JLS §15.12.2): estrita, boxing e varargs."""
+        if not candidates:
+            return None, None, None
+
+        # Pré-infere tipos de argumentos não-poly para pontuação inicial
+        arg_types: List[Optional[str]] = []
+        for a in args:
+            if isinstance(a, (LambdaExpression, MethodReference)):
+                arg_types.append(None)
+            else:
+                arg_types.append(self.infer_type(a))
+
+        nargs = len(args)
+
+        def match_candidate(sig: Dict[str, Any], phase: int) -> Optional[Tuple[int, Dict[str, str]]]:
+            tmap = self._infer_method_type_vars(sig, arg_types, expected_return, explicit_targs)
+            eff_params = [self._substitute_type_vars(p, tmap) or p for p in sig["params"]]
+            is_va = sig.get("varargs", False)
+            if phase < 3:
+                if is_va and len(eff_params) != nargs:
+                    return None
+                if not is_va and len(eff_params) != nargs:
+                    return None
+                total = 0
+                for idx, (pt, a_node, a_t) in enumerate(zip(eff_params, args, arg_types)):
+                    if is_va and idx == len(eff_params) - 1:
+                        # Na fase 1/2, parâmetro varargs também pode casar como array direto
+                        sc_arr = self._score_param_match(f"{pt}[]", a_node, a_t, phase)
+                        sc_el = self._score_param_match(pt, a_node, a_t, phase)
+                        sc = sc_arr if sc_arr is not None else sc_el
+                    else:
+                        sc = self._score_param_match(pt, a_node, a_t, phase)
+                    if sc is None:
+                        return None
+                    total += sc
+                return total, tmap
+            else:
+                if not is_va or nargs < len(eff_params) - 1:
+                    return None
+                fixed = eff_params[:-1]
+                va_elem = eff_params[-1]
+                total = 0
+                for pt, a_node, a_t in zip(fixed, args[:len(fixed)], arg_types[:len(fixed)]):
+                    sc = self._score_param_match(pt, a_node, a_t, 2)
+                    if sc is None:
+                        return None
+                    total += sc
+                tail = list(zip(args[len(fixed):], arg_types[len(fixed):]))
+                if len(tail) == 1:
+                    a_node, a_t = tail[0]
+                    sc_arr = self._score_param_match(f"{va_elem}[]", a_node, a_t, 2)
+                    if sc_arr is not None:
+                        return total + sc_arr + 3, tmap
+                for a_node, a_t in tail:
+                    sc = self._score_param_match(va_elem, a_node, a_t, 2)
+                    if sc is None:
+                        return None
+                    total += sc + 3
+                return total, tmap
+
+        for phase in (1, 2, 3):
+            applicable: List[Tuple[Dict[str, Any], int, Dict[str, str]]] = []
+            for sig in candidates:
+                m = match_candidate(sig, phase)
+                if m is not None:
+                    applicable.append((sig, m[0], m[1]))
+            if not applicable:
+                continue
+
+            if len(applicable) == 1:
+                win_sig, _, win_map = applicable[0]
+                eff_ret = self._substitute_type_vars(win_sig["ret"], win_map) or win_sig["ret"]
+                return win_sig, eff_ret, {k: self._substitute_type_vars(p, win_map) or p for k, p in enumerate(win_sig["params"])}
+
+            # Escolha da sobrecarga maximalmente específica (JLS §15.12.2.5)
+            best_candidates: List[Tuple[Dict[str, Any], int, Dict[str, str]]] = []
+            for cand in applicable:
+                dominated = False
+                for other in applicable:
+                    if other[0] is cand[0]:
+                        continue
+                    if self._is_sig_more_specific(other[0], cand[0]):
+                        dominated = True
+                        break
+                if not dominated:
+                    best_candidates.append(cand)
+
+            if len(best_candidates) > 1:
+                min_score = min(c[1] for c in best_candidates)
+                best_scored = [c for c in best_candidates if c[1] == min_score]
+                if len(best_scored) > 1:
+                    self.errors.append(
+                        SemanticError(
+                            f"Invocação ambígua em '{call_desc}': múltiplos métodos sobrecarregados são igualmente aplicáveis (JLS §15.12.2.5).",
+                            line,
+                        )
+                    )
+                    win_sig, _, win_map = best_scored[0]
+                    eff_ret = self._substitute_type_vars(win_sig["ret"], win_map) or win_sig["ret"]
+                    return win_sig, eff_ret, {k: self._substitute_type_vars(p, win_map) or p for k, p in enumerate(win_sig["params"])}
+                best_candidates = best_scored
+
+            win_sig, _, win_map = best_candidates[0]
+            eff_ret = self._substitute_type_vars(win_sig["ret"], win_map) or win_sig["ret"]
+            return win_sig, eff_ret, {k: self._substitute_type_vars(p, win_map) or p for k, p in enumerate(win_sig["params"])}
+
+        # Nenhuma sobrecarga compatível encontrada
+        if candidates and not any(self._is_type_variable(a) for a in arg_types if a):
+            self.errors.append(
+                SemanticError(
+                    f"Nenhuma sobrecarga aplicável encontrada para '{call_desc}' com {nargs} argumento(s) (JLS §15.12.2).",
+                    line,
+                )
+            )
+        return None, None, None
+
+    def _record_lambda_capture(self, name: str, line: int) -> None:
+        """Registra acesso ou tentativa de modificação de variável local/parâmetro por expressão lambda (JLS §15.27.2)."""
+        if self._lambda_scope_floor_stack:
+            floor = self._lambda_scope_floor_stack[-1]
+            shadowed = any(name in sc for sc in self._local_var_scopes[floor:])
+            if not shadowed:
+                for sc in reversed(self._local_var_scopes[:floor]):
+                    if name in sc:
+                        self._pending_lambda_captures.append((name, sc[name], line))
+                        break
+
+    def _is_modifiable_lvalue(self, target_node: Optional[ASTNode], target_name: Optional[str], line: int, op_desc: str) -> Tuple[bool, Optional[str]]:
+        """Verifica se operando/alvo de atribuição ou incremento é uma variável modificável (JLS §15.14 / §15.26)."""
+        if target_node is not None and not isinstance(target_node, Identifier):
+            if isinstance(target_node, MemberAccess):
+                self._check_expression_flow(target_node)
+                t_type = self._infer_member_access_receiver_type(target_node)
+                if t_type and t_type.endswith("[]") and target_node.member_name == "length":
+                    self.errors.append(
+                        SemanticError(f"Não é possível modificar o campo 'final' 'length' de um array em {op_desc} (JLS §10.7).", line)
+                    )
+                    return False, "int"
+                if t_type:
+                    fields, is_known = self._collect_type_fields(t_type)
+                    finfo = fields.get(target_node.member_name)
+                    if finfo is not None:
+                        is_ctor_this_init = (
+                            isinstance(target_node.target, Identifier)
+                            and target_node.target.name == "this"
+                            and self._callable_kind in ("constructor", "initializer")
+                            and finfo.get("category") in ("campo", "componente_record")
+                        )
+                        if (finfo.get("is_final") or finfo.get("category") in ("constante_interface", "constante_enum", "componente_record")) and not is_ctor_this_init:
+                            self.errors.append(
+                                SemanticError(f"Não é possível modificar membro 'final' '{target_node.member_name}' em {op_desc}.", line)
+                            )
+                            return False, finfo.get("type")
+                        return True, finfo.get("type")
+                    if is_known:
+                        self.errors.append(
+                            SemanticError(f"Campo '{target_node.member_name}' não existe no tipo '{t_type}'.", line)
+                        )
+                        return False, None
+                return True, self.infer_type(target_node)
+            if isinstance(target_node, ArrayAccess):
+                self._check_expression_flow(target_node)
+                return True, self.infer_type(target_node)
+            self._check_expression_flow(target_node)
+            self.errors.append(
+                SemanticError(f"O alvo de {op_desc} deve ser uma variável modificável (JLS §15.26).", line)
+            )
+            return False, None
+
+        name = target_node.name if isinstance(target_node, Identifier) else target_name
+        if not name:
+            self.errors.append(SemanticError(f"O alvo de {op_desc} deve ser uma variável modificável.", line))
+            return False, None
+        if name in ("this", "super") or name.startswith(("this.", "super.")):
+            self._check_early_target_ref(name, line)
+            return True, None
+        if "." in name:
+            return True, None
+
+        symbol = self._lookup_var_symbol(name)
+        if self._in_early_construction_context and symbol is not None and symbol.get("category") == "campo" and not symbol.get("is_static", False):
+            self.errors.append(
+                SemanticError(f"Acesso inválido ao campo de instância '{name}' antes da invocação explícita do construtor (early construction context — JLS §8.8.7 / JEP 513).", line)
+            )
+        if symbol is not None and symbol.get("category") in ("constante_interface", "constante_enum", "componente_record"):
+            self.errors.append(
+                SemanticError(f"Não é possível modificar '{name}' ({symbol.get('category')} é implicitamente final).", line)
+            )
+            return False, symbol.get("type")
+        if symbol is None or symbol.get("category") not in ("variavel", "parametro", "campo"):
+            self.errors.append(SemanticError(f"Variável '{name}' não foi declarada.", line))
+            return False, None
+        local_info = self._find_local_var_info(name)
+        if local_info is not None:
+            if local_info.get("is_final", False) and local_info.get("has_initializer", True):
+                self.errors.append(SemanticError(f"Não é possível modificar a variável 'final' '{name}'.", line))
+                return False, symbol.get("type")
+            self._record_lambda_capture(name, line)
+            self._mark_local_var_reassigned(name)
+        elif symbol.get("is_final", False) and symbol.get("category") == "campo":
+            # Permite atribuição a campo final apenas dentro de construtores ou inicializadores de instância/estático
+            if self._callable_kind not in ("constructor", "initializer"):
+                self.errors.append(SemanticError(f"Não é possível atribuir valor ao campo 'final' '{name}'.", line))
+                return False, symbol.get("type")
+        return True, symbol.get("type")
+
+    def _check_cast(self, node: CastExpression):
+        """Valida expressão de cast simples ou interseção de tipos segundo JLS §5.5."""
+        line = getattr(node, "line", 1)
+        tref = getattr(node, "target_type", None)
+        self._check_type_ref_annotations(tref)
+        bounds = list(getattr(node, "additional_bounds", []) or [])
+        for b in bounds:
+            self._check_type_ref_annotations(b)
+
+        target_str = self._normalize_type_str(tref) or ""
+        if target_str == "void":
+            self.errors.append(SemanticError("Tipo 'void' não é permitido em expressão de cast (JLS §15.16).", line))
+            self._check_expression_flow(node.expression)
+            return
+
+        if bounds:
+            first_base = self._simple_base_name(target_str) or ""
+            if first_base in self.PRIMITIVE_TYPES:
+                self.errors.append(
+                    SemanticError("Cast de interseção '(T & ...)' não pode incluir tipos primitivos (JLS §4.4 / §15.16).", line)
+                )
+            for b in bounds:
+                b_str = self._normalize_type_str(b) or ""
+                b_kind = self._is_class_kind(b_str)
+                if b_kind is True:
+                    self.errors.append(
+                        SemanticError(f"Limite adicional '{b_str}' em cast de interseção deve ser uma interface (JLS §4.4 / §15.16).", line)
+                    )
+
+        # Propaga target typing do cast quando expressão interna é lambda/method reference
+        if isinstance(node.expression, (LambdaExpression, MethodReference, SwitchExpression, ConditionalExpression)) and target_str:
+            self._check_expression_with_target(node.expression, target_str)
+            return
+
+        self._check_expression_flow(node.expression)
+        src_str = self.infer_type(node.expression)
+        if not target_str or not src_str or src_str == "desconhecido":
+            return
+
+        types_to_check = [target_str] + [self._normalize_type_str(b) or "" for b in bounds if self._normalize_type_str(b)]
+        for t in types_to_check:
+            ok, err_msg = self._is_single_cast_valid(t, src_str)
+            if not ok:
+                self.errors.append(SemanticError(err_msg or f"Cast inválido de '{src_str}' para '{t}' (JLS §5.5).", line))
+                break
+
+    def _are_generic_cast_args_compatible(self, src_str: str, target_str: str) -> bool:
+        """Verifica se dois tipos parametrizados da mesma base são compatíveis para cast (JLS §5.5.1)."""
+        _, s_args, s_dims = self._extract_generic_args(src_str)
+        _, t_args, t_dims = self._extract_generic_args(target_str)
+        if s_dims != t_dims:
+            return False
+        if not s_args or not t_args:
+            return True
+        if len(s_args) != len(t_args):
+            return False
+        for sa, ta in zip(s_args, t_args):
+            sa_s = sa.strip()
+            ta_s = ta.strip()
+            if sa_s == ta_s or sa_s == "?" or ta_s == "?":
+                continue
+            sa_simple = self._simple_base_name(sa_s) or sa_s
+            ta_simple = self._simple_base_name(ta_s) or ta_s
+            if self._is_type_variable(sa_simple) or self._is_type_variable(ta_simple):
+                continue
+            if sa_s.startswith(("? extends ", "? super ")) or ta_s.startswith(("? extends ", "? super ")):
+                s_bound = sa_s.split(" ", 2)[-1].strip() if sa_s.startswith("? ") else sa_s
+                t_bound = ta_s.split(" ", 2)[-1].strip() if ta_s.startswith("? ") else ta_s
+                if sa_s.startswith("? extends ") and not ta_s.startswith("? "):
+                    if self._is_subtype(t_bound, s_bound) is False and self._are_types_disjoint(t_bound, s_bound) is True:
+                        return False
+                elif ta_s.startswith("? extends ") and not sa_s.startswith("? "):
+                    if self._is_subtype(s_bound, t_bound) is False and self._are_types_disjoint(s_bound, t_bound) is True:
+                        return False
+                continue
+            if sa_simple != ta_simple:
+                return False
+            if not self._are_generic_cast_args_compatible(sa_s, ta_s):
+                return False
+        return True
+
+    def _is_single_cast_valid(self, target_str: str, src_str: str) -> Tuple[bool, Optional[str]]:
+        """Verifica validade de conversão por cast entre um par (source -> target) conforme JLS §5.5."""
+        t_clean = self._strip_leading_type_annotations(target_str) or target_str
+        s_clean = self._strip_leading_type_annotations(src_str) or src_str
+        t_simple = self._simple_base_name(t_clean) or t_clean
+        s_simple = self._simple_base_name(s_clean) or s_clean
+
+        if self._is_type_variable(t_simple) or self._is_type_variable(s_simple):
+            return True, None
+        if t_simple == s_simple:
+            if not self._are_generic_cast_args_compatible(s_clean, t_clean):
+                return False, f"Tipos incompatíveis em cast: '{s_clean}' não pode ser convertido para '{t_clean}' (JLS §5.5.1)."
+            return True, None
+
+        t_prim = t_simple in self.PRIMITIVE_TYPES
+        s_prim = s_simple in self.PRIMITIVE_TYPES
+
+        if t_prim and s_prim:
+            if t_simple == "boolean" or s_simple == "boolean":
+                return False, f"Conversão de cast inválida: não é possível converter '{s_clean}' para '{t_clean}' (JLS §5.5)."
+            return True, None
+
+        if s_prim and not t_prim:
+            # Primitivo -> Referência: apenas boxing seguido de widening para supertipo do wrapper (ex: int -> Integer/Number/Object)
+            boxed = self.PRIMITIVE_TO_WRAPPER.get(s_simple)
+            if not boxed:
+                return False, f"Conversão de cast inválida de '{s_clean}' para '{t_clean}' (JLS §5.5)."
+            if t_simple == boxed or self._is_subtype(boxed, t_clean) is True:
+                return True, None
+            return False, f"Conversão de cast inválida de '{s_clean}' para '{t_clean}': primitivo não pode ser convertido para esse tipo de referência (JLS §5.5)."
+
+        if not s_prim and t_prim:
+            # Referência -> Primitivo: Object ou supertipo compatível (ex: Number/Integer -> int, Object -> boolean), mas String -> int é proibido
+            if s_simple == "null":
+                return False, f"Não é possível converter literal 'null' para o tipo primitivo '{t_clean}' (JLS §5.5)."
+            unboxed = self.WRAPPER_TO_PRIMITIVE.get(s_simple)
+            if unboxed is not None:
+                if unboxed == t_simple:
+                    return True, None
+                if t_simple != "boolean" and unboxed != "boolean":
+                    # Java não permite cast direto de Double para int se Double é final e não unboxing+widening para outro wrapper sem primitivo?
+                    # JLS §5.5 permite referência -> primitivo via unboxing + widening opcional (ex: Integer -> long OK, mas Double -> int NÃO pois narrowing primitivo não segue unboxing!)
+                    if t_simple in self.WIDENING_PRIMITIVE_TARGETS.get(unboxed, set()):
+                        return True, None
+                return False, f"Conversão de cast inválida de '{s_clean}' para '{t_clean}' (JLS §5.5)."
+            boxed_target = self.PRIMITIVE_TO_WRAPPER.get(t_simple)
+            if boxed_target and (self._is_subtype(boxed_target, s_clean) is True or self._is_subtype(s_clean, boxed_target) is True):
+                return True, None
+            if not self._is_known_type(s_clean):
+                return True, None
+            return False, f"Tipos incompatíveis em cast: '{s_clean}' não pode ser convertido para '{t_clean}' (JLS §5.5)."
+
+        # Referência -> Referência
+        if s_simple == "null":
+            return True, None
+        if self._are_types_disjoint(s_clean, t_clean) is True:
+            return False, f"Tipos incompatíveis em cast: '{s_clean}' não pode ser convertido para '{t_clean}' (JLS §5.5)."
+        return True, None
+
+    def _infer_member_access_receiver_type(self, node: MemberAccess) -> Optional[str]:
+        """Resolve o tipo do alvo de um MemberAccess (incluindo identificador de classe estático)."""
+        if isinstance(node.target, Identifier):
+            sym = self._lookup_var_symbol(node.target.name)
+            if sym is not None and "type" in sym:
+                return sym["type"]
+            if self._is_known_type(node.target.name):
+                return node.target.name
+            if node.target.name == "this":
+                return self._current_enclosing_type()
+            if node.target.name == "super":
+                cur = self._current_enclosing_type()
+                if cur:
+                    supers, _ = self._direct_supertypes(cur)
+                    return supers[0] if supers else "Object"
+        return self.infer_type(node.target)
+
+    def _check_lambda_with_target(self, node: LambdaExpression, target_type: Optional[str]) -> Optional[str]:
+        """Valida expressão lambda contra target_type (ou sem alvo em 'var'), checando parâmetros, retorno e captura efetivamente final."""
+        line = getattr(node, "line", 1)
+        sam, is_known = self._resolve_functional_interface(target_type)
+        sam_params: Optional[List[str]] = None
+        sam_ret: Optional[str] = None
+
+        if target_type and target_type not in ("var", "desconhecido"):
+            if sam is None and is_known:
+                self.errors.append(
+                    SemanticError(
+                        f"Tipo alvo '{target_type}' em expressão lambda não é uma interface funcional válida (JLS §15.27).",
+                        line,
+                    )
+                )
+            elif sam is not None:
+                sam_params, sam_ret = sam
+                if len(node.parameters) != len(sam_params):
+                    self.errors.append(
+                        SemanticError(
+                            f"Número de parâmetros incompatível na expressão lambda: esperado {len(sam_params)} para '{target_type}', encontrado {len(node.parameters)} (JLS §15.27.3).",
+                            line,
+                        )
+                    )
+
+        typed_params = list(getattr(node, "typed_parameters", []) or [])
+        param_mode = getattr(node, "parameter_mode", "inferred")
+        param_types_for_scope: List[str] = []
+
+        for idx, pname in enumerate(node.parameters):
+            lp = typed_params[idx] if idx < len(typed_params) else None
+            if param_mode == "explicit" and lp is not None and getattr(lp, "type_ref", None) is not None:
+                self._analyze_annotations(getattr(lp, "annotations", []), valid_targets={"PARAMETER"}, adjacent_type_ref=lp.type_ref)
+                self._check_type_ref_annotations(lp.type_ref)
+                pt_str = self._normalize_type_str(lp.type_ref) or "Object"
+                if getattr(lp, "is_varargs", False) and not pt_str.endswith("[]"):
+                    pt_str += "[]"
+                if sam_params is not None and idx < len(sam_params):
+                    sp = sam_params[idx]
+                    incompatible_explicit = False
+                    if not self._is_type_variable(sp):
+                        if self._simple_base_name(pt_str) != self._simple_base_name(sp):
+                            if not (pt_str == "Object" and sp == "Object"):
+                                incompatible_explicit = True
+                        elif "<" in sp and "<" in pt_str and self._generic_args_compatible(pt_str, sp) is False:
+                            incompatible_explicit = True
+                    if incompatible_explicit:
+                        self.errors.append(
+                            SemanticError(
+                                f"Tipo de parâmetro '{pt_str}' incompatível com '{sp}' da interface funcional '{target_type}' (JLS §15.27.3).",
+                                getattr(lp, "line", line),
+                            )
+                        )
+                param_types_for_scope.append(pt_str)
+            elif sam_params is not None and idx < len(sam_params):
+                if param_mode == "var" and lp is not None:
+                    self._analyze_annotations(getattr(lp, "annotations", []), valid_targets={"PARAMETER"})
+                param_types_for_scope.append(sam_params[idx])
+            else:
+                if param_mode == "var" and lp is not None:
+                    self._analyze_annotations(getattr(lp, "annotations", []), valid_targets={"PARAMETER"})
+                param_types_for_scope.append("Object")
+
+        self.symbols.enter_scope()
+        floor_idx = len(self._local_var_scopes)
+        self._lambda_scope_floor_stack.append(floor_idx)
+        self._local_var_scopes.append({})
+        self._active_pattern_scopes.append({})
+        self._local_type_scopes.append({})
+        self._local_declared_type_scopes.append({})
+        self._lambda_return_exprs_stack.append([])
+        saved_ctx = self._enter_exec_context("lambda", return_type=sam_ret, share_locals=True)
+        inferred_ret: Optional[str] = sam_ret
+        try:
+            for idx, p in enumerate(node.parameters):
+                if p != "_":
+                    lp = typed_params[idx] if idx < len(typed_params) else None
+                    is_fin = ("final" in getattr(lp, "modifiers", [])) if lp is not None else False
+                    self._register_local_var(
+                        p,
+                        param_types_for_scope[idx] if idx < len(param_types_for_scope) else "Object",
+                        getattr(lp, "line", line) if lp is not None else line,
+                        is_final=is_fin,
+                        has_initializer=True,
+                        category="parametro",
+                    )
+
+            if node.is_block_body and isinstance(node.body, Block):
+                self.analyze_block(node.body)
+                ret_exprs = self._lambda_return_exprs_stack[-1] if self._lambda_return_exprs_stack else []
+                if sam_ret == "void":
+                    for re in ret_exprs:
+                        if re is not None:
+                            self.errors.append(
+                                SemanticError("Expressão lambda com retorno 'void' não pode retornar valor em 'return' (JLS §15.27.3).", getattr(re, "line", line))
+                            )
+                elif sam_ret is not None:
+                    if self._stmt_completes_normally(node.body):
+                        self.errors.append(
+                            SemanticError(
+                                f"Bloco de lambda deve retornar valor compatível com '{sam_ret}' em todos os caminhos de execução (JLS §15.27.3).",
+                                line,
+                            )
+                        )
+                    for re in ret_exprs:
+                        if re is None:
+                            self.errors.append(
+                                SemanticError(f"Instrução 'return;' sem valor não é permitida em lambda com retorno '{sam_ret}' (JLS §15.27.3).", line)
+                            )
+                else:
+                    # Verifica consistência interna quando não há alvo SAM fechado
+                    has_val = any(r is not None for r in ret_exprs)
+                    has_void = any(r is None for r in ret_exprs)
+                    if has_val and has_void:
+                        self.errors.append(
+                            SemanticError("Bloco de expressão lambda mistura retornos com valor e sem valor (JLS §15.27.3).", line)
+                        )
+            elif node.body is not None:
+                if sam_ret == "void":
+                    if not self._is_statement_expression(node.body):
+                        self.errors.append(
+                            SemanticError(
+                                "Corpo de expressão lambda para método abstrato 'void' deve ser uma statement expression (JLS §15.27.3).",
+                                getattr(node.body, "line", line),
+                            )
+                        )
+                    self._check_expression_flow(node.body)
+                elif sam_ret is not None:
+                    self._check_expression_with_target(node.body, sam_ret)
+                    if not self._is_type_variable(sam_ret) and sam_ret not in ("Object", "var", "desconhecido"):
+                        body_t = self.infer_type(node.body)
+                        if body_t == "void":
+                            self.errors.append(
+                                SemanticError(
+                                    f"Corpo de lambda 'void' é incompatível com o tipo de retorno esperado '{sam_ret}' (JLS §15.27.3).",
+                                    getattr(node.body, "line", line),
+                                )
+                            )
+                        elif not self._is_assignable_expr(sam_ret, node.body):
+                            self.errors.append(
+                                SemanticError(
+                                    f"Tipo de retorno da expressão lambda ('{body_t}') é incompatível com '{sam_ret}' (JLS §15.27.3).",
+                                    getattr(node.body, "line", line),
+                                )
+                            )
+                else:
+                    self._check_expression_flow(node.body)
+                    inferred_ret = self.infer_type(node.body)
+        finally:
+            self._restore_exec_context(saved_ctx)
+            self._lambda_return_exprs_stack.pop()
+            self._lambda_scope_floor_stack.pop()
+            self._local_declared_type_scopes.pop()
+            self._local_type_scopes.pop()
+            self._pop_pattern_scope()
+            self._local_var_scopes.pop()
+            self.symbols.exit_scope()
+
+        if target_type and sam is not None:
+            self._inferred_types[id(node)] = target_type
+            return target_type
+        return None
+
+    def _check_method_ref_with_target(self, node: MethodReference, target_type: Optional[str]) -> Optional[str]:
+        """Valida todas as 5 formas de method reference contra target_type (JLS §15.13)."""
+        line = getattr(node, "line", 1)
+        if isinstance(node.target, Identifier) and node.target.name in ("this", "super"):
+            self._check_early_target_ref(
+                node.target.name,
+                line,
+                f"Referência inválida a método via '{node.target.name}' ('{node.target.name}::{node.method_name}')",
+            )
+        elif not getattr(node, "is_array_creation", False):
+            if isinstance(node.target, Identifier) and (node.target.name in ("this", "super") or (node.target.name and node.target.name[0].isupper())):
+                pass
+            elif isinstance(node.target, TypeReference):
+                self._check_type_ref_annotations(node.target)
+            elif node.target is not None:
+                self._check_expression_flow(node.target)
+
+        sam, is_known_sam = self._resolve_functional_interface(target_type)
+        if target_type and target_type not in ("var", "desconhecido"):
+            if sam is None and is_known_sam:
+                self.errors.append(
+                    SemanticError(
+                        f"Tipo alvo '{target_type}' em method reference não é uma interface funcional válida (JLS §15.13).",
+                        line,
+                    )
+                )
+                return None
+
+        if sam is None:
+            return None
+
+        sam_params, sam_ret = sam
+        if getattr(node, "is_array_creation", False):
+            # Forma 5: Type[]::new -> espera 1 parâmetro int/integral e retorno compatível com array
+            if len(sam_params) != 1 or (not self._is_integral_type(sam_params[0]) and not self._is_type_variable(sam_params[0])):
+                self.errors.append(
+                    SemanticError(
+                        f"Referência a criação de array '::new' exige interface funcional com 1 parâmetro inteiro (encontrado '{sam_params}' em '{target_type}' — JLS §15.13.1).",
+                        line,
+                    )
+                )
+            arr_t = self._normalize_type_str(getattr(node, "array_type", None)) or self._normalize_type_str(node.target)
+            if arr_t and sam_ret != "void" and not self._is_type_variable(sam_ret):
+                if not self.is_assignable(sam_ret, arr_t):
+                    self.errors.append(
+                        SemanticError(
+                            f"Tipo retornado pela referência de array ('{arr_t}') é incompatível com '{sam_ret}' (JLS §15.13.2).",
+                            line,
+                        )
+                    )
+            self._inferred_types[id(node)] = target_type
+            return target_type
+
+        if node.method_name == "new":
+            # Forma 4: ClassName::new
+            if isinstance(node.target, TypeReference):
+                tname = self._normalize_type_str(node.target) or ""
+            elif isinstance(node.target, Identifier):
+                tname = node.target.name
+            elif isinstance(node.target, MemberAccess):
+                tname = self._dotted_name(node.target) or ""
+            else:
+                tname = self._normalize_type_str(node.target) or ""
+            ctors, is_known_c, tkind = self._collect_type_constructors(tname)
+            tdecl = self._lookup_type_decl(self._simple_base_name(tname) or tname)
+            is_abstract_cls = (
+                tdecl is not None
+                and tdecl[0] == "class"
+                and "abstract" in (getattr(tdecl[1], "modifiers", []) or [])
+            )
+            if tkind in ("interface", "enum"):
+                self.errors.append(
+                    SemanticError(f"Não é possível referenciar construtor de {tkind} '{tname}::new' (JLS §15.13).", line)
+                )
+            elif is_abstract_cls:
+                self.errors.append(
+                    SemanticError(f"Não é possível referenciar construtor de classe abstrata '{tname}::new' (JLS §15.13.1).", line)
+                )
+            elif ctors:
+                matched = False
+                for csig in ctors:
+                    if len(csig["params"]) == len(sam_params):
+                        if all(self._score_param_match(cp, None, sp, 2) is not None for cp, sp in zip(csig["params"], sam_params)):
+                            matched = True
+                            break
+                if not matched and not any(self._is_type_variable(sp) for sp in sam_params):
+                    self.errors.append(
+                        SemanticError(
+                            f"Nenhum construtor compatível encontrado para '{tname}::new' com assinatura '{target_type}' (JLS §15.13.1).",
+                            line,
+                        )
+                    )
+                elif matched and sam_ret != "void" and not self._is_type_variable(sam_ret):
+                    if not self.is_assignable(sam_ret, tname):
+                        self.errors.append(
+                            SemanticError(
+                                f"Tipo criado por '{tname}::new' ('{tname}') é incompatível com o retorno esperado '{sam_ret}' (JLS §15.13.2).",
+                                line,
+                            )
+                        )
+            self._inferred_types[id(node)] = target_type
+            return target_type
+
+        # Formas 1, 2 e 3: Class::staticMethod, expr::instanceMethod, ReferenceType::instanceMethod
+        recv_is_type = False
+        recv_type: Optional[str] = None
+        if isinstance(node.target, TypeReference):
+            recv_is_type = True
+            recv_type = self._normalize_type_str(node.target)
+        elif isinstance(node.target, Identifier):
+            sym = self._lookup_var_symbol(node.target.name)
+            if sym is not None and "type" in sym and sym.get("category") not in self.TYPE_SYMBOL_CATEGORIES:
+                recv_type = sym["type"]
+            elif self._is_known_type(node.target.name):
+                recv_is_type = True
+                recv_type = node.target.name
+            elif node.target.name == "this":
+                recv_type = self._current_enclosing_type()
+            elif node.target.name == "super":
+                cur = self._current_enclosing_type()
+                if cur:
+                    supers, _ = self._direct_supertypes(cur)
+                    recv_type = supers[0] if supers else "Object"
+        else:
+            recv_type = self.infer_type(node.target)
+
+        if not recv_type:
+            self._record_unresolved(f"Method reference '{node.method_name}' com receptor externo não resolvido.")
+            self._inferred_types[id(node)] = target_type
+            return target_type
+
+        methods, is_known_m, _ = self._collect_type_methods(recv_type, node.method_name)
+        if not methods:
+            if is_known_m:
+                self.errors.append(
+                    SemanticError(
+                        f"Método '{node.method_name}' não encontrado no tipo '{recv_type}' para method reference (JLS §15.13.1).",
+                        line,
+                    )
+                )
+            else:
+                self._record_unresolved(f"Method reference '{recv_type}::{node.method_name}' não pôde ser resolvida sem classpath completo.")
+            self._inferred_types[id(node)] = target_type
+            return target_type
+
+        compatible = False
+        for msig in methods:
+            mparams = msig["params"]
+            if msig["static"]:
+                if not recv_is_type:
+                    continue
+                if len(mparams) == len(sam_params):
+                    if all(self._score_param_match(mp, None, sp, 2) is not None for mp, sp in zip(mparams, sam_params)):
+                        if sam_ret == "void" or self._is_type_variable(sam_ret) or self._is_type_variable(msig["ret"]) or self.is_assignable(sam_ret, msig["ret"]):
+                            compatible = True
+                            break
+            else:
+                # Se receptor é uma instância, aridade é igual; se receptor é tipo, primeiro arg do SAM vira receptor (len(mparams) + 1 == len(sam_params))
+                if not recv_is_type and len(mparams) == len(sam_params):
+                    if all(self._score_param_match(mp, None, sp, 2) is not None for mp, sp in zip(mparams, sam_params)):
+                        if sam_ret == "void" or self._is_type_variable(sam_ret) or self._is_type_variable(msig["ret"]) or self.is_assignable(sam_ret, msig["ret"]):
+                            compatible = True
+                            break
+                elif recv_is_type and len(sam_params) == len(mparams) + 1:
+                    recv_arg = sam_params[0]
+                    if self._is_type_variable(recv_arg) or self.is_assignable(recv_type, recv_arg) or self._is_subtype(recv_arg, recv_type) is True:
+                        if all(self._score_param_match(mp, None, sp, 2) is not None for mp, sp in zip(mparams, sam_params[1:])):
+                            if sam_ret == "void" or self._is_type_variable(sam_ret) or self._is_type_variable(msig["ret"]) or self.is_assignable(sam_ret, msig["ret"]):
+                                compatible = True
+                                break
+
+        if not compatible and not any(self._is_type_variable(sp) for sp in sam_params):
+            self.errors.append(
+                SemanticError(
+                    f"Referência a método '{recv_type}::{node.method_name}' incompatível com o tipo alvo '{target_type}' (JLS §15.13.1).",
+                    line,
+                )
+            )
+        self._inferred_types[id(node)] = target_type
+        return target_type
+
+    def _validate_unary_op(self, node: UnaryOp):
+        """Valida tipo e modificabilidade dos operandos em operadores unários (JLS §15.14 / §15.15)."""
+        line = getattr(node, "line", 1)
+        if node.op in ("++", "--", "post++", "post--"):
+            ok, op_type = self._is_modifiable_lvalue(node.operand, getattr(node.operand, "name", None), line, f"'{node.op}'")
+            if ok and op_type and self._unboxed_numeric(op_type) is None and op_type not in ("Object", "var", "desconhecido") and not self._is_type_variable(op_type):
+                self.errors.append(
+                    SemanticError(
+                        f"Operador '{node.op}' requer operando numérico (encontrado '{op_type}' — JLS §15.14 / §15.15).",
+                        line,
+                    )
+                )
+            return
+
+        self._check_expression_flow(node.operand)
+        op_type = self.infer_type(node.operand)
+        if not op_type or op_type in ("Object", "var", "desconhecido") or self._is_type_variable(op_type):
+            return
+        if node.op == "!":
+            if not self._is_boolean_type(op_type):
+                self.errors.append(
+                    SemanticError(f"Operador lógico '!' requer operando 'boolean' (encontrado '{op_type}' — JLS §15.15.6).", line)
+                )
+        elif node.op == "~":
+            if not self._is_integral_type(op_type):
+                self.errors.append(
+                    SemanticError(f"Operador bit-a-bit '~' requer tipo integral (encontrado '{op_type}' — JLS §15.15.5).", line)
+                )
+        elif node.op in ("+", "-"):
+            if self._unboxed_numeric(op_type) is None:
+                self.errors.append(
+                    SemanticError(f"Operador unário '{node.op}' requer tipo numérico (encontrado '{op_type}' — JLS §15.15.3).", line)
+                )
+
+    def _validate_binary_op(self, node: BinaryOp):
+        """Valida compatibilidade de tipos e promoções em operadores binários (JLS §15.17–§15.24)."""
+        line = getattr(node, "line", 1)
+        left_t = self.infer_type(node.left)
+        right_t = self.infer_type(node.right)
+        if not left_t or not right_t:
+            return
+        if any(t in ("Object", "var", "desconhecido") or self._is_type_variable(t) for t in (left_t, right_t)):
+            # Se for operação numérica óbvia com String ou boolean contra desconhecido, ainda valida o lado conhecido
+            if node.op in ("-", "*", "/", "%") and ("String" in (left_t, right_t) or "boolean" in (left_t, right_t)):
+                pass
+            elif node.op in ("<", "<=", ">", ">=", "<<", ">>", ">>>") and (self._is_boolean_type(left_t) or self._is_boolean_type(right_t) or "String" in (left_t, right_t)):
+                pass
+            else:
+                return
+
+        if node.op in ("+", "-", "*", "/", "%"):
+            if node.op == "+" and (left_t == "String" or right_t == "String"):
+                return
+            if left_t == "String" or right_t == "String":
+                self.errors.append(
+                    SemanticError(
+                        f"Operação aritmética '{node.op}' inválida: tipo 'String' não é suportado em operações aritméticas.",
+                        line,
+                    )
+                )
+                return
+            if self._unboxed_numeric(left_t) is None or self._unboxed_numeric(right_t) is None:
+                self.errors.append(
+                    SemanticError(
+                        f"Operação aritmética '{node.op}' inválida entre tipos '{left_t}' e '{right_t}'.",
+                        line,
+                    )
+                )
+            return
+
+        if node.op in ("<<", ">>", ">>>"):
+            if not self._is_integral_type(left_t) or not self._is_integral_type(right_t):
+                self.errors.append(
+                    SemanticError(
+                        f"Operador de deslocamento '{node.op}' exige operandos de tipos integrais (encontrado '{left_t}' e '{right_t}' — JLS §15.19).",
+                        line,
+                    )
+                )
+            return
+
+        if node.op in ("<", "<=", ">", ">="):
+            if self._unboxed_numeric(left_t) is None or self._unboxed_numeric(right_t) is None:
+                self.errors.append(
+                    SemanticError(
+                        f"Operador relacional '{node.op}' requer operandos numéricos (encontrado '{left_t}' e '{right_t}' — JLS §15.20.1).",
+                        line,
+                    )
+                )
+            return
+
+        if node.op in ("&", "|", "^"):
+            both_int = self._is_integral_type(left_t) and self._is_integral_type(right_t)
+            both_bool = self._is_boolean_type(left_t) and self._is_boolean_type(right_t)
+            if not both_int and not both_bool:
+                self.errors.append(
+                    SemanticError(
+                        f"Operador '{node.op}' exige ambos os operandos integrais ou ambos booleanos (encontrado '{left_t}' e '{right_t}' — JLS §15.22).",
+                        line,
+                    )
+                )
+            return
+
+        if node.op in ("&&", "||"):
+            if not self._is_boolean_type(left_t) or not self._is_boolean_type(right_t):
+                self.errors.append(
+                    SemanticError(
+                        f"Operador lógico '{node.op}' requer operandos de tipo 'boolean' (encontrado '{left_t}' e '{right_t}' — JLS §15.23 / §15.24).",
+                        line,
+                    )
+                )
+            return
+
+        if node.op in ("==", "!="):
+            both_num = self._unboxed_numeric(left_t) is not None and self._unboxed_numeric(right_t) is not None
+            both_bool = self._is_boolean_type(left_t) and self._is_boolean_type(right_t)
+            if both_num or both_bool:
+                return
+            if "null" in (left_t, right_t):
+                other = right_t if left_t == "null" else left_t
+                if other in self.PRIMITIVE_TYPES:
+                    self.errors.append(
+                        SemanticError(f"Operação '{node.op}' inválida entre '{left_t}' e '{right_t}' (JLS §15.21).", line)
+                    )
+                return
+            if (left_t in self.PRIMITIVE_TYPES) != (right_t in self.PRIMITIVE_TYPES):
+                self.errors.append(
+                    SemanticError(f"Operação '{node.op}' inválida entre tipos incomparáveis '{left_t}' e '{right_t}' (JLS §15.21).", line)
+                )
+                return
+            if left_t in self.PRIMITIVE_TYPES and right_t in self.PRIMITIVE_TYPES:
+                self.errors.append(
+                    SemanticError(f"Operação '{node.op}' inválida entre '{left_t}' e '{right_t}' (JLS §15.21).", line)
+                )
+                return
+            if self._are_types_disjoint(left_t, right_t) is True:
+                self.errors.append(
+                    SemanticError(f"Operandos incompatíveis em '{node.op}': '{left_t}' e '{right_t}' não são comparáveis (JLS §15.21.3).", line)
+                )
+
+    def _is_poly_expression(self, node: Optional[ASTNode]) -> bool:
+        """Indica se a expressão é poly e depende de tipo alvo para inferência completa."""
+        if node is None:
+            return False
+        if isinstance(node, (LambdaExpression, MethodReference)):
+            return True
+        if isinstance(node, ObjectCreationExpression) and getattr(node, "is_diamond", False):
+            return False  # `var x = new ArrayList<>()` é permitido com <> (infere ArrayList<Object>)
+        if isinstance(node, ConditionalExpression):
+            return self._is_poly_expression(node.then_expr) or self._is_poly_expression(node.else_expr)
+        return False
+
+    def _unify_branch_types(self, expr_nodes: List[ASTNode], target_type: Optional[str] = None) -> Optional[str]:
+        """Unifica os tipos resultantes de múltiplos ramos de switch expression ou array initializer."""
+        if not expr_nodes:
+            return target_type
+        if target_type and target_type not in ("var", "desconhecido"):
+            return target_type
+        acc: Optional[str] = None
+        for expr in expr_nodes:
+            et = self.infer_type(expr)
+            if et is None:
+                continue
+            if acc is None:
+                acc = et
+            else:
+                acc = self._lub_type(acc, et)
+        return acc
+
+    def _check_array_initializer_compatible(self, elem_expected: str, init_node: ArrayInitializer, line: int):
+        """Valida recursivamente inicializadores de array contra o tipo de elemento esperado."""
+        for elem in init_node.elements:
+            if isinstance(elem, ArrayInitializer):
+                if elem_expected.endswith("[]"):
+                    self._check_array_initializer_compatible(elem_expected[:-2], elem, getattr(elem, "line", line))
+                else:
+                    self.errors.append(
+                        SemanticError(f"Inicializador de array aninhado incompatível com o tipo '{elem_expected}'.", getattr(elem, "line", line))
+                    )
+            else:
+                self._check_expression_with_target(elem, elem_expected)
+                if not self._is_assignable_expr(elem_expected, elem):
+                    et = self.infer_type(elem)
+                    self.errors.append(
+                        SemanticError(
+                            f"Elemento de tipo '{et}' incompatível em inicializador de array de '{elem_expected}' (JLS §10.6).",
+                            getattr(elem, "line", line),
+                        )
+                    )
+
+    def _check_expression_with_target(self, node: Optional[ASTNode], target_type: Optional[str] = None) -> "_FlowResult":
+        """Analisa uma expressão propagando o tipo alvo (target typing) quando aplicável."""
+        if node is None:
+            return self._FlowResult()
+        if isinstance(node, LambdaExpression):
+            self._check_lambda_with_target(node, target_type)
+            return self._FlowResult()
+        if isinstance(node, MethodReference):
+            self._check_method_ref_with_target(node, target_type)
+            return self._FlowResult()
+        if isinstance(node, ArrayInitializer):
+            if target_type and target_type.endswith("[]"):
+                self._check_array_initializer_compatible(target_type[:-2], node, getattr(node, "line", 1))
+            else:
+                for elem in node.elements:
+                    self._check_expression_flow(elem)
+            if target_type:
+                self._inferred_types[id(node)] = target_type
+            return self._FlowResult()
+        if isinstance(node, ConditionalExpression):
+            fc = self._check_expression_flow(node.condition)
+            cond_t = self.infer_type(node.condition)
+            if cond_t is not None and not self._is_boolean_type(cond_t) and cond_t not in ("Object", "var", "desconhecido") and not self._is_type_variable(cond_t):
+                self.errors.append(
+                    SemanticError(
+                        f"Condição do operador ternário '?:' deve possuir tipo 'boolean' (encontrado '{cond_t}' — JLS §15.25).",
+                        getattr(node, "line", 1),
+                    )
+                )
+            self._push_pattern_scope(fc.true_vars)
+            try:
+                ft = self._check_expression_with_target(node.then_expr, target_type)
+            finally:
+                self._pop_pattern_scope()
+            self._push_pattern_scope(fc.false_vars)
+            try:
+                fe = self._check_expression_with_target(node.else_expr, target_type)
+            finally:
+                self._pop_pattern_scope()
+            if target_type and target_type not in ("var", "desconhecido"):
+                self._inferred_types[id(node)] = target_type
+            left_true = {**fc.true_vars, **ft.true_vars}
+            right_true = {**fc.false_vars, **fe.true_vars}
+            out_true = {k: v for k, v in left_true.items() if k in right_true}
+            left_false = {**fc.true_vars, **ft.false_vars}
+            right_false = {**fc.false_vars, **fe.false_vars}
+            out_false = {k: v for k, v in left_false.items() if k in right_false}
+            return self._FlowResult(out_true, out_false)
+        if isinstance(node, SwitchExpression):
+            saved_ctx = self._enter_exec_context(
+                "switch_expression",
+                return_type=self._current_return_type,
+                share_locals=True,
+                switch_expr_depth=self._switch_expr_depth + 1,
+            )
+            self._switch_expected_type_stack.append(target_type)
+            try:
+                self._analyze_switch_block(node, is_expression=True, expected_type=target_type)
+            finally:
+                self._switch_expected_type_stack.pop()
+                self._restore_exec_context(saved_ctx)
+            return self._FlowResult()
+        if isinstance(node, ObjectCreationExpression):
+            return self._check_object_creation(node, target_type=target_type)
+        if isinstance(node, MethodCall):
+            return self._check_method_call(node, target_type=target_type)
+        return self._check_expression_flow(node)
+
+    def _check_object_creation(self, node: ObjectCreationExpression, target_type: Optional[str] = None) -> "_FlowResult":
+        """Valida criação de objetos, construtores, diamond <>, classe anônima e abstrata/interface."""
+        line = getattr(node, "line", 1)
+        tref = getattr(node, "type_ref", None)
+        self._check_type_ref_annotations(tref)
+        if getattr(node, "target", None) is not None:
+            self._check_expression_flow(node.target)
+
+        base_name = getattr(tref, "name", None) or getattr(node, "class_name", "")
+        full_name = self._normalize_type_str(tref) or base_name
+        is_diamond = bool(getattr(node, "is_diamond", False))
+        anon_body = getattr(node, "anonymous_body", None)
+
+        effective_created_type = full_name
+        if is_diamond and target_type and target_type not in ("var", "desconhecido"):
+            _, target_args, _ = self._extract_generic_args(target_type)
+            if target_args:
+                simple_base = self._simple_base_name(base_name) or base_name
+                effective_created_type = f"{simple_base}<{', '.join(target_args)}>"
+
+        ctors, is_known_c, tkind = self._collect_type_constructors(effective_created_type)
+        tdecl = self._lookup_type_decl(base_name)
+        if tdecl is not None:
+            dkind, dnode = tdecl
+            mods = getattr(dnode, "modifiers", [])
+            if dkind == "enum":
+                self.errors.append(
+                    SemanticError(f"Tipo enum '{base_name}' não pode ser instanciado com 'new' (JLS §8.9).", line)
+                )
+            elif dkind in ("interface", "annotation_interface") and anon_body is None:
+                self.errors.append(
+                    SemanticError(f"Não é possível instanciar interface '{base_name}' diretamente sem corpo de classe anônima (JLS §15.9).", line)
+                )
+            elif dkind == "class" and "abstract" in mods and anon_body is None:
+                self.errors.append(
+                    SemanticError(f"Não é possível instanciar classe abstrata '{base_name}' sem corpo de classe anônima (JLS §15.9.1).", line)
+                )
+            elif anon_body is not None and ("final" in mods or dkind in ("record", "enum")):
+                self.errors.append(
+                    SemanticError(f"Não é possível criar classe anônima estendendo tipo fechado/final '{base_name}' (JLS §15.9.5).", line)
+                )
+        elif anon_body is None and tkind == "interface":
+            self.errors.append(
+                SemanticError(f"Não é possível instanciar interface '{base_name}' diretamente sem corpo de classe anônima (JLS §15.9).", line)
+            )
+        elif anon_body is not None and self._simple_base_name(base_name) in self.BUILTIN_FINAL_TYPES:
+            self.errors.append(
+                SemanticError(f"Não é possível estender classe final '{base_name}' em classe anônima (JLS §15.9.5).", line)
+            )
+
+        # Se há lambdas nos argumentos, checa usando parâmetros do construtor quando houver candidato compatível
+        if ctors:
+            win_sig, _, bound_params = self._resolve_overload(ctors, list(node.arguments), line, f"new {base_name}(...)", expected_return=effective_created_type)
+            for idx, arg in enumerate(node.arguments):
+                pt = bound_params.get(idx) if bound_params else None
+                self._check_expression_with_target(arg, pt)
+        else:
+            for arg in node.arguments:
+                self._check_expression_flow(arg)
+
+        if anon_body is not None:
+            self.symbols.enter_scope()
+            saved_ctx = self._enter_exec_context("type_body", return_type=None, share_locals=True)
+            try:
+                self._analyze_class_like_members(
+                    anon_body,
+                    container_label="classe anônima",
+                    enclosing_name=f"<anonymous {base_name}>",
+                    allow_constructor=False,
+                    is_enum=False,
+                )
+            finally:
+                self._restore_exec_context(saved_ctx)
+                self.symbols.exit_scope()
+
+        self._inferred_types[id(node)] = effective_created_type
+        return self._FlowResult()
+
+    def _check_method_call(self, node: MethodCall, target_type: Optional[str] = None) -> "_FlowResult":
+        """Valida invocação de método com resolução estática/instância, sobrecarga em 3 fases e target typing."""
+        line = getattr(node, "line", 1)
+        mname = node.method_name
+        explicit_targs = [self._normalize_type_str(t) or "Object" for t in (getattr(node, "type_arguments", []) or [])]
+
+        recv_type: Optional[str] = None
+        recv_is_type = False
+        is_unqualified = node.target is None
+
+        if node.target is not None:
+            if isinstance(node.target, Identifier) and node.target.name in ("this", "super"):
+                self._check_early_target_ref(
+                    node.target.name,
+                    line,
+                    f"Invocação inválida de método via '{node.target.name}' ('{node.target.name}.{mname}(...)')",
+                )
+                cur = self._current_enclosing_type()
+                if node.target.name == "this":
+                    if self._in_static_context:
+                        self.errors.append(
+                            SemanticError(f"Não é possível usar 'this' em contexto estático ao invocar '{mname}(...)' (JLS §15.8.3).", line)
+                        )
+                    recv_type = cur
+                else:
+                    if self._in_static_context:
+                        self.errors.append(
+                            SemanticError(f"Não é possível usar 'super' em contexto estático ao invocar '{mname}(...)' (JLS §15.8.3).", line)
+                        )
+                    if cur:
+                        supers, _ = self._direct_supertypes(cur)
+                        recv_type = supers[0] if supers else "Object"
+            elif isinstance(node.target, Identifier):
+                sym = self._lookup_var_symbol(node.target.name)
+                if sym is not None and sym.get("category") not in self.TYPE_SYMBOL_CATEGORIES and sym.get("category") is not None:
+                    recv_type = sym.get("type")
+                    self._check_expression_flow(node.target)
+                elif self._is_known_type(node.target.name):
+                    recv_type = node.target.name
+                    recv_is_type = True
+                elif node.target.name[0].isupper():
+                    # Tipo externo importado / java.lang não pré-cadastrado
+                    recv_type = node.target.name
+                    recv_is_type = True
+                else:
+                    self._check_expression_flow(node.target)
+                    recv_type = self.infer_type(node.target)
+            else:
+                self._check_expression_flow(node.target)
+                recv_type = self.infer_type(node.target)
+        else:
+            if self._in_early_construction_context:
+                sym = self.symbols.lookup(mname)
+                if sym is not None and sym.get("category") == "metodo" and not sym.get("is_static", False):
+                    self.errors.append(
+                        SemanticError(
+                            f"Invocação inválida de método de instância '{mname}(...)' antes da invocação explícita do construtor (early construction context — JLS §8.8.7 / JEP 513).",
+                            line,
+                        )
+                    )
+            recv_type = self._current_enclosing_type()
+
+        # Primeiro avalia argumentos não-poly para ter tipos durante a seleção de sobrecarga
+        for arg in node.arguments:
+            if not isinstance(arg, (LambdaExpression, MethodReference)):
+                self._check_expression_flow(arg)
+
+        if not recv_type:
+            for arg in node.arguments:
+                if isinstance(arg, (LambdaExpression, MethodReference)):
+                    self._check_expression_flow(arg)
+            self._record_unresolved(f"Invocação '{mname}(...)' sobre tipo ou receptor externo não resolvido.")
+            return self._FlowResult()
+
+        recv_simple = self._simple_base_name(recv_type) or recv_type
+        if recv_simple in self.PRIMITIVE_TYPES or recv_simple in ("void", "null"):
+            for arg in node.arguments:
+                if isinstance(arg, (LambdaExpression, MethodReference)):
+                    self._check_expression_flow(arg)
+            self.errors.append(
+                SemanticError(
+                    f"Não é possível invocar o método '{mname}(...)' sobre expressão do tipo '{recv_type}' (JLS §15.12).",
+                    line,
+                )
+            )
+            return self._FlowResult()
+
+        if recv_type.endswith("[]") and mname == "length":
+            for arg in node.arguments:
+                if isinstance(arg, (LambdaExpression, MethodReference)):
+                    self._check_expression_flow(arg)
+            self.errors.append(
+                SemanticError(
+                    "'length' em arrays é um campo final, não um método invocável (use '.length' — JLS §10.7).",
+                    line,
+                )
+            )
+            return self._FlowResult()
+
+        methods, is_known_m, is_declared = self._collect_type_methods(recv_type, mname)
+        if not methods:
+            for arg in node.arguments:
+                if isinstance(arg, (LambdaExpression, MethodReference)):
+                    self._check_expression_flow(arg)
+            if is_unqualified and (mname in self._static_imports or self._has_wildcard_static_import):
+                self._record_unresolved(f"Invocação '{mname}(...)' originada de import estático externo.")
+                return self._FlowResult()
+            if is_declared and is_known_m:
+                self.errors.append(
+                    SemanticError(
+                        f"Método '{mname}' não encontrado no tipo '{recv_type}' ou supertipos (JLS §15.12.1).",
+                        line,
+                    )
+                )
+            else:
+                self._record_unresolved(f"Método '{mname}' no tipo '{recv_type}' não consta nas assinaturas embutidas/externas.")
+            return self._FlowResult()
+
+        if recv_is_type:
+            static_only = [m for m in methods if m["static"]]
+            if not static_only:
+                self.errors.append(
+                    SemanticError(
+                        f"Método de instância '{mname}' não pode ser referenciado a partir do contexto estático '{recv_type}.{mname}(...)' (JLS §15.12.3).",
+                        line,
+                    )
+                )
+                return self._FlowResult()
+            methods = static_only
+        elif is_unqualified and self._in_static_context:
+            static_only = [m for m in methods if m["static"]]
+            if not static_only and methods:
+                self.errors.append(
+                    SemanticError(
+                        f"Não é possível referenciar o método não-estático '{mname}' a partir de um contexto estático (JLS §15.12.3).",
+                        line,
+                    )
+                )
+                return self._FlowResult()
+
+        win_sig, eff_ret, bound_params = self._resolve_overload(
+            methods,
+            list(node.arguments),
+            line,
+            f"{recv_type}.{mname}(...)",
+            expected_return=target_type,
+            explicit_targs=explicit_targs,
+        )
+        for idx, arg in enumerate(node.arguments):
+            if isinstance(arg, (LambdaExpression, MethodReference, ConditionalExpression, SwitchExpression)):
+                pt = bound_params.get(idx) if bound_params else None
+                self._check_expression_with_target(arg, pt)
+        if eff_ret:
+            self._inferred_types[id(node)] = eff_ret
+        return self._FlowResult()
+
+
     def _check_early_target_ref(self, target_name: str, line: int, context_detail: str = "") -> bool:
         """Verifica se há uso inválido de 'this' ou 'super' durante o early construction context (JLS §8.8.7 / JEP 513)."""
         if not self._in_early_construction_context:
@@ -4739,8 +7446,9 @@ class SemanticAnalyzer:
         return False
 
     def _check_assignment(self, node: Assignment):
-        """Valida uma atribuição (instrução ou expressão), incluindo regras do early construction context e construtores compactos."""
+        """Valida uma atribuição (instrução ou expressão), alvo modificável, operadores compostos e target typing."""
         line = getattr(node, "line", 1)
+        op = getattr(node, "operator", "=")
         is_this_member_assign = (
             (node.name and node.name.startswith("this."))
             or (
@@ -4760,8 +7468,14 @@ class SemanticAnalyzer:
             return
 
         if node.target is not None and not isinstance(node.target, Identifier):
-            self.check_expression(node.target)
-            self.check_expression(node.expression)
+            ok, target_type = self._is_modifiable_lvalue(node.target, node.name, line, f"atribuição '{op}'")
+            if op == "=" and target_type:
+                self._check_expression_with_target(node.expression, target_type)
+            else:
+                self.check_expression(node.expression)
+            if ok and target_type:
+                label = node.name or (node.target.pretty() if hasattr(node.target, "pretty") else "alvo")
+                self.check_assignment_type(target_type, node.expression, label, line, operator=op)
             return
 
         if node.name and (node.name.startswith(("this.", "super.")) or node.name in ("this", "super")):
@@ -4775,35 +7489,18 @@ class SemanticAnalyzer:
             self.check_expression(node.expression)
             return
 
-        symbol = self._lookup_var_symbol(node.name)
-        if self._in_early_construction_context and symbol is not None and symbol.get("category") == "campo" and not symbol.get("is_static", False):
-            self.errors.append(
-                SemanticError(f"Acesso inválido ao campo de instância '{node.name}' antes da invocação explícita do construtor (early construction context — JLS §8.8.7 / JEP 513).", line)
-            )
-        if symbol is not None and symbol.get("category") in ("constante_interface", "constante_enum", "componente_record"):
-            self.errors.append(
-                SemanticError(f"Não é possível atribuir valor a '{node.name}' ({symbol.get('category')} é implicitamente final).", line)
-            )
-        elif symbol is None or symbol.get("category") not in ("variavel", "parametro", "campo"):
-            self.errors.append(
-                SemanticError(f"Variável '{node.name}' não foi declarada.", line)
-            )
+        ok, target_type = self._is_modifiable_lvalue(node.target, node.name, line, f"atribuição '{op}'")
+        if op == "=" and target_type:
+            self._check_expression_with_target(node.expression, target_type)
         else:
-            local_info = self._find_local_var_info(node.name)
-            if local_info is not None:
-                if local_info.get("is_final", False) and local_info.get("has_initializer", True):
-                    self.errors.append(
-                        SemanticError(f"Não é possível atribuir valor à variável 'final' '{node.name}'.", line)
-                    )
-                self._mark_local_var_reassigned(node.name)
-        self.check_expression(node.expression)
-        if symbol is not None and "type" in symbol:
+            self.check_expression(node.expression)
+        if target_type:
             self.check_assignment_type(
-                symbol["type"],
+                target_type,
                 node.expression,
-                node.name,
+                node.name or "alvo",
                 line,
-                operator=getattr(node, "operator", "="),
+                operator=op,
             )
 
     class _FlowResult:
@@ -4834,118 +7531,179 @@ class SemanticAnalyzer:
             line = getattr(node, "line", 1)
             if self._check_early_target_ref(node.name, line):
                 return empty
+            if node.name == "this" and self._in_static_context:
+                self.errors.append(
+                    SemanticError("Não é possível usar 'this' em um contexto estático (JLS §15.8.3).", line)
+                )
+                return empty
+            if node.name == "super" and self._in_static_context:
+                self.errors.append(
+                    SemanticError("Não é possível usar 'super' em um contexto estático (JLS §15.11).", line)
+                )
+                return empty
 
             # Identificadores com ponto (ex: System.out.println), 'this' ou 'super' não geram falso erro
             if node.name in ("this", "super") or node.name.startswith(("this.", "super.")) or "." in node.name:
                 return empty
+
+            # Registro de captura de variável local/parâmetro por expressão lambda (JLS §15.27.2)
+            self._record_lambda_capture(node.name, line)
 
             symbol = self._lookup_var_symbol(node.name)
             if self._in_early_construction_context and symbol is not None and symbol.get("category") == "campo" and not symbol.get("is_static", False):
                 self.errors.append(
                     SemanticError(f"Acesso inválido ao campo de instância '{node.name}' antes da invocação explícita do construtor (early construction context — JLS §8.8.7 / JEP 513).", line)
                 )
+            elif self._in_static_context and symbol is not None and symbol.get("category") == "campo" and not symbol.get("is_static", False):
+                if self._find_local_var_info(node.name) is None:
+                    self.errors.append(
+                        SemanticError(f"Não é possível referenciar o campo não-estático '{node.name}' a partir de um contexto estático (JLS §8.3.1.1).", line)
+                    )
 
-            if symbol is None or symbol.get("category") not in ("variavel", "parametro", "campo", "tipo", "constante_enum", "constante_interface", "componente_record"):
+            if symbol is None or symbol.get("category") not in (self.TYPE_SYMBOL_CATEGORIES | {"variavel", "parametro", "campo", "constante_enum", "constante_interface", "componente_record"}):
                 self.errors.append(
                     SemanticError(f"Variável '{node.name}' não foi declarada.", line)
                 )
             return empty
 
         if isinstance(node, ObjectCreationExpression):
-            self._check_type_ref_annotations(getattr(node, "type_ref", None))
-            if node.target is not None:
-                self._check_expression_flow(node.target)
-            for arg in node.arguments:
-                self._check_expression_flow(arg)
-            return empty
+            return self._check_object_creation(node, target_type=None)
 
         if isinstance(node, MethodCall):
-            line = getattr(node, "line", 1)
-            if node.target is not None:
-                if isinstance(node.target, Identifier) and node.target.name in ("this", "super"):
-                    self._check_early_target_ref(
-                        node.target.name,
-                        line,
-                        f"Invocação inválida de método via '{node.target.name}' ('{node.target.name}.{node.method_name}(...)')"
-                    )
-                if isinstance(node.target, Identifier) and (node.target.name in ("this", "super") or node.target.name[0].isupper()):
-                    pass
-                else:
-                    self._check_expression_flow(node.target)
-            else:
-                if self._in_early_construction_context:
-                    sym = self.symbols.lookup(node.method_name)
-                    if sym is not None and sym.get("category") == "metodo" and not sym.get("is_static", False):
-                        self.errors.append(
-                            SemanticError(f"Invocação inválida de método de instância '{node.method_name}(...)' antes da invocação explícita do construtor (early construction context — JLS §8.8.7 / JEP 513).", line)
-                        )
-            for arg in node.arguments:
-                self._check_expression_flow(arg)
-            return empty
+            return self._check_method_call(node, target_type=None)
 
         if isinstance(node, MemberAccess):
             line = getattr(node, "line", 1)
+            recv_is_type = False
+            recv_type: Optional[str] = None
             if isinstance(node.target, Identifier) and node.target.name in ("this", "super"):
                 self._check_early_target_ref(
                     node.target.name,
                     line,
-                    f"Acesso inválido a membro via '{node.target.name}' ('{node.target.name}.{node.member_name}')"
+                    f"Acesso inválido a membro via '{node.target.name}' ('{node.target.name}.{node.member_name}')",
                 )
-            if isinstance(node.target, Identifier) and (node.target.name in ("this", "super") or node.target.name[0].isupper()):
-                pass
+                if self._in_static_context:
+                    self.errors.append(
+                        SemanticError(f"Não é possível usar '{node.target.name}' em contexto estático.", line)
+                    )
+                recv_type = self._infer_member_access_receiver_type(node)
+            elif isinstance(node.target, Identifier):
+                sym = self._lookup_var_symbol(node.target.name)
+                if sym is not None and sym.get("category") not in self.TYPE_SYMBOL_CATEGORIES and sym.get("category") is not None:
+                    self._check_expression_flow(node.target)
+                    recv_type = sym.get("type")
+                elif self._is_known_type(node.target.name):
+                    recv_is_type = True
+                    recv_type = node.target.name
+                elif node.target.name and node.target.name[0].isupper():
+                    recv_is_type = True
+                    recv_type = node.target.name
+                else:
+                    self._check_expression_flow(node.target)
+                    recv_type = self.infer_type(node.target)
             else:
                 self._check_expression_flow(node.target)
+                recv_type = self.infer_type(node.target)
+
+            if recv_type:
+                if recv_is_type and node.member_name in ("this", "super"):
+                    if self._in_static_context:
+                        self.errors.append(
+                            SemanticError(
+                                f"Não é possível usar '{recv_type}.{node.member_name}' em contexto estático (JLS §15.8.4).",
+                                line,
+                            )
+                        )
+                    return empty
+                recv_simple = self._simple_base_name(recv_type) or recv_type
+                if recv_simple in self.PRIMITIVE_TYPES or recv_simple in ("void", "null"):
+                    self.errors.append(
+                        SemanticError(
+                            f"Não é possível acessar o membro '{node.member_name}' em expressão do tipo '{recv_type}' (JLS §15.11).",
+                            line,
+                        )
+                    )
+                    return empty
+                if recv_type.endswith("[]"):
+                    if node.member_name == "length":
+                        return empty
+                    self.errors.append(
+                        SemanticError(
+                            f"Campo '{node.member_name}' não existe no tipo array '{recv_type}' (apenas 'length' é membro de arrays — JLS §10.7).",
+                            line,
+                        )
+                    )
+                    return empty
+                fields, is_known_f = self._collect_type_fields(recv_type)
+                finfo = fields.get(node.member_name)
+                if finfo is not None:
+                    if recv_is_type and not finfo.get("is_static", False):
+                        self.errors.append(
+                            SemanticError(
+                                f"Campo de instância '{node.member_name}' não pode ser referenciado estaticamente via '{recv_type}.{node.member_name}' (JLS §15.11).",
+                                line,
+                            )
+                        )
+                elif self._lookup_type_decl(recv_type) is not None and is_known_f:
+                    # Verifica também tipo aninhado qualificado (Outer.Inner)
+                    if self._lookup_type_decl(f"{recv_type}.{node.member_name}") is None and self._lookup_type_decl(node.member_name) is None:
+                        self.errors.append(
+                            SemanticError(
+                                f"Campo '{node.member_name}' não encontrado no tipo '{recv_type}' (JLS §15.11).",
+                                line,
+                            )
+                        )
             return empty
 
         if isinstance(node, MethodReference):
-            line = getattr(node, "line", 1)
-            if isinstance(node.target, Identifier) and node.target.name in ("this", "super"):
-                self._check_early_target_ref(
-                    node.target.name,
-                    line,
-                    f"Referência inválida a método via '{node.target.name}' ('{node.target.name}::{node.method_name}')"
-                )
-            if isinstance(node.target, Identifier) and (node.target.name in ("this", "super") or node.target.name[0].isupper()):
-                pass
-            else:
-                self._check_expression_flow(node.target)
+            self._check_method_ref_with_target(node, target_type=None)
             return empty
 
         if isinstance(node, ArrayAccess):
+            line = getattr(node, "line", 1)
             self._check_expression_flow(node.array)
             self._check_expression_flow(node.index)
+            arr_t = self.infer_type(node.array)
+            if arr_t and arr_t not in ("Object", "var", "desconhecido") and not self._is_type_variable(arr_t):
+                if not arr_t.endswith("[]"):
+                    self.errors.append(
+                        SemanticError(
+                            f"Expressão de tipo '{arr_t}' não é um array para acesso indexado '[...]' (JLS §10.4).",
+                            line,
+                        )
+                    )
+            idx_t = self.infer_type(node.index)
+            if idx_t and idx_t not in ("Object", "var", "desconhecido") and not self._is_type_variable(idx_t):
+                if self._unboxed_numeric(idx_t) not in ("byte", "short", "char", "int"):
+                    self.errors.append(
+                        SemanticError(
+                            f"Índice de array deve ser compatível com 'int' (encontrado '{idx_t}' — JLS §10.4).",
+                            line,
+                        )
+                    )
             return empty
 
         if isinstance(node, ConditionalExpression):
-            fc = self._check_expression_flow(node.condition)
-            self._push_pattern_scope(fc.true_vars)
-            try:
-                ft = self._check_expression_flow(node.then_expr)
-            finally:
-                self._pop_pattern_scope()
-
-            self._push_pattern_scope(fc.false_vars)
-            try:
-                fe = self._check_expression_flow(node.else_expr)
-            finally:
-                self._pop_pattern_scope()
-
-            # JLS §6.3.1.3: variável é introduzida quando (true em c|then) e (false em c ou true em else)
-            left_true = {**fc.true_vars, **ft.true_vars}
-            right_true = {**fc.false_vars, **fe.true_vars}
-            out_true = {k: v for k, v in left_true.items() if k in right_true}
-            left_false = {**fc.true_vars, **ft.false_vars}
-            right_false = {**fc.false_vars, **fe.false_vars}
-            out_false = {k: v for k, v in left_false.items() if k in right_false}
-            return self._FlowResult(out_true, out_false)
+            return self._check_expression_with_target(node, target_type=None)
 
         if isinstance(node, ArrayCreationExpression):
+            line = getattr(node, "line", 1)
             self._check_type_ref_annotations(getattr(node, "type_ref", None))
             for dim in node.dimensions:
                 if dim is not None:
                     self._check_expression_flow(dim)
+                    dt = self.infer_type(dim)
+                    if dt and dt not in ("Object", "var", "desconhecido") and not self._is_type_variable(dt):
+                        if self._unboxed_numeric(dt) not in ("byte", "short", "char", "int"):
+                            self.errors.append(
+                                SemanticError(
+                                    f"Expressão de tamanho de dimensão de array deve ser inteira compatível com 'int' (encontrado '{dt}' — JLS §15.10.1).",
+                                    getattr(dim, "line", line),
+                                )
+                            )
             if node.initializer is not None:
-                self._check_expression_flow(node.initializer)
+                arr_t = self._normalize_type_str(getattr(node, "type_ref", None))
+                self._check_expression_with_target(node.initializer, arr_t)
             return empty
 
         if isinstance(node, ArrayInitializer):
@@ -4954,8 +7712,7 @@ class SemanticAnalyzer:
             return empty
 
         if isinstance(node, CastExpression):
-            self._check_type_ref_annotations(getattr(node, "target_type", None))
-            self._check_expression_flow(node.expression)
+            self._check_cast(node)
             return empty
 
         if isinstance(node, InstanceOfExpression):
@@ -5004,47 +7761,11 @@ class SemanticAnalyzer:
             return empty
 
         if isinstance(node, LambdaExpression):
-            self.symbols.enter_scope()
-            self._local_var_scopes.append({})
-            self._active_pattern_scopes.append({})
-            self._local_type_scopes.append({})
-            self._local_declared_type_scopes.append({})
-            saved_ctx = self._enter_exec_context("lambda", return_type=None, share_locals=True)
-            try:
-                for p in node.parameters:
-                    if p != "_":
-                        self._register_local_var(
-                            p,
-                            "Object",
-                            getattr(node, "line", 1),
-                            has_initializer=True,
-                            category="parametro",
-                        )
-                if node.is_block_body and isinstance(node.body, Block):
-                    self.analyze_block(node.body)
-                elif node.body is not None:
-                    self._check_expression_flow(node.body)
-            finally:
-                self._restore_exec_context(saved_ctx)
-                self._local_declared_type_scopes.pop()
-                self._local_type_scopes.pop()
-                self._pop_pattern_scope()
-                self._local_var_scopes.pop()
-            self.symbols.exit_scope()
+            self._check_lambda_with_target(node, target_type=None)
             return empty
 
         if isinstance(node, SwitchExpression):
-            saved_ctx = self._enter_exec_context(
-                "switch_expression",
-                return_type=self._current_return_type,
-                share_locals=True,
-                switch_expr_depth=self._switch_expr_depth + 1,
-            )
-            try:
-                self._analyze_switch_block(node, is_expression=True)
-            finally:
-                self._restore_exec_context(saved_ctx)
-            return empty
+            return self._check_expression_with_target(node, target_type=None)
 
         if isinstance(node, Assignment):
             self._check_assignment(node)
@@ -5053,20 +7774,13 @@ class SemanticAnalyzer:
         if isinstance(node, UnaryOp):
             if node.op == "!":
                 sub = self._check_expression_flow(node.operand)
+                op_t = self.infer_type(node.operand)
+                if op_t and not self._is_boolean_type(op_t) and op_t not in ("Object", "var", "desconhecido") and not self._is_type_variable(op_t):
+                    self.errors.append(
+                        SemanticError(f"Operador lógico '!' requer operando 'boolean' (encontrado '{op_t}' — JLS §15.15.6).", getattr(node, "line", 1))
+                    )
                 return self._FlowResult(true_vars=dict(sub.false_vars), false_vars=dict(sub.true_vars))
-            self._check_expression_flow(node.operand)
-            if node.op in ("++", "--", "post++", "post--") and isinstance(node.operand, Identifier):
-                op_name = node.operand.name
-                linfo = self._find_local_var_info(op_name)
-                if linfo is not None:
-                    if linfo.get("is_final", False) and linfo.get("has_initializer", True):
-                        self.errors.append(
-                            SemanticError(
-                                f"Não é possível modificar variável 'final' '{op_name}' com '{node.op}'.",
-                                getattr(node, "line", 1),
-                            )
-                        )
-                    self._mark_local_var_reassigned(op_name)
+            self._validate_unary_op(node)
             return empty
 
         if isinstance(node, BinaryOp):
@@ -5077,6 +7791,7 @@ class SemanticAnalyzer:
                     fr = self._check_expression_flow(node.right)
                 finally:
                     self._pop_pattern_scope()
+                self._validate_binary_op(node)
                 merged_true = dict(fl.true_vars)
                 merged_true.update(fr.true_vars)
                 return self._FlowResult(true_vars=merged_true, false_vars={})
@@ -5088,45 +7803,14 @@ class SemanticAnalyzer:
                     fr = self._check_expression_flow(node.right)
                 finally:
                     self._pop_pattern_scope()
+                self._validate_binary_op(node)
                 merged_false = dict(fl.false_vars)
                 merged_false.update(fr.false_vars)
                 return self._FlowResult(true_vars={}, false_vars=merged_false)
 
             self._check_expression_flow(node.left)
             self._check_expression_flow(node.right)
-            if node.op in ("+", "-", "*", "/", "%"):
-                left_type = self.infer_type(node.left)
-                right_type = self.infer_type(node.right)
-                line = getattr(node, "line", 1)
-
-                # 1. Regra do Java para '+': se pelo menos um operando for String,
-                #    trata-se de concatenação válida e o tipo resultante é String.
-                if node.op == "+" and (left_type == "String" or right_type == "String"):
-                    return empty
-
-                # Demais operadores aritméticos (-, *, /, %) não suportam String
-                if left_type == "String" or right_type == "String":
-                    self.errors.append(
-                        SemanticError(
-                            f"Operação aritmética '{node.op}' inválida: tipo 'String' não é suportado em operações aritméticas.",
-                            line,
-                        )
-                    )
-                else:
-                    numeric_types = {"int", "double", "float", "long", "short", "byte", "char"}
-                    if (
-                        left_type
-                        and right_type
-                        and left_type not in ("Object", "desconhecido")
-                        and right_type not in ("Object", "desconhecido")
-                        and not (left_type in numeric_types and right_type in numeric_types)
-                    ):
-                        self.errors.append(
-                            SemanticError(
-                                f"Operação aritmética '{node.op}' inválida entre tipos '{left_type}' e '{right_type}'.",
-                                line,
-                            )
-                        )
+            self._validate_binary_op(node)
             return empty
 
         return empty
@@ -5134,37 +7818,66 @@ class SemanticAnalyzer:
     def is_assignable(self, target_type: str, source_type: str) -> bool:
         """
         Verifica compatibilidade de atribuição entre o tipo alvo e o da expressão,
-        suportando as regras de promoção implícita (widening primitive conversion) do Java:
-        byte -> short -> int -> long -> float -> double
-        char -> int
+        suportando widening, boxing, unboxing, subtipagem e argumentos genéricos (JLS §5.2).
         """
         if not target_type or not source_type:
             return True
-        if target_type == source_type:
+        t_clean = self._strip_leading_type_annotations(target_type) or target_type
+        s_clean = self._strip_leading_type_annotations(source_type) or source_type
+        if t_clean == s_clean:
             return True
-        widening_map = {
-            "double": {"int", "float", "long", "short", "byte", "char"},
-            "float": {"int", "long", "short", "byte", "char"},
-            "long": {"int", "short", "byte", "char"},
-            "int": {"short", "byte", "char"},
-            "short": {"byte"},
-        }
-        if target_type in widening_map and source_type in widening_map[target_type]:
+        t_simple = self._simple_base_name(t_clean) or t_clean
+        s_simple = self._simple_base_name(s_clean) or s_clean
+
+        if s_clean == "void":
+            return False
+        if t_clean == "void":
+            return s_clean == "void"
+        if t_clean in ("Object", "desconhecido", "var") or s_clean in ("desconhecido", "var"):
             return True
-        if target_type in ("Object", "desconhecido", "var") or source_type in ("Object", "desconhecido", "var"):
+        if self._is_type_variable(t_simple) or self._is_type_variable(s_simple):
             return True
-        if source_type == "null":
-            return target_type not in self.PRIMITIVE_TYPES
-        if self._is_subtype(source_type, target_type) is True:
+        if s_simple == "null":
+            return t_simple not in self.PRIMITIVE_TYPES
+
+        t_is_prim = t_simple in self.PRIMITIVE_TYPES
+        s_is_prim = s_simple in self.PRIMITIVE_TYPES
+
+        if t_is_prim and s_is_prim:
+            if t_simple == s_simple:
+                return True
+            return t_simple in self.WIDENING_PRIMITIVE_TARGETS.get(s_simple, set())
+
+        if t_is_prim and not s_is_prim:
+            s_unboxed = self.WRAPPER_TO_PRIMITIVE.get(s_simple)
+            if s_unboxed == t_simple:
+                return True
+            if s_unboxed and t_simple in self.WIDENING_PRIMITIVE_TARGETS.get(s_unboxed, set()):
+                return True
+            return False
+
+        if not t_is_prim and s_is_prim:
+            boxed = self.PRIMITIVE_TO_WRAPPER.get(s_simple)
+            if not boxed:
+                return False
+            if boxed == t_simple or t_simple == "Object":
+                return True
+            return self._is_subtype(boxed, t_clean) is True
+
+        sub = self._is_subtype(s_clean, t_clean)
+        if sub is True:
             return True
-        if (not self._is_known_type(target_type) or not self._is_known_type(source_type)) and target_type not in self.PRIMITIVE_TYPES and source_type not in self.PRIMITIVE_TYPES:
+        if sub is None and (not self._is_known_type(t_clean) or not self._is_known_type(s_clean)):
             return True
         return False
 
     def infer_type(self, node: Optional[ASTNode]) -> Optional[str]:
-        """Inferência simples de tipos para expressões primitivas com suporte a widening."""
+        """Infere o tipo estático da expressão considerando JLS §5.6, membros, arrays, poly expressions e switch."""
         if node is None:
             return None
+        cached = self._inferred_types.get(id(node))
+        if cached is not None:
+            return cached
         if isinstance(node, Literal):
             if node.kind in ("STRING", "TEXT_BLOCK"):
                 return "String"
@@ -5180,25 +7893,63 @@ class SemanticAnalyzer:
                 return "float"
             if node.kind in ("NUM", "INT"):
                 val_str = str(node.value)
-                # Hexadecimais inteiros (ex: 0x0F, 0xFF) são int e não devem ser
-                # classificados como float apenas por terminarem em 'F'/'f' ou 'D'/'d'.
                 if val_str.startswith(("0x", "0X")) and not any(c in val_str for c in ('p', 'P', '.')):
+                    if val_str.endswith(("l", "L")):
+                        return "long"
                     return "int"
-                if "." in val_str or "e" in val_str.lower() or val_str.endswith(("f", "F", "d", "D")):
+                if "." in val_str or ("e" in val_str.lower() and not val_str.startswith(("0x", "0X"))) or val_str.endswith(("f", "F", "d", "D")):
                     if val_str.endswith(("f", "F")):
                         return "float"
                     return "double"
+                if val_str.endswith(("l", "L")):
+                    return "long"
                 return "int"
             return "int"
         if isinstance(node, ClassLiteral):
-            return "Class"
-        if isinstance(node, MemberAccess) and isinstance(node.target, Identifier):
-            if node.target.name in self._enums:
-                return node.target.name
+            t_str = self._normalize_type_str(getattr(node, "type_ref", None))
+            if not t_str:
+                return "Class"
+            if t_str == "void":
+                return "Class<Void>"
+            if t_str in self.PRIMITIVE_TO_WRAPPER:
+                return f"Class<{self.PRIMITIVE_TO_WRAPPER[t_str]}>"
+            return f"Class<{t_str}>"
+        if isinstance(node, MemberAccess):
+            recv_t = self._infer_member_access_receiver_type(node)
+            if recv_t:
+                if node.member_name == "this":
+                    return recv_t
+                if node.member_name == "super":
+                    supers, _ = self._direct_supertypes(recv_t)
+                    return supers[0] if supers else "Object"
+                if recv_t.endswith("[]") and node.member_name == "length":
+                    return "int"
+                if self._simple_base_name(recv_t) in self._enums:
+                    enum_decl = self._enums[self._simple_base_name(recv_t)]
+                    if any(getattr(c, "name", None) == node.member_name for c in getattr(enum_decl, "constants", [])):
+                        return recv_t
+                fields, _ = self._collect_type_fields(recv_t)
+                finfo = fields.get(node.member_name)
+                if finfo is not None:
+                    return finfo.get("type")
             return None
         if isinstance(node, Identifier):
+            if node.name == "this":
+                return self._current_enclosing_type()
+            if node.name == "super":
+                cur = self._current_enclosing_type()
+                if cur:
+                    supers, _ = self._direct_supertypes(cur)
+                    return supers[0] if supers else "Object"
             symbol = self._lookup_var_symbol(node.name)
             return symbol["type"] if symbol and "type" in symbol else None
+        if isinstance(node, ArrayAccess):
+            arr_t = self.infer_type(node.array)
+            if arr_t and arr_t.endswith("[]"):
+                return arr_t[:-2]
+            return None
+        if isinstance(node, ArrayCreationExpression):
+            return self._normalize_type_str(getattr(node, "type_ref", None))
         if isinstance(node, ObjectCreationExpression):
             return self._normalize_type_str(getattr(node, "type_ref", None)) or getattr(node, "class_name", None)
         if isinstance(node, InstanceOfExpression):
@@ -5208,19 +7959,26 @@ class SemanticAnalyzer:
         if isinstance(node, ConditionalExpression):
             then_t = self.infer_type(node.then_expr)
             else_t = self.infer_type(node.else_expr)
-            if then_t and else_t:
-                if then_t == else_t:
-                    return then_t
-                if "double" in (then_t, else_t):
-                    return "double"
-                if "float" in (then_t, else_t):
-                    return "float"
-            return then_t if then_t else else_t
+            # JLS §15.25.2: constante int que cabe em byte/short/char combina com esse tipo
+            if then_t in self.INTEGER_RANGES and self._is_constant_narrowing_compatible(then_t, node.else_expr):
+                return then_t
+            if else_t in self.INTEGER_RANGES and self._is_constant_narrowing_compatible(else_t, node.then_expr):
+                return else_t
+            return self._lub_type(then_t, else_t)
         if isinstance(node, UnaryOp):
             if node.op == "!":
                 return "boolean"
-            return self.infer_type(node.operand)
+            op_t = self.infer_type(node.operand)
+            if node.op in ("++", "--", "post++", "post--"):
+                return op_t
+            if node.op in ("+", "-", "~"):
+                return self._unary_numeric_promotion(op_t) or op_t
+            return op_t
         if isinstance(node, Assignment):
+            if isinstance(node.target, (MemberAccess, ArrayAccess)):
+                t = self.infer_type(node.target)
+                if t:
+                    return t
             if node.name and "." not in node.name and not node.name.startswith("this."):
                 symbol = self._lookup_var_symbol(node.name)
                 if symbol and "type" in symbol:
@@ -5233,20 +7991,13 @@ class SemanticAnalyzer:
             right = self.infer_type(node.right)
             if node.op == "+" and (left == "String" or right == "String"):
                 return "String"
-            if left and right:
-                # Promoção binária aritmética oficial do Java (widening)
-                if "double" in (left, right):
-                    return "double"
-                if "float" in (left, right):
-                    return "float"
-                if "long" in (left, right):
-                    return "long"
-                if left == "int" and right == "int":
-                    return "int"
-                numeric_int_types = {"int", "short", "byte", "char"}
-                if left in numeric_int_types and right in numeric_int_types:
-                    return "int"
-            return left or right or None
+            if node.op in ("<<", ">>", ">>>"):
+                return self._unary_numeric_promotion(left) or left
+            if node.op in ("&", "|", "^"):
+                if self._is_boolean_type(left) and self._is_boolean_type(right):
+                    return "boolean"
+                return self._binary_numeric_promotion(left, right) or left or right
+            return self._binary_numeric_promotion(left, right) or left or right
         return None
 
     def check_assignment_type(
@@ -5258,8 +8009,7 @@ class SemanticAnalyzer:
         operator: str = "=",
     ):
         """
-        Verifica compatibilidade entre o tipo alvo e o da expressão com suporte a
-        promoção por alargamento e concatenação composta (+= quando o destino for String).
+        Verifica compatibilidade entre o tipo alvo e a expressão em atribuições simples e compostas (JLS §5.2 / §15.26.2).
         """
         if operator == "+=" and target_type == "String":
             return
@@ -5273,8 +8023,40 @@ class SemanticAnalyzer:
             )
             return
 
-        expr_type = self.infer_type(expression)
-        if expr_type and not self.is_assignable(target_type, expr_type):
+        if operator != "=":
+            expr_type = self.infer_type(expression)
+            if not expr_type or target_type in ("Object", "var", "desconhecido") or expr_type in ("Object", "var", "desconhecido"):
+                return
+            if operator in ("<<=", ">>=", ">>>="):
+                if not self._is_integral_type(target_type) or not self._is_integral_type(expr_type):
+                    self.errors.append(
+                        SemanticError(
+                            f"Atribuição composta '{operator}' exige operandos integrais (encontrado '{target_type}' e '{expr_type}' — JLS §15.26.2).",
+                            line,
+                        )
+                    )
+            elif operator in ("&=", "|=", "^="):
+                both_int = self._is_integral_type(target_type) and self._is_integral_type(expr_type)
+                both_bool = self._is_boolean_type(target_type) and self._is_boolean_type(expr_type)
+                if not both_int and not both_bool:
+                    self.errors.append(
+                        SemanticError(
+                            f"Atribuição composta '{operator}' exige operandos integrais ou booleanos compatíveis (encontrado '{target_type}' e '{expr_type}' — JLS §15.26.2).",
+                            line,
+                        )
+                    )
+            else:
+                if self._unboxed_numeric(target_type) is None or self._unboxed_numeric(expr_type) is None:
+                    self.errors.append(
+                        SemanticError(
+                            f"Atribuição aritmética composta '{operator}' inválida entre '{target_type}' e '{expr_type}' (JLS §15.26.2).",
+                            line,
+                        )
+                    )
+            return
+
+        if not self._is_assignable_expr(target_type, expression):
+            expr_type = self.infer_type(expression) or "poly-expression"
             self.errors.append(
                 SemanticError(
                     f"Incompatibilidade de tipos: não é possível atribuir {expr_type} a '{target_name}' do tipo {target_type}.",

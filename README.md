@@ -125,10 +125,17 @@ O projeto adota uma abordagem incremental sólida, sem bibliotecas externas:
     - `Pattern`, `TypePattern` (com `@Annotation`, `final`, genéricos/arrays e `_`), `RecordPattern` (aninhamento, `var`, genéricos, aridade e proibições de annotations sobre o tipo do record), `ComponentPatternList`, `ComponentPattern`, `MatchAllPattern` (`_`), `Guard` (`when` estritamente contextual), `PatternCaseLabel` e `PatternInstanceOfExpression` (preservando `InstanceOfExpression`);
     - Escopo sensível ao fluxo (*flow-scoping* JLS §6.3) em `!`, `&&`, `||`, `?:`, `if`/`else`, `while`, `for`, `do-while`, `switch` (sem vazar para a tabela de símbolos global), regras de dominância recursiva (JLS §14.30.3 / §14.11.1) e exaustividade incluindo hierarquias `sealed` multinível e decomposição recursiva de records;
     - Separação estrita de preview JEP 530 (desabilitado por padrão via `enable_preview_primitive_patterns=False`): rejeita tipos primitivos em `instanceof`, `switch` labels, componentes primitivos de `RecordPattern` (`Ponto(int x, int y)`), `instanceof` clássico com primitivo e seletores/constantes `boolean`/`long`/`float`/`double`, mantendo `var` e `_` em `RecordPattern` mesmo para campos primitivos; a flag opcional `enable_preview_primitive_patterns=True` habilita apenas um subconjunto parcial de preview (sem matriz integral JLS §5.7.1–§5.7.2 nem exaustividade por faixa numérica); registro honesto de tipos externos em `unresolved_checks` e auditoria herdada S6 (`break rotulado;` em blocos).
+  - **Etapa S8 — Expressões Completas, Inferência de Tipos e Switch Expressions (Concluída)**:
+    - Cobertura integral do Grupo I e integração final de `SwitchExpression` do Grupo H (JLS §15) validada por 12 suítes dedicadas (`109` novos testes: `tests/test_java26_expression_precedence.py`, `tests/test_java26_arithmetic_expressions.py`, `tests/test_java26_assignment_expressions.py`, `tests/test_java26_casts_conversions.py`, `tests/test_java26_method_invocations.py`, `tests/test_java26_object_creation.py`, `tests/test_java26_array_expressions.py`, `tests/test_java26_lambda_expressions.py`, `tests/test_java26_method_references.py`, `tests/test_java26_poly_expressions.py`, `tests/test_java26_switch_expression_typing.py`, `tests/test_java26_expression_semantics.py`);
+    - Todos os 17 níveis de precedência e associatividade, promoções numéricas unária/binária, estreitamento constante, verificação de *l-values* modificáveis e atribuições compostas;
+    - Casts primitivos, de referência e de interseção (`(A & B) expr`), invocação com herança/sobrecarga/genéricos explícitos (`Tipo.<T>m(...)`), diamond `<>`, `outer.new`, `AnonymousClassDeclaration` e criação/indexação de arrays (JLS §15.10.1);
+    - Todas as formas de `LambdaExpression` (com captura efetivamente final JLS §15.27.2), todas as 5 formas de `MethodReference` (incluindo `int[]::new`) e tipagem polimórfica (*target-typing* e unificação) para ternários, lambdas, method references e `SwitchExpression` (`->` e `yield`), com registro honesto de referências externas em `unresolved_checks`.
 
-- **Fases Futuras (Próximos Passos)**:
-  - Etapa S8: Expressões completas e integração integral de `SwitchExpression` (JLS §15);
-  - Etapa S9: Auditoria final e consolidação integral das etapas S1–S8.
+- **Etapa S9 — Auditoria Final de Conformidade Java SE 26 (Concluída)**:
+  - Auditoria cruzada da matriz de cobertura (`docs/JAVA26_SYNTAX_COVERAGE.md`), dos diagnósticos e de cenários negativos/positivos entre escopos, tipos, expressões, OOP e preview;
+  - Correções pontuais para `synchronized` (rejeita primitivo/`void`), `throw` (exige subtipo de `Throwable` quando conhecido) e `var` (rejeita inicializador `void`), além da suíte `tests/test_java26_s9_audit_regressions.py`;
+  - **Configuração Preview**: recursos preview da JEP 530 (*primitive patterns*) ficam desabilitados por padrão (`enable_preview_primitive_patterns=False`) e podem ser habilitados explicitamente apenas para o subconjunto parcial documentado;
+  - **Limitações conhecidas**: análise de unidade única (tipos externos não embutidos são registrados em `unresolved_checks`), sem JLS §16 (*definite assignment* integral), sem JLS §18 (inferência genérica completa), sem captura integral de wildcards (JLS §5.1.10), sem sistema completo de warnings e sem execução/runtime Java.
 
 ---
 
@@ -149,15 +156,16 @@ compilador_av3/
 │   ├── exemplo_interfaces_enums_records_s4.java# Exemplo integrado da Etapa S4 (interfaces, enums, records e construtores)
 │   ├── exemplo_annotations_s5.java             # Exemplo integrado da Etapa S5 (@interface, annotations, @Repeatable e type annotations)
 │   ├── exemplo_instrucoes_s6.java              # Exemplo integrado da Etapa S6 (blocos, var, tipos locais, try-with-resources, switch e yield)
-│   └── exemplo_pattern_matching_s7.java        # Exemplo integrado da Etapa S7 (TypePattern, RecordPattern, when, sealed e switch exaustivo)
+│   ├── exemplo_pattern_matching_s7.java        # Exemplo integrado da Etapa S7 (TypePattern, RecordPattern, when, sealed e switch exaustivo)
+│   └── exemplo_expressoes_s8.java              # Exemplo integrado da Etapa S8 (precedência, casts, sobrecarga, lambdas, method refs, switch expression)
 ├── src/
 │   ├── __init__.py
 │   ├── token.py                                # Enum de tokens e dataclass Token
 │   ├── lexer.py                                # Analisador léxico Java completo (Fase A)
 │   ├── symbol_table.py                         # Tabela de símbolos com escopos e categorias
-│   ├── parser.py                               # Analisador sintático (Fases B–D e Etapas S1–S7)
+│   ├── parser.py                               # Analisador sintático (Fases B–D e Etapas S1–S8)
 │   ├── ast_nodes.py                            # Nós da AST com pretty-printing hierárquico e to_dict()
-│   ├── semantic.py                             # Validador semântico (escopos, flow-scoping S7, dominância e exaustividade)
+│   ├── semantic.py                             # Validador semântico (escopos, tipagem S8, flow-scoping S7, dominância e exaustividade)
 │   ├── main.py                                 # Pipeline unificado e CLI (arquitetura tripla)
 │   ├── gui.py                                  # Interface gráfica Tkinter com fallback automático
 │   └── web_gui.py                              # Interface Web Local zero-dependências (http.server)
@@ -194,7 +202,39 @@ compilador_av3/
     ├── test_java26_pattern_dominance.py        #  5 testes: suíte da Etapa S7 — Regras de dominância em switch e records (JLS §14.11.1 / §14.30.3)
     ├── test_java26_switch_exhaustiveness.py         #  6 testes: suíte da Etapa S7 — Exaustividade sealed, enums e records (JLS §14.11.2 / §15.28.1)
     ├── test_java26_pattern_semantics.py             #  6 testes: suíte da Etapa S7 — Auditoria S6, Preview JEP 530 e Fronteira Externa
-    └── test_java26_pattern_preview_separation.py    # 10 testes: suíte S7.1 — Separação Estável Java SE 26 vs Preview JEP 530
+    ├── test_java26_pattern_preview_separation.py    # 10 testes: suíte S7.1 — Separação Estável Java SE 26 vs Preview JEP 530
+    ├── test_java26_expression_precedence.py         # 21 testes: suíte da Etapa S8/S8.1 — 17 Níveis de Precedência e Associatividade (JLS §15)
+    ├── test_java26_operator_semantics.py            # 31 testes: suíte da Etapa S8.1 — Tipos Resultantes e Compatibilidade de Operadores
+    ├── test_java26_primitive_conversions.py         #  8 testes: suíte da Etapa S8.2 — Conversões Primitivas e Promoções (JLS §5.1.1–§5.1.4, §5.6)
+    ├── test_java26_reference_conversions.py         #  9 testes: suíte da Etapa S8.2 — Conversões de Referência, Classes e Arrays (JLS §5.1.5, §5.5)
+    ├── test_java26_boxing_unboxing.py               #  9 testes: suíte da Etapa S8.2 — Boxing, Unboxing e Widening (JLS §5.1.7, §5.1.8)
+    ├── test_java26_cast_expressions.py              #  8 testes: suíte da Etapa S8.2 — Casts Primitivos, Referência, Interseção e Instanceof
+    ├── test_java26_constant_narrowing.py            #  9 testes: suíte da Etapa S8.2 — Narrowing Constante Implícito (JLS §5.2)
+    ├── test_java26_field_access.py                  #  9 testes: suíte da Etapa S8.3 — Acesso a Campos, this/super, Estático e Encadeado
+    ├── test_java26_array_access.py                  #  7 testes: suíte da Etapa S8.3 — Indexação 1D/ND, Índices e .length
+    ├── test_java26_method_invocation.py             #  7 testes: suíte da Etapa S8.3 — Invocações, Contexto Estático, void e Encadeamento
+    ├── test_java26_array_creation.py                #  6 testes: suíte da Etapa S8.3 — Criação de Arrays, Dimensões e Inicializadores
+    ├── test_java26_s82_regressions.py               #  6 testes: suíte da Etapa S8.3 — Regressões S8.2 (Unboxing/Narrowing e Wildcards)
+    ├── test_java26_arithmetic_expressions.py        # 10 testes: suíte da Etapa S8 — Promoção Numérica e Operadores Unários/Binários
+    ├── test_java26_assignment_expressions.py        #  9 testes: suíte da Etapa S8 — Atribuições, Estreitamento Constante e L-Values
+    ├── test_java26_casts_conversions.py             #  9 testes: suíte da Etapa S8 — Casts Primitivos, Referência e Interseção (JLS §15.16)
+    ├── test_java26_method_invocations.py            # 10 testes: suíte da Etapa S8 — Métodos, Herança, Sobrecarga e Genéricos Explícitos
+    ├── test_java26_object_creation.py               # 11 testes: suíte da Etapa S8/S8.3 — Diamond <>, Outer.new, Construtores e Classes Anônimas
+    ├── test_java26_array_expressions.py             #  9 testes: suíte da Etapa S8 — Criação JLS §15.10.1, Inicializadores e .length
+    ├── test_java26_lambda_expressions.py            # 14 testes: suíte da Etapa S8/S8.4 — Lambdas, Parâmetros, Blocos e Retornos
+    ├── test_java26_method_references.py             # 13 testes: suíte da Etapa S8/S8.4 — As 5 Formas de Method Reference (incl. int[]::new)
+    ├── test_java26_functional_interfaces.py         #  8 testes: suíte da Etapa S8.4 — Interfaces Funcionais (JLS §9.8) e @FunctionalInterface
+    ├── test_java26_lambda_typing.py                 #  7 testes: suíte da Etapa S8.4 — Target Typing, Sobrecargas e Incompatibilidades
+    ├── test_java26_lambda_capture.py                #  6 testes: suíte da Etapa S8.4 — Captura Efetivamente Final (JLS §15.27.2)
+    ├── test_java26_s84_regressions.py               #  6 testes: suíte da Etapa S8.4 — Regressões e Integração Lambda/MethodRef
+    ├── test_java26_poly_expressions.py              #  9 testes: suíte da Etapa S8 — Poly-Expressions, Ternários e Retorno/Atribuição
+    ├── test_java26_switch_expression_typing.py      #  9 testes: suíte da Etapa S8 — SwitchExpression, yield, Exaustividade e LUB
+    ├── test_java26_switch_expressions.py            #  9 testes: suíte da Etapa S8.5 — Switch Expressions (JLS §15.28), yield e Exaustividade
+    ├── test_java26_switch_expression_types.py       #  8 testes: suíte da Etapa S8.5 — Unificação e Compatibilidade de Tipos em Switch Expressions
+    ├── test_java26_class_literals.py                #  7 testes: suíte da Etapa S8.5 — Class Literals (.class), Outer.this e Outer.super
+    ├── test_java26_s85_regressions.py               #  8 testes: suíte da Etapa S8.5 — Auditoria Final e Regressões S8.1–S8.5
+    ├── test_java26_s9_audit_regressions.py          #  6 testes: suíte da Etapa S9 — Auditoria Final de Conformidade
+    └── test_java26_expression_semantics.py          #  8 testes: suíte da Etapa S8 — Integração S1–S8, Preview JEP 530 e unresolved_checks
 ```
 
 ---
@@ -246,7 +286,7 @@ python -m src.main examples/ExpressoesJava.java
 
 ## 5. Como Executar os Testes
 
-Execute a suíte completa de testes automatizados (**672 testes ao todo, 100% aprovados**):
+Execute a suíte completa de testes automatizados (**978 testes ao todo, 100% aprovados**):
 
 ```bash
 python -m unittest discover tests
@@ -288,4 +328,36 @@ python -m unittest -v tests/test_java26_pattern_dominance.py        #  5 testes
 python -m unittest -v tests/test_java26_switch_exhaustiveness.py    #  6 testes
 python -m unittest -v tests/test_java26_pattern_semantics.py             #  6 testes
 python -m unittest -v tests/test_java26_pattern_preview_separation.py    # 10 testes
+python -m unittest -v tests/test_java26_expression_precedence.py         # 21 testes
+python -m unittest -v tests/test_java26_operator_semantics.py            # 31 testes
+python -m unittest -v tests/test_java26_primitive_conversions.py         #  8 testes
+python -m unittest -v tests/test_java26_reference_conversions.py         #  9 testes
+python -m unittest -v tests/test_java26_boxing_unboxing.py               #  9 testes
+python -m unittest -v tests/test_java26_cast_expressions.py              #  8 testes
+python -m unittest -v tests/test_java26_constant_narrowing.py            #  9 testes
+python -m unittest -v tests/test_java26_field_access.py                  #  9 testes
+python -m unittest -v tests/test_java26_array_access.py                  #  7 testes
+python -m unittest -v tests/test_java26_method_invocation.py             #  7 testes
+python -m unittest -v tests/test_java26_array_creation.py                #  6 testes
+python -m unittest -v tests/test_java26_s82_regressions.py               #  6 testes
+python -m unittest -v tests/test_java26_arithmetic_expressions.py        # 10 testes
+python -m unittest -v tests/test_java26_assignment_expressions.py        #  9 testes
+python -m unittest -v tests/test_java26_casts_conversions.py             #  9 testes
+python -m unittest -v tests/test_java26_method_invocations.py            # 10 testes
+python -m unittest -v tests/test_java26_object_creation.py               # 11 testes
+python -m unittest -v tests/test_java26_array_expressions.py             #  9 testes
+python -m unittest -v tests/test_java26_lambda_expressions.py            # 14 testes
+python -m unittest -v tests/test_java26_method_references.py             # 13 testes
+python -m unittest -v tests/test_java26_functional_interfaces.py         #  8 testes
+python -m unittest -v tests/test_java26_lambda_typing.py                 #  7 testes
+python -m unittest -v tests/test_java26_lambda_capture.py                #  6 testes
+python -m unittest -v tests/test_java26_s84_regressions.py               #  6 testes
+python -m unittest -v tests/test_java26_poly_expressions.py              #  9 testes
+python -m unittest -v tests/test_java26_switch_expression_typing.py      #  9 testes
+python -m unittest -v tests/test_java26_switch_expressions.py            #  9 testes
+python -m unittest -v tests/test_java26_switch_expression_types.py       #  8 testes
+python -m unittest -v tests/test_java26_class_literals.py                #  7 testes
+python -m unittest -v tests/test_java26_s85_regressions.py               #  8 testes
+python -m unittest -v tests/test_java26_s9_audit_regressions.py          #  6 testes
+python -m unittest -v tests/test_java26_expression_semantics.py          #  8 testes
 ```

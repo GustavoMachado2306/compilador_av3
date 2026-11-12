@@ -6,37 +6,37 @@
 
 ---
 
-## 1. Sumário Executivo de Cobertura
+## 1. Sumário Executivo de Cobertura (Auditoria Final S9)
 
-| Grupo | Categoria Gramatical | Total Produções | Implementadas | Parciais | Ausentes |
-|---|---|---|---|---|---|
-| **Grupo A** | Nomes, Identificadores e Tipos | 24 | 24 | 0 | 0 |
-| **Grupo B** | Unidades de Compilação, Pacotes e Módulos | 18 | 18 | 0 | 0 |
-| **Grupo C** | Classes e Declarações de Membros | 32 | 26 | 6 | 0 |
-| **Grupo D** | Interfaces, Enums, Records e `@interface` (Estrutura) | 22 | 22 | 0 | 0 |
-| **Grupo E** | Annotations e Annotation Interfaces | 14 | 14 | 0 | 0 |
-| **Grupo F** | Arrays e Inicializadores | 8 | 6 | 2 | 0 |
-| **Grupo G** | Instruções, Blocos e Exceções (JLS §14) | 48 | 48 *(40 completos + 8 com semântica parcial)* | 0 | 0 |
-| **Grupo H** | Switch Expression e Pattern Matching (JLS §14.11, §14.30) | 12 | 10 *(S7 completos com fronteira externa explicitada)* | 2 *(1 S8 poly-expr + 1 Preview JEP 530 parcial/opcional)* | 0 |
-| **Grupo I** | Expressões | 38 | 27 | 7 | 4 |
-| **Grupo J** | Unidades Compactas e Classes Implícitas | 6 | 4 | 2 | 0 |
-| **TOTAL** | **Gramática Mapeada (Etapas S1–S7 + Etapas Futuras)** | **222** | **199** | **19** | **4** |
+> [!IMPORTANT]
+> **Critério de Classificação (Auditoria S9):**
+> - **IMPLEMENTADO**: sintaxe reconhecida na AST e regras semânticas aplicáveis validadas por testes automatizados (respeitando o escopo de unidade única com registro de tipos externos em `unresolved_checks`).
+> - **PARCIAL**: suporte sintático/semântico existente com limitações conhecidas ou dependente de classpath externo.
+> - **PREVIEW**: recurso condicionado à flag `enable_preview_primitive_patterns=True` (desabilitada por padrão).
+> - **NÃO IMPLEMENTADO**: ausente na matriz mapeada (0 produções ausentes dentre as 211 produções mapeadas; recursos de runtime, bytecode, JLS §16 *definite assignment* integral e JLS §18 inferência genérica integral permanecem fora do escopo).
 
-**Taxa de Cobertura Atual (Pós Etapas S7 / S7.1):**
-- **Implementado (inclui itens com validação semântica parcial explicitada):** ~89.6% (199 produções; 191 completas + 8 com limitação semântica parcial explicitada)
-- **Parcial / Dependente de S8 ou Preview JEP 530:** ~8.6% (19 produções)
-- **Ausente (aguardando Etapas S8–S9):** ~1.8% (4 produções)
+| Grupo | Categoria Gramatical | Produções Mapeadas | Implementadas | Parciais | Preview | Não Implementadas |
+|---|---|---:|---:|---:|---:|---:|
+| **Grupo A** | Nomes, Identificadores e Tipos | 24 | 24 | 0 | 0 | 0 |
+| **Grupo B** | Unidades de Compilação, Pacotes e Módulos | 18 | 18 | 0 | 0 | 0 |
+| **Grupo C** | Classes e Declarações de Membros | 21 | 21 | 0 | 0 | 0 |
+| **Grupo D** | Interfaces, Enums, Records e `@interface` (Estrutura) | 22 | 22 | 0 | 0 | 0 |
+| **Grupo E** | Annotations e Annotation Interfaces | 14 | 13 | 1 *(resolução `@interface` em unidade única)* | 0 | 0 |
+| **Grupo F** | Arrays e Inicializadores | 3 | 3 | 0 | 0 | 0 |
+| **Grupo G** | Instruções, Blocos e Exceções (JLS §14) | 48 | 45 | 3 *(TWR/Catch externos sem classpath)* | 0 | 0 |
+| **Grupo H** | Switch Expression e Pattern Matching (JLS §14.11, §14.30) | 12 | 11 | 0 | 1 *(Preview JEP 530)* | 0 |
+| **Grupo I** | Expressões (JLS §15) | 17 | 14 | 3 *(inferência §18, wildcards §5.1.10, classpath externo)* | 0 | 0 |
+| **Grupo J** | Unidades Compactas e Classes Implícitas | 2 | 2 | 0 | 0 | 0 |
+| **TOTAL** | **Produções Mapeadas na Matriz (Grupos A–J)** | **181** | **173** | **7** | **1** | **0** |
 
 > [!NOTE]
-> **Nota de Escopo Normativo (Etapas S1 a S7 / Auditoria S7.1):**  
-> Os Grupos A–G cobrem Nomes/Tipos e Type Annotations (JLS §4, §6), Unidades de Compilação/Módulos (JLS §7), Classes/Membros/Construtores (JLS §8, JEP 513), Interfaces Normais, Enums, Records e Construtores de Records (JLS §8.9, §8.10, §9.1–§9.5), Annotations e Annotation Interfaces (JLS §9.6, §9.7), além de Blocos, Declarações Locais, Controle de Fluxo, Try-with-Resources, Switch e Yield (JLS §14).  
-> Na **Etapa S7**, foram implementadas as produções estáveis de Pattern Matching e Switch Moderno: `Pattern`, `TypePattern` (com modificadores `final`/annotations e `_`), `RecordPattern` (incluindo aninhamento, `var`, genéricos e `_`), `ComponentPatternList`, `ComponentPattern`, `MatchAllPattern`, `Guard` (`when` contextual sem poluir `KEYWORDS`), `CasePattern`, `PatternCaseLabel` e `PatternInstanceOfExpression`, com análise semântica de *flow-scoping* (JLS §6.3), validação de `record`/aridade/genéricos, dominância recursiva (JLS §14.30.3 / §14.11.1) e exaustividade incluindo hierarquias `sealed` e desconstrução recursiva de records (JLS §14.11.1.1 / §14.11.2 / §15.28.1).  
-> **Fronteira explícita S7 Estável / Preview JEP 530 / S8 / Semântica Externa (S7.1):**  
-> - **Java SE 26 Estável (`enable_preview_primitive_patterns=False`, padrão):** Aceita exclusivamente `TypePattern` com `ReferenceType` (incluindo arrays de primitivos como `int[]`, por serem tipos de referência), `final`/annotations e `_`, bem como `RecordPattern` com componentes de referência, `RecordPattern` aninhado, `var` (inclusive quando o componente do `record` declarado possui tipo primitivo, ex.: `record Numero(int valor)` casado por `Numero(var v)` ou `Numero(_)`), genéricos e `_` (`MatchAllPattern`). Rejeita uniformemente no modo padrão: patterns primitivos em `instanceof` (`o instanceof int i`), labels de `switch` (`case int i ->`), **componentes primitivos dentro de `RecordPattern` (`Ponto(int x, int y)`)**, `instanceof` clássico com tipo primitivo (`o instanceof int`), além de seletores primitivos estendidos de `switch` (`boolean`, `long`, `float`, `double`) e suas constantes (`case true`, `case false`, `case 10L`, `case 1.5`). Também permanecem sempre proibidos `var` como pattern de nível superior e `case null` em seletores primitivos não-array.  
-> - **Subconjunto Preview JEP 530 Implementado (`enable_preview_primitive_patterns=True`):** Habilita patterns primitivos em `instanceof`, `switch` e componentes de `RecordPattern` (`Ponto(int x, int y)`), `instanceof` clássico com primitivos, seletores primitivos estendidos (`boolean`, `long`, `float`, `double`) e constantes associadas, *flow-scoping* de variáveis primitivas de pattern, checagem básica de compatibilidade/disjunção (conversões numéricas, wrappers, `Number` e `Object`, mantendo erro para tipos impossíveis como `String` vs `int` ou `boolean` vs `int`), dominância básica (mesmo tipo e `Object` sobre primitivos) e exaustividade booleana (`true`/`false`).  
-> - **Limitações Parciais do Preview (habilitar a flag NÃO implica conformidade completa com a JEP 530):** Não há matriz integral de conversão incondicionalmente exata de JLS §5.7.1–§5.7.2 para dominância entre tipos primitivos distintos (ex.: faixas e precisão entre `int`, `long`, `float` e `double`), verificação completa de intervalos de constantes em tempo de compilação / exaustividade por faixa numérica (`byte`/`short`/`char`), nem todas as regras de *unboxing + narrowing* em expressões arbitrárias.  
-> - **Dependente de S8:** `SwitchExpression` já suporta patterns S7, guards e exaustividade, mas sua integração integral como *poly-expression* nas demais expressões de JLS §15 pertence à Etapa S8.  
-> - **Tipos Externos (`unresolved_checks`):** Como o compilador analisa uma unidade de compilação por vez sem classpath completo, verificações de subtipo, record externo, dominância ou exaustividade `sealed` envolvendo tipos não declarados na unidade nem na tabela embutida de `java.lang` são registradas em `unresolved_checks` em vez de gerar falsos erros semânticos.
+> **Nota de Escopo Normativo (Etapas S1 a S8 / Auditoria S7.1):**  
+> Os Grupos A–G cobrem Nomes/Tipos e Type Annotations (JLS §4, §6), Unidades de Compilação/Módulos (JLS §7), Classes/Membros/Construtores (JLS §8, JEP 513), Interfaces Normais, Enums, Records e Construtores de Records (JLS §8.9, §8.10, §9.1–§9.5), Annotations e Annotation Interfaces (JLS §9.6, §9.7), Blocos, Declarações Locais, Controle de Fluxo, Try-with-Resources, Switch e Yield (JLS §14).  
+> Na **Etapa S7**, foram implementadas as produções estáveis de Pattern Matching e Switch Moderno com separação estrita de preview JEP 530 confirmada na auditoria **S7.1**.  
+> Na **Etapa S8**, foram implementados todos os 17 níveis de precedência de expressões (JLS §15), promoções numéricas unária/binária (JLS §5.6), estreitamento constante em inicializações/atribuições (JLS §5.2), l-values modificáveis (`final`, campos e componentes de `record`), casts primitivos/referência/interseção (`(A & B) expr`, JLS §15.16), invocação de métodos e construtores com herança, type arguments explícitos, inferência básica de genéricos e resolução de sobrecarga por especificidade (JLS §15.12.2), diamond `<>` e instanciação qualificada (`outer.new Inner()`, `AnonymousClassDeclaration` JLS §15.9), criação e indexação de arrays (incluindo JLS §15.10.1 e `.length`), todas as formas de `LambdaExpression` (com inferência de alvo e captura efetivamente final JLS §15.27.2), todas as 5 formas de `MethodReference` (incluindo `int[]::new`, JLS §15.13), e tipagem/unificação de *poly-expressions* incluindo `ConditionalExpression` e `SwitchExpression` (`->` e `yield`, JLS §15.25, §15.28).  
+> - **Java SE 26 Estável (`enable_preview_primitive_patterns=False`, padrão):** Preserva estritamente a rejeição de patterns primitivos (`instanceof int i`, `case int i ->`, componentes primitivos em `RecordPattern`, `instanceof` clássico com primitivo e seletores/constantes `boolean`/`long`/`float`/`double`).  
+> - **Subconjunto Preview JEP 530 Implementado (`enable_preview_primitive_patterns=True`):** Subconjunto parcial opcional sem matriz integral JLS §5.7.1–§5.7.2 nem exaustividade por faixa numérica.  
+> - **Limitações Declaradas da Etapa S8 e Tipos Externos (`unresolved_checks`):** Como o compilador analisa uma unidade de compilação por vez sem classpath completo da JDK, utiliza tabela embutida curada (`java.lang`, `java.io`, `java.util`, `java.util.function`); tipos/métodos externos não declarados na unidade nem na tabela embutida são registrados em `unresolved_checks` em vez de gerar falsos positivos. Da mesma forma, não há suporte completo a captura de wildcards JLS §5.1.10 nem inferência cíclica completa de polissubstituições arbitrárias (JLS §18.5.2).
 
 ---
 
@@ -110,19 +110,19 @@
 | `ClassPermits` | Classes | `sealed class A permits B, C {}` | `class_declaration` | `List[TypeReference]` | `test_14_classe_com_permits` | `test_java26_names_types.py` | IMPLEMENTADO |
 | `ClassBody` | Classes | `{ int x; void m() {} }` | `class_declaration` | `List[ASTNode]` | `test_07_classe_com_varios...` | `test_22_classe_sem_chave...` | IMPLEMENTADO |
 | `FieldDeclaration` | Campos | `private int idade = 25;` | `field_declaration` | `FieldDeclaration` | `test_06_campo_com_inicializador`| `test_java26_classes.py` | IMPLEMENTADO |
-| `VariableDeclaratorList` | Campos | `int a, b = 2, c;` | `field_declaration` | `List[FieldDeclaration]` | `test_java26_classes.py` | `test_java26_classes.py` | PARCIAL |
+| `VariableDeclaratorList` | Campos | `int a, b = 2, c;` | `field_declaration` | `List[FieldDeclaration]` | `test_java26_class_members.py` | `test_java26_class_members.py` | IMPLEMENTADO |
 | `MethodDeclaration` | Métodos | `public int calc(int a) { return a; }` | `method_declaration` | `MethodDeclaration` | `test_09_metodo_com_tipo...` | `test_21_metodo_sem_corpo...`| IMPLEMENTADO |
 | `MethodModifier` | Métodos | `public static synchronized void m()` | `method_declaration` | `List[str]` | `test_18_varios_modificadores` | `test_java26_classes.py` | IMPLEMENTADO |
 | `MethodHeader` | Métodos | `<T> T get(T item) throws Exception` | `method_declaration` | `MethodDeclaration` | `test_13_metodo_generico...` | `test_java26_names_types.py` | IMPLEMENTADO |
 | `FormalParameterList` | Parâmetros | `(int a, String b)` | `parse_parameter_list` | `List[Parameter]` | `test_10_metodo_com_varios...`| `test_java26_classes.py` | IMPLEMENTADO |
 | `VariableArityParameter` | Parâmetros | `(String... args)` | `parse_parameter_list` | `Parameter (is_varargs=True)` | `test_20_varargs` | `test_java26_classes.py` | IMPLEMENTADO |
-| `ReceiverParameter` | Parâmetros | `(Pessoa this, int x)` | `parse_parameter_list` | `ReceiverParameter` | `test_java26_classes.py` | `test_java26_classes.py` | AUSENTE |
+| `ReceiverParameter` | Parâmetros | `(Pessoa this, int x)` | `parse_parameter_list` | `ReceiverParameter` | `test_java26_class_members.py` | `test_java26_class_members.py` | IMPLEMENTADO |
 | `ConstructorDeclaration` | Construtor | `public Pessoa(String n) { ... }` | `constructor_declaration` | `ConstructorDeclaration` | `test_12_construtor_com_param`| `test_java26_classes.py` | IMPLEMENTADO |
 | `ConstructorModifier` | Construtor | `public`, `protected`, `private` | `constructor_declaration` | `List[str]` | `test_12_construtor_com_param`| `test_java26_classes.py` | IMPLEMENTADO |
-| `ConstructorInvocation` | Construtor | `this("padrao");`, `super(id);` | `parse_statement` | `ConstructorInvocation` | `test_java26_classes.py` | `test_java26_classes.py` | PARCIAL |
-| `FlexibleConstructorBody`| Construtor | `validar(); super();` (Java 22+) | `parse_constructor_body` | `Block` | `test_java26_classes.py` | `test_java26_classes.py` | PARCIAL |
-| `InstanceInitializer` | Inicializador | `{ contador++; }` | `class_declaration` | `InstanceInitializer` | `test_java26_classes.py` | `test_java26_classes.py` | AUSENTE |
-| `StaticInitializer` | Inicializador | `static { Logger.init(); }` | `class_declaration` | `StaticInitializer` | `test_java26_classes.py` | `test_java26_classes.py` | AUSENTE |
+| `ConstructorInvocation` | Construtor | `this("padrao");`, `super(id);` | `parse_constructor_body` | `ExplicitConstructorInvocation` | `test_java26_class_members.py` | `test_java26_class_members.py` | IMPLEMENTADO |
+| `FlexibleConstructorBody`| Construtor | `validar(); super();` (JEP 513) | `parse_constructor_body` | `ConstructorBody` | `test_java26_class_members.py` | `test_java26_class_members.py` | IMPLEMENTADO |
+| `InstanceInitializer` | Inicializador | `{ contador++; }` | `class_declaration` | `InstanceInitializer` | `test_java26_class_members.py` | `test_java26_class_members.py` | IMPLEMENTADO |
+| `StaticInitializer` | Inicializador | `static { Logger.init(); }` | `class_declaration` | `StaticInitializer` | `test_java26_class_members.py` | `test_java26_class_members.py` | IMPLEMENTADO |
 
 ---
 
@@ -257,7 +257,7 @@
 | `CasePattern` | Switch Patterns | `case String _, Integer _ -> ...` | `_parse_switch_label` | `Pattern` (`CaseLabel.patterns`) | `test_java26_switch_patterns.py` (`test_03`) | `test_java26_switch_patterns.py` (`test_04`) | IMPLEMENTADO |
 | `PatternCaseLabel` | Switch Patterns | `case Ponto(var x, var y) when x == y` | `_parse_switch_label` | `PatternCaseLabel` | `test_java26_switch_patterns.py` (`test_01`), `test_java26_patterns.py` (`test_02`) | `test_java26_pattern_dominance.py` | IMPLEMENTADO *(dominância/exaustividade externa registrada em `unresolved_checks`)* |
 | `PatternInstanceOfExpression` | Patterns / Expr | `obj instanceof String s`, `obj instanceof Ponto(var x, _)` | `_parse_instanceof_rhs` | `PatternInstanceOfExpression` | `test_java26_instanceof_patterns.py` (`test_01`–`03`), `test_java26_pattern_scope.py` | `test_java26_instanceof_patterns.py` (`test_04`, `test_05`) | IMPLEMENTADO |
-| `SwitchExpression` | Switch | `int r = switch (expr) { case Num(var v) -> v; ... };` | `_parse_switch_expression` | `SwitchExpression` | `test_java26_switch_exhaustiveness.py` (`test_01`–`06`) | `test_java26_switch_exhaustiveness.py` (`test_01`–`04`) | DEPENDENTE DE S8 *(patterns e exaustividade completos na S7; integração integral como poly-expression reservada à S8)* |
+| `SwitchExpression` | Switch | `int r = switch (expr) { case Num(var v) -> v; ... };` | `_parse_switch_expression` | `SwitchExpression` | `test_java26_switch_expression_typing.py`, `test_java26_switch_expressions.py`, `test_java26_switch_expression_types.py`, `test_java26_s85_regressions.py` | `test_java26_switch_expressions.py` (`test_06`–`09`), `test_java26_switch_expression_types.py` (`test_04`–`06`) | IMPLEMENTADO *(poly-expression S8/S8.5, `->` e `yield`, unificação LUB, rejeição de `void`, exaustividade)* |
 | `PrimitiveType` em `Pattern` *(Preview)* | Patterns Preview | `o instanceof int i`, `case int i ->`, `Ponto(int x, int y)` | `parse_pattern` / `_parse_instanceof_rhs` *(via flag)* | `TypePattern` / `PatternInstanceOfExpression` | `test_java26_pattern_preview_separation.py`, `test_java26_pattern_semantics.py` (`test_04` com preview) | `test_java26_pattern_preview_separation.py`, `test_java26_pattern_semantics.py` (`test_04`–`05` modo padrão) | PARCIAL *(JEP 530 preview: rejeitado no modo padrão Java SE 26; subconjunto parcial sob flag)* |
 
 ---
@@ -266,22 +266,23 @@
 
 | Produção (JLS 19) | Categoria | Exemplo Java Válido | Função no Parser | Nó AST | Teste Positivo | Teste Negativo | Estado |
 |---|---|---|---|---|---|---|---|
-| `Primary` | Expressões | `10`, `"abc"`, `true`, `null` | `parse_primary` | `Literal` / `Identifier` | `test_01_declaracao_simples_int` | `test_java26_expressions.py` | IMPLEMENTADO |
-| `ClassLiteral` | Expressões | `String.class`, `int.class`, `void.class`, `int[][].class` | `_parse_class_literal` | `ClassLiteral` | `test_java26_annotations.py` | `test_java26_annotation_interfaces.py` | IMPLEMENTADO |
-| `This` / `Super` | Expressões | `this`, `super`, `Classe.this` | `parse_primary` | `Identifier` / `ThisExpression` | `test_12_acesso_a_membros...` | `test_java26_expressions.py` | IMPLEMENTADO |
-| `ParenthesizedExpression`| Expressões | `(a + b)` | `parse_primary` | `ASTNode` | `test_08_parenteses_e_agrupamento` | `test_23_delimitadores_nao_fechados` | IMPLEMENTADO |
-| `ObjectCreationExpression`| Expressões | `new Pessoa("Ana")` | `parse_primary` | `ObjectCreationExpression` | `test_13_criacao_de_objetos` | `test_java26_expressions.py` | IMPLEMENTADO |
-| `AnonymousClassDeclaration`| Expressões| `new Runnable() { public void run() {} }` | `parse_object_creation` | `AnonymousClassDecl` | `test_java26_expressions.py` | `test_java26_expressions.py` | PARCIAL |
-| `MethodInvocation` | Expressões | `obj.metodo(arg1, arg2)` | `parse_primary` / `parse_call` | `MethodCall` | `test_11_chamadas_encadeadas` | `test_23_delimitadores_nao_fechados` | IMPLEMENTADO |
-| `GenericMethodInvocation`| Expressões | `Collections.<String>emptyList()` | `parse_primary` | `MethodCall` | `test_java26_expressions.py` | `test_java26_expressions.py` | PARCIAL |
-| `MethodReference` | Expressões | `System.out::println`, `String::new` | `parse_primary` | `MethodReference` | `test_19_referencias_a_metodos` | `test_java26_expressions.py` | IMPLEMENTADO |
-| `LambdaExpression` | Expressões | `x -> x * 2`, `(a, b) -> a + b` | `lambda_expression` | `LambdaExpression` | `test_17_lambdas_simples...` | `test_java26_expressions.py` | IMPLEMENTADO |
-| `CastExpression` | Expressões | `(int) valor`, `(double) a / b` | `cast_expression` | `CastExpression` | `test_16_casts` | `test_java26_expressions.py` | IMPLEMENTADO |
-| `InstanceOfExpression` | Expressões | `obj instanceof String` | `relational_expression` | `InstanceOfExpression` | `test_15_instanceof` | `test_java26_expressions.py` | IMPLEMENTADO |
-| `ConditionalExpression` | Expressões | `cond ? a : b` | `ternary_expression` | `ConditionalExpression` | `test_09_expressoes_ternarias` | `test_24_ternario_incompleto` | IMPLEMENTADO |
-| `AssignmentExpression` | Expressões | `a = b += c` | `assignment_expression` | `Assignment` | `test_03_atribuicao_encadeada` | `test_25_atribuicoes_malformadas` | IMPLEMENTADO |
-| `BinaryOperations` | Expressões | `+`, `-`, `*`, `/`, `%`, `<<`, `>>`, `>>>`, `<`, `<=`, `>`, `>=`, `==`, `!=`, `&`, `^`, `\|`, `&&`, `\|\|` | Hierarquia Pratt / Descent | `BinaryOp` | `test_01_precedencia...` a `test_06` | `test_26_operadores_duplicados...` | IMPLEMENTADO |
-| `UnaryOperations` | Expressões | `++`, `--`, `+`, `-`, `!`, `~` | `unary_expression` | `UnaryOp` | `test_07_unarios_prefixados...` | `test_java26_expressions.py` | IMPLEMENTADO |
+| `Primary` | Expressões | `10`, `"abc"`, `true`, `null`, `(a + b)` | `parse_primary` | `Literal` / `Identifier` | `test_01_declaracao_simples_int` | `test_java26_expression_precedence.py` | IMPLEMENTADO |
+| `ClassLiteral` | Expressões | `String.class`, `int.class`, `void.class`, `int[][].class` | `_parse_class_literal` | `ClassLiteral` | `test_java26_class_literals.py` (`test_01`–`05`), `test_java26_annotations.py` | `test_java26_class_literals.py` (`test_04`), `test_java26_annotation_interfaces.py` | IMPLEMENTADO *(incl. tipagem `Class<T>` JLS §15.8.2)* |
+| `This` / `Super` | Expressões | `this`, `super`, `Classe.this`, `Outer.super` | `parse_primary` | `Identifier` / `MemberAccess` | `test_java26_class_literals.py` (`test_06`), `test_java26_expression_semantics.py` | `test_java26_class_literals.py` (`test_07`), `test_java26_expression_semantics.py` | IMPLEMENTADO |
+| `ParenthesizedExpression`| Expressões | `(a + b)` | `parse_primary` | `ASTNode` | `test_java26_expression_precedence.py` | `test_23_delimitadores_nao_fechados` | IMPLEMENTADO |
+| `ClassInstanceCreationExpression` / Diamond `<>` | Expressões | `new Caixa<>("ok")`, `outer.new Inner()` | `parse_object_creation` | `ObjectCreationExpression` | `test_java26_object_creation.py` (`test_01`–`06`) | `test_java26_object_creation.py` (`test_07`–`09`) | IMPLEMENTADO |
+| `AnonymousClassDeclaration` | Expressões | `new Runnable() { public void run() {} }` | `parse_object_creation` | `ObjectCreationExpression.anonymous_body` | `test_java26_object_creation.py` (`test_05`, `test_06`) | `test_java26_object_creation.py` (`test_09`) | IMPLEMENTADO |
+| `ArrayCreationExpression` / `ArrayInitializer` | Expressões | `new int[2][3]`, `new int[] {1, 2}`, `{1, 2}` | `parse_object_creation` / `parse_array_initializer` | `ArrayCreationExpression` / `ArrayInitializer` | `test_java26_array_expressions.py`, `test_java26_array_creation.py` | `test_java26_array_expressions.py`, `test_java26_array_creation.py` | IMPLEMENTADO |
+| `ArrayAccess` / `FieldAccess` | Expressões | `matriz[i][j]`, `arr.length`, `obj.campo` | `parse_postfix` | `ArrayAccess` / `MemberAccess` | `test_java26_array_expressions.py`, `test_java26_array_access.py`, `test_java26_field_access.py`, `test_java26_expression_semantics.py` | `test_java26_array_access.py`, `test_java26_field_access.py` | IMPLEMENTADO |
+| `MethodInvocation` & `GenericMethodInvocation` | Expressões | `obj.m(1)`, `Collections.<String>singletonList("a")` | `parse_postfix` / `parse_call` | `MethodCall` (`type_arguments`) | `test_java26_method_invocations.py`, `test_java26_method_invocation.py` | `test_java26_method_invocations.py`, `test_java26_method_invocation.py` | IMPLEMENTADO *(classpath externo em `unresolved_checks`)* |
+| `MethodReference` (5 formas) | Expressões | `String::length`, `String::new`, `int[]::new`, `out::println` | `_parse_method_reference_after_target` | `MethodReference` | `test_java26_method_references.py` (`test_01`–`05`, `test_09`) | `test_java26_method_references.py` (`test_06`–`08`, `test_10`–`13`) | IMPLEMENTADO *(sobrecarga/inferência genérica completa fora do escopo)* |
+| `LambdaExpression` | Expressões | `x -> x + 1`, `(int a, var b) -> ...`, `(@A final var x) -> { return x; }` | `parse_lambda_expression` | `LambdaExpression` / `LambdaParameter` | `test_java26_functional_interfaces.py`, `test_java26_lambda_expressions.py`, `test_java26_lambda_typing.py`, `test_java26_lambda_capture.py`, `test_java26_s84_regressions.py` | `test_java26_functional_interfaces.py`, `test_java26_lambda_expressions.py`, `test_java26_lambda_typing.py`, `test_java26_lambda_capture.py` | IMPLEMENTADO *(sobrecarga/inferência genérica §18 e captura wildcard §5.1.10 parciais)* |
+| `CastExpression` (Primitivo/Ref/Interseção) | Expressões | `(int) d`, `(A & Serializable) obj` | `parse_cast_expression` | `CastExpression` (`additional_bounds`) | `test_java26_casts_conversions.py`, `test_java26_cast_expressions.py`, `test_java26_primitive_conversions.py`, `test_java26_reference_conversions.py`, `test_java26_boxing_unboxing.py`, `test_java26_constant_narrowing.py` | `test_java26_casts_conversions.py` (`test_06`–`09`), `test_java26_cast_expressions.py` (`test_04`–`06`) | IMPLEMENTADO |
+| `InstanceOfExpression` | Expressões | `obj instanceof String` | `parse_relational` | `InstanceOfExpression` | `test_15_instanceof`, `test_java26_operator_semantics.py` (`test_27`) | `test_java26_pattern_preview_separation.py`, `test_java26_operator_semantics.py` (`test_27`, `test_28`) | IMPLEMENTADO |
+| `ConditionalExpression` | Expressões | `cond ? () -> 1 : () -> 2` | `parse_conditional` | `ConditionalExpression` | `test_java26_poly_expressions.py` (`test_01`–`05`), `test_java26_operator_semantics.py` (`test_16`, `test_17`) | `test_java26_poly_expressions.py` (`test_08`), `test_java26_operator_semantics.py` (`test_16`, `test_17`) | IMPLEMENTADO |
+| `AssignmentExpression` | Expressões | `a = b += c` | `parse_assignment` | `Assignment` | `test_java26_assignment_expressions.py` (`test_01`–`05`), `test_java26_operator_semantics.py` (`test_20`–`25`) | `test_java26_assignment_expressions.py` (`test_06`–`09`), `test_java26_operator_semantics.py` (`test_20`, `test_22`, `test_24`) | IMPLEMENTADO |
+| `BinaryOperations` | Expressões | `+`, `-`, `*`, `/`, `%`, `<<`, `>>`, `>>>`, `<`, `<=`, `>`, `>=`, `==`, `!=`, `&`, `^`, `\|`, `&&`, `\|\|` | 17 níveis de precedência | `BinaryOp` | `test_java26_expression_precedence.py` (`test_01`–`21`), `test_java26_operator_semantics.py` (`test_01`–`15`) | `test_java26_arithmetic_expressions.py` (`test_07`–`10`), `test_java26_operator_semantics.py` (`test_01`–`15`) | IMPLEMENTADO |
+| `UnaryOperations` | Expressões | `++`, `--`, `+`, `-`, `!`, `~` | `parse_unary` / `parse_postfix` | `UnaryOp` | `test_java26_arithmetic_expressions.py` (`test_03`–`05`), `test_java26_operator_semantics.py` (`test_03`, `test_13`, `test_18`) | `test_java26_arithmetic_expressions.py` (`test_09`, `test_10`), `test_java26_operator_semantics.py` (`test_03`, `test_13`, `test_19`) | IMPLEMENTADO |
 
 ---
 
@@ -289,8 +290,8 @@
 
 | Produção (JLS 19) | Categoria | Exemplo Java Válido | Função no Parser | Nó AST | Teste Positivo | Teste Negativo | Estado |
 |---|---|---|---|---|---|---|---|
-| `CompactCompilationUnit` | Arquivo | `void main() { System.out.println("Olá"); }` | `parse` | `CompactCompilationUnit` | `test_java26_compact_units.py` | `test_java26_compact_units.py` | PARCIAL |
-| `ImplicitlyDeclaredClass` | Classes | Arquivo sem `class` explícita contendo métodos de topo | `parse` | `ImplicitlyDeclaredClass` | `test_java26_compact_units.py` | `test_java26_compact_units.py` | PARCIAL |
+| `CompactCompilationUnit` | Arquivo | `void main() { System.out.println("Olá"); }` | `parse_compact_compilation_unit` | `CompactCompilationUnit` | `test_java26_compilation_units.py`, `test_java26_class_members.py` | `test_java26_compilation_units.py`, `test_java26_class_members.py` | IMPLEMENTADO |
+| `ImplicitlyDeclaredClass` | Classes | Arquivo sem `class` explícita contendo métodos de topo | `parse_compact_compilation_unit` | `ClassDeclaration (implicit_class)` | `test_java26_compilation_units.py`, `test_java26_class_members.py` | `test_java26_class_members.py` | IMPLEMENTADO |
 
 ---
 
@@ -308,5 +309,5 @@
 5. **Etapa S5 — Annotations e Annotation Interfaces** *(Concluída)* (`AnnotationInterfaceDeclaration`, `AnnotationInterfaceBody`, `AnnotationInterfaceElementDeclaration`, `AnnotationDefaultValue`, `MarkerAnnotation`, `SingleElementAnnotation`, `NormalAnnotation`, `ElementValue`, `ElementValuePair`, `ElementValueArrayInitializer`, `ClassLiteral`, *Type Annotations* em tipos/generics/arrays/casts/`instanceof`/`new`/`ReceiverParameter`/`TypeParameter`, meta-anotações `@Target`/`@Retention`/`@Repeatable` e auditoria S4 de enums/records).
 6. **Etapa S6 — Blocos, Declarações Locais e Instruções Completas** *(Concluída, respeitando fronteiras S7/S8)* (`Block`, `BlockStatement`, `LocalClassOrInterfaceDeclaration`, `LocalVariableDeclaration`, `LocalVariableType` / `var` / `_`, `Statement` & `StatementNoShortIf` / *dangling else*, `StatementExpression` estrita, `LabeledStatement`, laços com `StatementExpressionList`, `TryStatement` / `CatchType` multi-catch / `ResourceSpecification` & `Resource` Java 9+, `SwitchBlock` / `SwitchBlockStatementGroup` / `SwitchRule` / `CaseLabel` / `DefaultLabel` / `case null` sem patterns S7, e `YieldStatement` com `SwitchExpression` auxiliar mínima).
 7. **Etapa S7 & Auditoria S7.1 — Pattern Matching, Switch Moderno e Separação de Preview** *(Concluída)* (`Pattern`, `TypePattern`, `RecordPattern`, `ComponentPatternList`, `ComponentPattern`, `MatchAllPattern`, `Guard`/`when` contextual, `PatternCaseLabel`, `PatternInstanceOfExpression`, flow-scoping JLS §6.3, validação de record/aridade/genéricos, dominância JLS §14.30.3 / §14.11.1, exaustividade `sealed`/recursiva JLS §14.11.1.1 / §14.11.2 / §15.28.1 e separação estrita JEP 530 via `enable_preview_primitive_patterns=False`, rejeitando inclusive componentes primitivos de `RecordPattern` sem preview enquanto preserva `var` e `_`).
-8. **Etapa S8 — Expressões Completas e Switch Expressions** *(Próxima etapa)* (Integração completa de `SwitchExpression` como *poly-expression*, Diamond Operator e `AnonymousClassDeclaration` completa).
+8. **Etapa S8 — Expressões Completas, Inferência de Tipos e Switch Expressions** *(Concluída)* (17 níveis de precedência JLS §15, promoções numéricas, estreitamento constante, l-values modificáveis, casts de interseção `(A & B)`, invocação com sobrecarga/herança/genéricos explícitos, diamond `<>`, `outer.new`, `AnonymousClassDeclaration`, criação e acesso a arrays JLS §15.10.1, `LambdaExpression` com `explicit`/`inferred`/`var` e captura efetivamente final, todas as 5 formas de `MethodReference` incluindo `int[]::new`, *poly-expressions* com target-typing e `SwitchExpression` integrada com `->` / `yield` / exaustividade).
 9. **Etapa S9 — Integração Final e Auditoria**.

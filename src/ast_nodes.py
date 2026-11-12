@@ -3356,14 +3356,18 @@ class ArrayCreationExpression(ASTNode):
 
 @dataclass
 class CastExpression(ASTNode):
-    """Conversão explícita de tipo (cast): (Tipo) expressao"""
+    """Conversão explícita de tipo (cast): (Tipo) expressao ou (Tipo & Bound1 & ...) expressao"""
     target_type: 'TypeReference'
     expression: ASTNode
     line: int = 1
     column: int = 1
+    additional_bounds: List['TypeReference'] = field(default_factory=list)
 
     def pretty(self) -> str:
         t_name = self.target_type.pretty() if hasattr(self.target_type, "pretty") else str(self.target_type)
+        if self.additional_bounds:
+            bounds = " & ".join(b.pretty() if hasattr(b, "pretty") else str(b) for b in self.additional_bounds)
+            t_name = f"{t_name} & {bounds}"
         return _format_children(f"CastExpression (({t_name}))", [self.expression])
 
 
@@ -3397,6 +3401,31 @@ class PatternInstanceOfExpression(InstanceOfExpression):
 
 
 @dataclass
+class LambdaParameter(ASTNode):
+    """Parâmetro formal de expressão lambda (JLS §15.27.1)."""
+    name: str
+    type_ref: Optional['TypeReference'] = None
+    is_var: bool = False
+    modifiers: List[str] = field(default_factory=list)
+    annotations: List[ASTNode] = field(default_factory=list)
+    is_varargs: bool = False
+    line: int = 1
+    column: int = 1
+
+    @property
+    def is_inferred(self) -> bool:
+        return self.type_ref is None and not self.is_var
+
+    def pretty(self) -> str:
+        if self.type_ref is not None:
+            va = "..." if self.is_varargs else ""
+            return f"{self.type_ref.pretty()}{va} {self.name}"
+        if self.is_var:
+            return f"var {self.name}"
+        return self.name
+
+
+@dataclass
 class LambdaExpression(ASTNode):
     """Expressão lambda: parametros -> corpo"""
     parameters: List[str] = field(default_factory=list)
@@ -3404,57 +3433,83 @@ class LambdaExpression(ASTNode):
     is_block_body: bool = False
     line: int = 1
     column: int = 1
+    typed_parameters: List[LambdaParameter] = field(default_factory=list)
+    parameter_mode: str = "inferred"  # "empty" | "inferred" | "explicit" | "var"
 
     def pretty(self) -> str:
-        params_str = ", ".join(self.parameters)
+        if self.typed_parameters:
+            params_str = ", ".join(p.pretty() for p in self.typed_parameters)
+        else:
+            params_str = ", ".join(self.parameters)
         header = f"LambdaExpression: ({params_str}) ->"
         return _format_children(header, [self.body])
 
 
 @dataclass
 class MethodReference(ASTNode):
-    """Referência a método ou construtor: alvo::metodo ou Tipo::new"""
+    """Referência a método ou construtor: alvo::metodo, Tipo::new ou Tipo[]::new"""
     target: ASTNode
     method_name: str
     line: int = 1
     column: int = 1
+    type_arguments: List['TypeReference'] = field(default_factory=list)
+    is_array_creation: bool = False
+    array_type: Optional['TypeReference'] = None
 
     def pretty(self) -> str:
         target_str = self.target.pretty() if hasattr(self.target, "pretty") else str(self.target)
-        return f"MethodReference: {target_str}::{self.method_name}"
+        ta = f"<{', '.join(t.pretty() for t in self.type_arguments)}>" if self.type_arguments else ""
+        return f"MethodReference: {target_str}::{ta}{self.method_name}"
 
 
 @dataclass
 class MethodCall(ASTNode):
-    """Chamada de método: [alvo.]metodo(argumentos...)"""
+    """Chamada de método: [alvo.][<TArgs>]metodo(argumentos...)"""
     method_name: str = ""
     target: Optional[ASTNode] = None
     arguments: List[ASTNode] = field(default_factory=list)
     line: int = 1
     column: int = 1
+    type_arguments: List['TypeReference'] = field(default_factory=list)
 
     def pretty(self) -> str:
         target_str = f"{self.target.pretty()}." if self.target else ""
-        header = f"MethodCall: {target_str}{self.method_name}"
+        ta = f"<{', '.join(t.pretty() for t in self.type_arguments)}>" if self.type_arguments else ""
+        header = f"MethodCall: {target_str}{ta}{self.method_name}"
         if self.arguments:
             return _format_children(header, self.arguments)
         return header + "()"
 
 
 class ObjectCreationExpression(MethodCall):
-    """Instanciação de objeto com 'new': new Tipo(argumentos...)"""
+    """Instanciação de objeto com 'new': new Tipo(argumentos...) [{ corpo anonimo }]"""
     type_ref: 'TypeReference'
 
-    def __init__(self, type_ref: 'TypeReference' = None, arguments: List[ASTNode] = None, line: int = 1, column: int = 1):
+    def __init__(
+        self,
+        type_ref: 'TypeReference' = None,
+        arguments: List[ASTNode] = None,
+        line: int = 1,
+        column: int = 1,
+        is_diamond: bool = False,
+        anonymous_body: Optional[List[ASTNode]] = None,
+        target: Optional[ASTNode] = None,
+    ):
         t_name = type_ref.name if hasattr(type_ref, "name") else str(type_ref) if type_ref else "Object"
-        super().__init__(method_name=f"new {t_name}", target=None, arguments=arguments or [], line=line, column=column)
+        super().__init__(method_name=f"new {t_name}", target=target, arguments=arguments or [], line=line, column=column)
         self.type_ref = type_ref
+        self.is_diamond = is_diamond
+        self.anonymous_body = anonymous_body
 
     def pretty(self) -> str:
         t_name = self.type_ref.pretty() if hasattr(self.type_ref, "pretty") else str(self.type_ref)
-        header = f"ObjectCreation: new {t_name}"
-        if self.arguments:
-            return _format_children(header, self.arguments)
+        diamond = "<>" if self.is_diamond and "<" not in t_name else ""
+        header = f"ObjectCreation: new {t_name}{diamond}"
+        children = list(self.arguments)
+        if self.anonymous_body is not None:
+            children.extend(self.anonymous_body)
+        if children:
+            return _format_children(header, children)
         return header + "()"
 
 

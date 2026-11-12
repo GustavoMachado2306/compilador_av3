@@ -32,7 +32,7 @@ from .ast_nodes import (
     ResourceSpecification,
     ConditionalExpression, MemberAccess, ArrayAccess, ObjectCreationExpression,
     ArrayInitializer, ArrayCreationExpression, CastExpression,
-    InstanceOfExpression, PatternInstanceOfExpression, LambdaExpression, MethodReference,
+    InstanceOfExpression, PatternInstanceOfExpression, LambdaExpression, LambdaParameter, MethodReference,
     ComponentPattern, Pattern, PatternVariable, TypePattern, ComponentPatternList,
     RecordPattern, MatchAllPattern, Guard, PatternCaseLabel,
     Annotation, MarkerAnnotation, SingleElementAnnotation, NormalAnnotation,
@@ -4138,18 +4138,93 @@ class Parser:
         """Ponto de entrada de expressões: inicia pela avaliação de expressões lambda."""
         return self.lambda_expression()
 
+    def _is_lambda_ahead(self) -> bool:
+        """Verifica se os próximos tokens iniciam uma LambdaExpression ('id ->' ou '(params) ->')."""
+        if (
+            self.check(TokenType.IDENTIFIER)
+            and self.peek().lexeme != "var"
+            and self.peek_offset(1).type == TokenType.ARROW
+        ):
+            return True
+        if self.check(TokenType.LPAREN) and self._is_lambda_parameters_ahead():
+            return True
+        return False
+
+    def _is_explicit_lambda_param_ahead(self) -> bool:
+        """Determina se o próximo parâmetro dentro de '(...)' possui tipo explícito antes do nome."""
+        off = self._skip_annotations_offset(0)
+        t = self.peek_offset(off)
+        if t.type in PRIMITIVE_TYPE_TOKENS:
+            return True
+        if t.type == TokenType.IDENTIFIER:
+            if t.lexeme == "var":
+                return False
+            idx = off + 1
+            while (
+                self.peek_offset(idx).type == TokenType.DOT
+                and (
+                    self.peek_offset(idx + 1).type == TokenType.IDENTIFIER
+                    or (
+                        self.peek_offset(idx + 1).type == TokenType.AT
+                        and not self._is_annotation_interface_declaration_ahead(idx + 1)
+                    )
+                )
+            ):
+                step = self._skip_annotations_offset(idx + 1)
+                if self.peek_offset(step).type == TokenType.IDENTIFIER:
+                    idx = step + 1
+                else:
+                    break
+            if self.peek_offset(idx).type == TokenType.LESS:
+                depth = 1
+                idx += 1
+                while depth > 0:
+                    st = self.peek_offset(idx)
+                    if st.type in (TokenType.EOF, TokenType.SEMICOLON):
+                        return False
+                    if st.type == TokenType.LESS:
+                        depth += 1
+                    elif st.type == TokenType.GREATER:
+                        depth -= 1
+                    elif st.type == TokenType.RSHIFT:
+                        depth -= 2
+                    elif st.type == TokenType.URSHIFT:
+                        depth -= 3
+                    idx += 1
+            while True:
+                step = self._skip_annotations_offset(idx)
+                if self.peek_offset(step).type == TokenType.LBRACKET and self.peek_offset(step + 1).type == TokenType.RBRACKET:
+                    idx = step + 2
+                else:
+                    idx = step
+                    break
+            if self.peek_offset(idx).type == TokenType.ELLIPSIS:
+                idx += 1
+            return self.peek_offset(idx).type == TokenType.IDENTIFIER
+        return False
+
     def lambda_expression(self) -> ASTNode:
         """
-        Nível 1: Expressões lambda '->'.
+        Nível 1: Expressões lambda '->' (JLS §15.27).
         Suporta:
         - Parâmetro único sem parênteses: x -> x * 2
-        - Parâmetros entre parênteses: (a, b) -> a + b ou () -> executar()
+        - Parâmetros entre parênteses: () -> ..., (a, b) -> ..., (int a, int b) -> ..., (var a, var b) -> ...
+        - Validação de consistência (sem misturar tipos explícitos, 'var' e inferidos)
         - Corpo como expressão ou bloco: x -> { return x + 1; }
         """
         # Caso 1: identificador único seguido de '->' (ex: x -> ...)
         if self.check(TokenType.IDENTIFIER) and self.peek_offset(1).type == TokenType.ARROW:
+            if self.peek().lexeme == "var":
+                vt = self.peek()
+                raise SyntacticError(
+                    message="'var' não pode ser utilizado como nome de parâmetro lambda sem parênteses (use '(var x) -> ...')",
+                    line=vt.line,
+                    column=vt.column,
+                    expected="identificador de parâmetro ou '(var x) ->'",
+                    found="var",
+                )
             param_tok = self.advance()
-            self.advance() # consome '->'
+            self.advance()  # consome '->'
             if self.check(TokenType.LBRACE):
                 body = self.parse_block()
                 is_block = True
@@ -4158,30 +4233,180 @@ class Parser:
                 is_block = False
             return LambdaExpression(
                 parameters=[param_tok.lexeme],
+                typed_parameters=[LambdaParameter(name=param_tok.lexeme, line=param_tok.line, column=param_tok.column)],
+                parameter_mode="inferred",
                 body=body,
                 is_block_body=is_block,
                 line=param_tok.line,
-                column=param_tok.column
+                column=param_tok.column,
             )
 
-        # Caso 2: parâmetros entre parênteses seguidos de '->' (ex: () -> ..., (a, b) -> ...)
+        # Caso 2: parâmetros entre parênteses seguidos de '->'
         if self.check(TokenType.LPAREN) and self._is_lambda_parameters_ahead():
-            start_tok = self.advance() # consome '('
-            params = []
+            start_tok = self.advance()  # consome '('
+            params: List[str] = []
+            typed_params: List[LambdaParameter] = []
+            kinds_seen: Set[str] = set()
+
             while not self.check(TokenType.RPAREN) and not self.check(TokenType.EOF):
-                while self.peek().type in MODIFIER_TOKENS:
-                    self.advance()
-                first_tok = self.expect(TokenType.IDENTIFIER, "Era esperado nome de parâmetro na expressão lambda", expected="nome de parâmetro")
-                if self.check(TokenType.IDENTIFIER):
-                    second_tok = self.advance()
-                    params.append(second_tok.lexeme)
+                annos, _pre, post_annos, mods = self._parse_annotations_and_modifiers_detailed(
+                    allow_default=False,
+                    allow_sealed=False,
+                )
+                disallowed_mods = [m for m in mods if m != "final"]
+                if disallowed_mods:
+                    t = self.peek()
+                    raise SyntacticError(
+                        message=f"Modificador(es) {', '.join(disallowed_mods)!r} inválido(s) em parâmetro de expressão lambda (JLS §15.27.1)",
+                        line=t.line,
+                        column=t.column,
+                        expected="'final' ou tipo/nome de parâmetro",
+                        found=disallowed_mods[0],
+                    )
+
+                if self.check(TokenType.KEYWORD_VOID):
+                    t = self.peek()
+                    raise SyntacticError(
+                        message="Tipo 'void' não é permitido como tipo de parâmetro de expressão lambda",
+                        line=t.line,
+                        column=t.column,
+                        expected="tipo válido de parâmetro",
+                        found="void",
+                    )
+
+                if self.check(TokenType.IDENTIFIER) and self.peek().lexeme == "var" and self.peek_offset(1).type != TokenType.COMMA and self.peek_offset(1).type != TokenType.RPAREN:
+                    var_tok = self.advance()
+                    if self.check(TokenType.LBRACKET) or self.check(TokenType.LESS):
+                        t = self.peek()
+                        raise SyntacticError(
+                            message="'var' não pode ser combinado com '[]' ou argumentos genéricos em parâmetro lambda (JLS §15.27.1)",
+                            line=t.line,
+                            column=t.column,
+                            expected="nome do parâmetro",
+                            found=t.lexeme,
+                        )
+                    name_tok = self.expect(
+                        TokenType.IDENTIFIER,
+                        "Era esperado nome do parâmetro após 'var' na expressão lambda",
+                        expected="nome de parâmetro",
+                    )
+                    if self.check(TokenType.ELLIPSIS):
+                        et = self.peek()
+                        raise SyntacticError(
+                            message="'var' não pode ser combinado com varargs '...' em parâmetro lambda",
+                            line=et.line,
+                            column=et.column,
+                            expected="',' ou ')'",
+                            found="...",
+                        )
+                    kinds_seen.add("var")
+                    params.append(name_tok.lexeme)
+                    typed_params.append(
+                        LambdaParameter(
+                            name=name_tok.lexeme,
+                            is_var=True,
+                            modifiers=mods,
+                            annotations=annos,
+                            line=var_tok.line,
+                            column=var_tok.column,
+                        )
+                    )
+                elif self._is_explicit_lambda_param_ahead():
+                    type_ref = self.parse_type_reference(leading_annotations=post_annos)
+                    if type_ref.name == "void":
+                        raise SyntacticError(
+                            message="Tipo 'void' não é permitido em parâmetro lambda",
+                            line=type_ref.line,
+                            column=type_ref.column,
+                            expected="tipo válido",
+                            found="void",
+                        )
+                    name_tok = self.expect(
+                        TokenType.IDENTIFIER,
+                        "Era esperado nome do parâmetro após o tipo na expressão lambda",
+                        expected="nome de parâmetro",
+                    )
+                    extra_dims, _ = self._parse_trailing_dims_with_annotations()
+                    if extra_dims:
+                        type_ref.array_dimensions += extra_dims
+                    if type_ref.is_varargs and self.check(TokenType.COMMA):
+                        t = self.peek()
+                        raise SyntacticError(
+                            message="Parâmetro varargs '...' deve ser o último parâmetro da expressão lambda",
+                            line=t.line,
+                            column=t.column,
+                            expected="')'",
+                            found=",",
+                        )
+                    kinds_seen.add("explicit")
+                    params.append(name_tok.lexeme)
+                    typed_params.append(
+                        LambdaParameter(
+                            name=name_tok.lexeme,
+                            type_ref=type_ref,
+                            modifiers=mods,
+                            annotations=annos,
+                            is_varargs=type_ref.is_varargs,
+                            line=type_ref.line,
+                            column=type_ref.column,
+                        )
+                    )
                 else:
+                    if mods or annos:
+                        t = self.peek()
+                        raise SyntacticError(
+                            message="Modificadores e anotações não são permitidos em parâmetro lambda com tipo inferido (use tipo explícito ou 'var')",
+                            line=t.line,
+                            column=t.column,
+                            expected="nome de parâmetro sem 'final'/anotações",
+                            found=t.lexeme if t.type != TokenType.EOF else "EOF",
+                        )
+                    first_tok = self.expect(
+                        TokenType.IDENTIFIER,
+                        "Era esperado nome de parâmetro na expressão lambda",
+                        expected="nome de parâmetro",
+                    )
+                    if first_tok.lexeme == "var":
+                        raise SyntacticError(
+                            message="'var' exige nome de parâmetro em expressão lambda (ex: '(var x) -> ...')",
+                            line=first_tok.line,
+                            column=first_tok.column,
+                            expected="identificador após 'var'",
+                            found="var",
+                        )
+                    kinds_seen.add("inferred")
                     params.append(first_tok.lexeme)
+                    typed_params.append(
+                        LambdaParameter(
+                            name=first_tok.lexeme,
+                            line=first_tok.line,
+                            column=first_tok.column,
+                        )
+                    )
 
                 if self.check(TokenType.COMMA):
                     self.advance()
+                    if self.check(TokenType.RPAREN):
+                        t = self.peek()
+                        raise SyntacticError(
+                            message="Vírgula sobrando na lista de parâmetros da expressão lambda",
+                            line=t.line,
+                            column=t.column,
+                            expected="próximo parâmetro",
+                            found=")",
+                        )
                 else:
                     break
+
+            if len(kinds_seen) > 1:
+                raise SyntacticError(
+                    message="Não é permitido misturar parâmetros com tipo explícito, 'var' e tipo inferido na mesma expressão lambda (JLS §15.27.1)",
+                    line=start_tok.line,
+                    column=start_tok.column,
+                    expected="parâmetros uniformes (todos explícitos, todos 'var' ou todos inferidos)",
+                    found=", ".join(sorted(kinds_seen)),
+                )
+
             self.expect(TokenType.RPAREN, "Era esperado ')' para fechar os parâmetros da lambda", expected="')'")
             self.expect(TokenType.ARROW, "Era esperado '->' na expressão lambda", expected="'->'")
             if self.check(TokenType.LBRACE):
@@ -4190,12 +4415,16 @@ class Parser:
             else:
                 body = self.expression()
                 is_block = False
+
+            param_mode = next(iter(kinds_seen), "empty")
             return LambdaExpression(
                 parameters=params,
+                typed_parameters=typed_params,
+                parameter_mode=param_mode,
                 body=body,
                 is_block_body=is_block,
                 line=start_tok.line,
-                column=start_tok.column
+                column=start_tok.column,
             )
 
         return self.assignment_expression()
@@ -4227,7 +4456,7 @@ class Parser:
             op_tok = self.advance()
             op = op_tok.lexeme
             self._check_missing_operand(op)
-            right = self.assignment_expression()
+            right = self.expression()
 
             # Extrai nome representativo para retrocompatibilidade
             if isinstance(node, Identifier):
@@ -4261,7 +4490,10 @@ class Parser:
             then_expr = self.expression()
             self.expect(TokenType.COLON, "Era esperado ':' na expressão condicional ternária", expected="':'")
             self._check_missing_operand(":")
-            else_expr = self.ternary_expression()
+            if self._is_lambda_ahead():
+                else_expr = self.lambda_expression()
+            else:
+                else_expr = self.ternary_expression()
             return ConditionalExpression(node, then_expr, else_expr, q_tok.line, q_tok.column)
         return node
 
@@ -4512,10 +4744,69 @@ class Parser:
 
         return self.postfix()
 
+    def _skip_generic_angle_tokens(self, idx: int) -> int:
+        """Avança o índice após '<...>' balanceado (>, >>, >>>) ou retorna -1 se inválido."""
+        if idx >= len(self.tokens) or self.tokens[idx].type != TokenType.LESS:
+            return idx
+        idx += 1
+        g_depth = 1
+        while idx < len(self.tokens) and g_depth > 0:
+            tt = self.tokens[idx].type
+            if tt in (TokenType.EOF, TokenType.SEMICOLON, TokenType.LBRACE, TokenType.RBRACE):
+                return -1
+            if tt == TokenType.LESS:
+                g_depth += 1
+            elif tt == TokenType.GREATER:
+                g_depth -= 1
+            elif tt == TokenType.RSHIFT:
+                g_depth -= 2
+            elif tt == TokenType.URSHIFT:
+                g_depth -= 3
+            idx += 1
+        return idx if g_depth <= 0 else -1
+
+    def _skip_cast_ref_type_tokens(self, idx: int) -> int:
+        """Avança sobre um ReferenceType (com qualificadores, generics, anotações e []) a partir de idx."""
+        idx = self.current + self._skip_annotations_offset(idx - self.current)
+        if idx >= len(self.tokens) or self.tokens[idx].type != TokenType.IDENTIFIER:
+            return -1
+        idx += 1
+        while idx + 1 < len(self.tokens) and self.tokens[idx].type == TokenType.DOT:
+            step = self.current + self._skip_annotations_offset((idx + 1) - self.current)
+            if step < len(self.tokens) and self.tokens[step].type == TokenType.IDENTIFIER:
+                idx = step + 1
+                if idx < len(self.tokens) and self.tokens[idx].type == TokenType.LESS:
+                    idx = self._skip_generic_angle_tokens(idx)
+                    if idx < 0:
+                        return -1
+            else:
+                break
+        if idx < len(self.tokens) and self.tokens[idx].type == TokenType.LESS:
+            idx = self._skip_generic_angle_tokens(idx)
+            if idx < 0:
+                return -1
+        while idx + 1 < len(self.tokens) and self.tokens[idx].type == TokenType.DOT:
+            step = self.current + self._skip_annotations_offset((idx + 1) - self.current)
+            if step < len(self.tokens) and self.tokens[step].type == TokenType.IDENTIFIER:
+                idx = step + 1
+                if idx < len(self.tokens) and self.tokens[idx].type == TokenType.LESS:
+                    idx = self._skip_generic_angle_tokens(idx)
+                    if idx < 0:
+                        return -1
+            else:
+                break
+        while True:
+            idx = self.current + self._skip_annotations_offset(idx - self.current)
+            if idx + 1 < len(self.tokens) and self.tokens[idx].type == TokenType.LBRACKET and self.tokens[idx + 1].type == TokenType.RBRACKET:
+                idx += 2
+            else:
+                break
+        return idx
+
     def _is_cast_ahead(self) -> bool:
         """
         Determina se a abertura de parênteses à frente representa um cast: (Tipo) expressao
-        em oposição a uma expressão agrupada: (expr).
+        ou cast de interseção: (Tipo & Bound1 & ...) expressao.
         """
         idx = self.current + self._skip_annotations_offset(1)
         if idx >= len(self.tokens):
@@ -4528,63 +4819,82 @@ class Parser:
             idx += 1
             while True:
                 idx = self.current + self._skip_annotations_offset(idx - self.current)
-                if idx + 1 < len(self.tokens) and self.tokens[idx].type == TokenType.LBRACKET and self.tokens[idx+1].type == TokenType.RBRACKET:
+                if idx + 1 < len(self.tokens) and self.tokens[idx].type == TokenType.LBRACKET and self.tokens[idx + 1].type == TokenType.RBRACKET:
                     idx += 2
                 else:
                     break
             return idx < len(self.tokens) and self.tokens[idx].type == TokenType.RPAREN
 
-        # 2. Tipos de referência: (String) obj, (List<T>) list, (@NonNull String) obj
+        # 2. Tipos de referência (incluindo generics aninhados e bounds '&')
         if first.type == TokenType.IDENTIFIER:
-            idx += 1
-            # Pula qualificadores: (java.lang.String) e Outer.@Ann Inner
-            while idx + 1 < len(self.tokens) and self.tokens[idx].type == TokenType.DOT:
-                step = self.current + self._skip_annotations_offset((idx + 1) - self.current)
-                if step < len(self.tokens) and self.tokens[step].type == TokenType.IDENTIFIER:
-                    idx = step + 1
-                else:
-                    break
-
-            # Pula generics: < ... >
-            if idx < len(self.tokens) and self.tokens[idx].type == TokenType.LESS:
-                idx += 1
-                g_depth = 1
-                while idx < len(self.tokens) and g_depth > 0:
-                    if self.tokens[idx].type == TokenType.LESS:
-                        g_depth += 1
-                    elif self.tokens[idx].type == TokenType.GREATER:
-                        g_depth -= 1
-                    idx += 1
-
-            # Pula dimensões de array: [] ou @Ann []
-            while True:
-                idx = self.current + self._skip_annotations_offset(idx - self.current)
-                if idx + 1 < len(self.tokens) and self.tokens[idx].type == TokenType.LBRACKET and self.tokens[idx+1].type == TokenType.RBRACKET:
-                    idx += 2
-                else:
-                    break
+            idx = self._skip_cast_ref_type_tokens(idx)
+            if idx < 0:
+                return False
+            while idx < len(self.tokens) and self.tokens[idx].type == TokenType.BITWISE_AND:
+                idx = self._skip_cast_ref_type_tokens(idx + 1)
+                if idx < 0:
+                    return False
 
             if idx < len(self.tokens) and self.tokens[idx].type == TokenType.RPAREN:
                 if idx + 1 < len(self.tokens):
                     after = self.tokens[idx + 1]
                     valid_cast_starters = {
                         TokenType.IDENTIFIER, TokenType.INT, TokenType.NUMBER, TokenType.DOUBLE, TokenType.FLOAT,
-                        TokenType.STRING_LITERAL,
-                        TokenType.CHAR_LITERAL, TokenType.BOOLEAN_LITERAL, TokenType.NULL_LITERAL,
-                        TokenType.KEYWORD_THIS, TokenType.KEYWORD_SUPER, TokenType.KEYWORD_NEW,
+                        TokenType.STRING_LITERAL, TokenType.CHAR_LITERAL, TokenType.BOOLEAN_LITERAL, TokenType.NULL_LITERAL,
+                        TokenType.KEYWORD_THIS, TokenType.KEYWORD_SUPER, TokenType.KEYWORD_NEW, TokenType.KEYWORD_SWITCH,
                         TokenType.LPAREN, TokenType.LOGICAL_NOT, TokenType.BITWISE_NOT,
                     }
                     return after.type in valid_cast_starters
         return False
 
     def parse_cast_expression(self) -> CastExpression:
-        """Processa conversão de tipo: (Tipo) expressao."""
-        start_tok = self.advance() # consome '('
+        """Processa conversão de tipo: (Tipo) expressao ou (Tipo & Bound1 & ...) expressao (JLS §15.16)."""
+        start_tok = self.advance()  # consome '('
         target_type = self.parse_type_reference()
+        if target_type.name in ("void", "var"):
+            raise SyntacticError(
+                message=f"Tipo '{target_type.name}' não é permitido em expressão de cast (JLS §15.16)",
+                line=target_type.line,
+                column=target_type.column,
+                expected="tipo primitivo ou tipo de referência válido",
+                found=target_type.name,
+            )
+        primitive_types = {"boolean", "byte", "short", "char", "int", "long", "float", "double"}
+        additional_bounds: List[TypeReference] = []
+        while self.check(TokenType.BITWISE_AND):
+            if target_type.name in primitive_types or target_type.array_dimensions > 0:
+                t = self.peek()
+                raise SyntacticError(
+                    message="Bounds adicionais '&' em cast só são permitidos após ReferenceType não-array (JLS §15.16)",
+                    line=t.line,
+                    column=t.column,
+                    expected="')'",
+                    found="&",
+                )
+            self.advance()  # '&'
+            bound_ref = self.parse_type_reference()
+            if bound_ref.name in primitive_types or bound_ref.name == "void" or bound_ref.array_dimensions > 0:
+                raise SyntacticError(
+                    message=f"Bound adicional '{bound_ref.pretty()}' em cast de interseção deve ser interface/ReferenceType (JLS §15.16)",
+                    line=bound_ref.line,
+                    column=bound_ref.column,
+                    expected="interface de referência",
+                    found=bound_ref.pretty(),
+                )
+            additional_bounds.append(bound_ref)
         self.expect(TokenType.RPAREN, "Era esperado ')' para fechar o tipo no cast", expected="')'")
         self._check_missing_operand(f"({target_type.name})")
-        expr = self.unary()
-        return CastExpression(target_type=target_type, expression=expr, line=start_tok.line, column=start_tok.column)
+        if self._is_lambda_ahead():
+            expr = self.lambda_expression()
+        else:
+            expr = self.unary()
+        return CastExpression(
+            target_type=target_type,
+            expression=expr,
+            line=start_tok.line,
+            column=start_tok.column,
+            additional_bounds=additional_bounds,
+        )
 
     def postfix(self) -> ASTNode:
         """
@@ -4598,16 +4908,40 @@ class Parser:
         node = self.primary()
 
         while True:
-            # 1. Ponto '.' para membro ou chamada
+            # 1. Ponto '.' para membro, chamada, chamada genérica explícita ou 'outer.new Inner()'
             if self.check(TokenType.DOT):
-                self.advance() # consome '.'
+                self.advance()  # consome '.'
+                if self.check(TokenType.KEYWORD_NEW):
+                    new_expr = self.parse_new_expression()
+                    new_expr.target = node
+                    node = new_expr
+                    continue
+                if self.check(TokenType.LESS):
+                    call_type_args = self.parse_type_arguments()
+                    member_tok = self.expect(
+                        TokenType.IDENTIFIER,
+                        "Era esperado um identificador de método após os argumentos genéricos",
+                        expected="nome do método",
+                    )
+                    self.expect(TokenType.LPAREN, "Era esperado '(' após invocação de método genérico", expected="'('")
+                    args = self.parse_arguments()
+                    self.expect(TokenType.RPAREN, "Era esperado ')' para fechar argumentos", expected="')'")
+                    node = MethodCall(
+                        method_name=member_tok.lexeme,
+                        target=node,
+                        arguments=args,
+                        type_arguments=call_type_args,
+                        line=member_tok.line,
+                        column=member_tok.column,
+                    )
+                    continue
                 if self.check(TokenType.KEYWORD_CLASS) or self.check(TokenType.KEYWORD_THIS) or self.check(TokenType.KEYWORD_SUPER):
                     member_tok = self.advance()
                 else:
                     member_tok = self.expect(TokenType.IDENTIFIER, "Era esperado um identificador após '.'", expected="identificador após '.'")
 
                 if self.check(TokenType.LPAREN):
-                    self.advance() # consome '('
+                    self.advance()  # consome '('
                     args = self.parse_arguments()
                     self.expect(TokenType.RPAREN, "Era esperado ')' para fechar argumentos", expected="')'")
                     node = MethodCall(method_name=member_tok.lexeme, target=node, arguments=args, line=member_tok.line, column=member_tok.column)
@@ -4616,14 +4950,14 @@ class Parser:
 
             # 2. Chamada direta de método após identificador: id(args)
             elif self.check(TokenType.LPAREN) and isinstance(node, Identifier):
-                self.advance() # consome '('
+                self.advance()  # consome '('
                 args = self.parse_arguments()
                 self.expect(TokenType.RPAREN, "Era esperado ')' para fechar argumentos", expected="')'")
                 node = MethodCall(method_name=node.name, target=None, arguments=args, line=node.line, column=node.column)
 
             # 3. Indexação de array: expr[indice]
             elif self.check(TokenType.LBRACKET):
-                bracket_tok = self.advance() # consome '['
+                bracket_tok = self.advance()  # consome '['
                 if self.check(TokenType.RBRACKET):
                     raise SyntacticError(
                         message="Era esperado um índice entre colchetes",
@@ -4636,10 +4970,13 @@ class Parser:
                 self.expect(TokenType.RBRACKET, "Era esperado ']' para fechar o índice do array", expected="']'")
                 node = ArrayAccess(array=node, index=index_expr, line=bracket_tok.line, column=bracket_tok.column)
 
-            # 4. Referência de método: alvo::metodo ou Tipo::new
+            # 4. Referência de método: alvo::[<TypeArgs>]metodo ou Tipo::new
             elif self.check(TokenType.DOUBLE_COLON):
-                col_tok = self.advance() # consome '::'
-                if self.check(TokenType.KEYWORD_NEW):
+                col_tok = self.advance()  # consome '::'
+                ref_type_args: List[TypeReference] = []
+                if self.check(TokenType.LESS):
+                    ref_type_args = self.parse_type_arguments()
+                if self.check(TokenType.KEYWORD_NEW) and not ref_type_args:
                     m_tok = self.advance()
                     method_name = m_tok.lexeme
                 elif self.check(TokenType.IDENTIFIER):
@@ -4655,7 +4992,13 @@ class Parser:
                         expected="nome de método ou 'new'",
                         found=found_repr,
                     )
-                node = MethodReference(target=node, method_name=method_name, line=col_tok.line, column=col_tok.column)
+                node = MethodReference(
+                    target=node,
+                    method_name=method_name,
+                    type_arguments=ref_type_args,
+                    line=col_tok.line,
+                    column=col_tok.column,
+                )
 
             # 5. Operadores pós-fixados: expr++ ou expr--
             elif self.check(TokenType.INCREMENT) or self.check(TokenType.DECREMENT):
@@ -4678,11 +5021,90 @@ class Parser:
                 break
         return args
 
+    def _is_array_creation_ref_ahead(self) -> bool:
+        """Verifica lookahead para referência a construtor de array: int[]::new ou String[]::new."""
+        t0 = self.peek_offset(0)
+        if t0.type in PRIMITIVE_TYPE_TOKENS and t0.type != TokenType.KEYWORD_VOID:
+            idx = self.current + 1
+        elif t0.type == TokenType.IDENTIFIER:
+            idx = self.current + 1
+            while idx + 1 < len(self.tokens) and self.tokens[idx].type == TokenType.DOT and self.tokens[idx + 1].type == TokenType.IDENTIFIER:
+                idx += 2
+            if idx < len(self.tokens) and self.tokens[idx].type == TokenType.LESS:
+                idx = self._skip_generic_angle_tokens(idx)
+                if idx < 0:
+                    return False
+        else:
+            return False
+
+        dims = 0
+        while True:
+            step = self.current + self._skip_annotations_offset(idx - self.current)
+            if step + 1 < len(self.tokens) and self.tokens[step].type == TokenType.LBRACKET and self.tokens[step + 1].type == TokenType.RBRACKET:
+                idx = step + 2
+                dims += 1
+            else:
+                idx = step
+                break
+        if dims == 0 or idx + 1 >= len(self.tokens):
+            return False
+        return self.tokens[idx].type == TokenType.DOUBLE_COLON and self.tokens[idx + 1].type == TokenType.KEYWORD_NEW
+
+    def _is_generic_type_method_ref_ahead(self) -> bool:
+        """Verifica lookahead para Tipo<Args>::new ou Tipo<Args>::metodo."""
+        if self.peek().type != TokenType.IDENTIFIER:
+            return False
+        idx = self.current + 1
+        while idx + 1 < len(self.tokens) and self.tokens[idx].type == TokenType.DOT and self.tokens[idx + 1].type == TokenType.IDENTIFIER:
+            idx += 2
+        if idx >= len(self.tokens) or self.tokens[idx].type != TokenType.LESS:
+            return False
+        idx = self._skip_generic_angle_tokens(idx)
+        if idx < 0 or idx >= len(self.tokens):
+            return False
+        return self.tokens[idx].type == TokenType.DOUBLE_COLON
+
+    def _parse_type_method_reference(self) -> MethodReference:
+        """Processa referências iniciadas por tipo genérico ou array: int[]::new, ArrayList<String>::new."""
+        tref = self.parse_type_reference()
+        col_tok = self.expect(TokenType.DOUBLE_COLON, "Era esperado '::' após o tipo na referência de método", expected="'::'")
+        ref_type_args: List[TypeReference] = []
+        if self.check(TokenType.LESS):
+            ref_type_args = self.parse_type_arguments()
+        if self.check(TokenType.KEYWORD_NEW) and not ref_type_args:
+            m_tok = self.advance()
+            method_name = m_tok.lexeme
+        elif self.check(TokenType.IDENTIFIER) and tref.array_dimensions == 0:
+            m_tok = self.advance()
+            method_name = m_tok.lexeme
+        else:
+            t = self.peek()
+            raise SyntacticError(
+                message="Era esperado 'new' (ou nome de método para tipo não-array) após '::'",
+                line=t.line,
+                column=t.column,
+                expected="'new' ou identificador de método",
+                found=t.lexeme if t.type != TokenType.EOF else "EOF",
+            )
+        return MethodReference(
+            target=tref,
+            method_name=method_name,
+            type_arguments=ref_type_args,
+            is_array_creation=(tref.array_dimensions > 0 and method_name == "new"),
+            array_type=tref if tref.array_dimensions > 0 else None,
+            line=col_tok.line,
+            column=col_tok.column,
+        )
+
     def primary(self) -> ASTNode:
-        """Processa operandos primários, literais, class literals, instanciações e parênteses."""
+        """Processa operandos primários, literais, class literals, referências de array/genéricos, instanciações e parênteses."""
         # 0. Literal de classe (JLS §15.8.2): Tipo.class, int.class, void.class, Tipo[].class
         if self._is_class_literal_ahead():
             return self._parse_class_literal()
+
+        # 0.1 Referência a construtor de array ou método com tipo parametrizado: int[]::new, List<String>::size
+        if self._is_array_creation_ref_ahead() or self._is_generic_type_method_ref_ahead():
+            return self._parse_type_method_reference()
 
         # 1. Instanciação com 'new': objetos ou arrays
         if self.check(TokenType.KEYWORD_NEW):
@@ -4796,15 +5218,23 @@ class Parser:
             )
 
         type_args = []
+        is_diamond = False
         if self.check(TokenType.LESS):
-            self.advance()
-            while not self._is_closing_generic_bracket() and not self.check(TokenType.EOF):
-                type_args.append(self.parse_type_reference())
-                if self.check(TokenType.COMMA):
-                    self.advance()
-                else:
-                    break
-            self._consume_closing_generic_bracket()
+            if tok.type in PRIMITIVE_TYPE_TOKENS:
+                t = self.peek()
+                raise SyntacticError(
+                    message=f"Tipo primitivo '{tok.lexeme}' não pode receber argumentos de tipo genérico ou operador diamond '<>'",
+                    line=t.line,
+                    column=t.column,
+                    expected="'['",
+                    found="<",
+                )
+            if self.peek_offset(1).type == TokenType.GREATER:
+                self.advance()  # '<'
+                self.advance()  # '>'
+                is_diamond = True
+            else:
+                type_args = self.parse_type_arguments()
 
         base_type = TypeReference(
             type_name,
@@ -4822,6 +5252,14 @@ class Parser:
             and self.peek_offset(self._skip_annotations_offset(0)).type == TokenType.LBRACKET
         )
         if has_array_dim:
+            if is_diamond:
+                raise SyntacticError(
+                    message="Operador diamond '<>' não é permitido na criação de arrays",
+                    line=new_tok.line,
+                    column=new_tok.column,
+                    expected="'('",
+                    found="[",
+                )
             dimensions = []
             dims_annotations: List[List[ASTNode]] = []
             while self.check(TokenType.LBRACKET) or (
@@ -4841,15 +5279,74 @@ class Parser:
             initializer = None
             if self.check(TokenType.LBRACE):
                 initializer = self.parse_array_initializer()
+            seen_empty_dim = False
+            for dim in dimensions:
+                if dim is None:
+                    seen_empty_dim = True
+                elif seen_empty_dim:
+                    raise SyntacticError(
+                        message="Dimensão de array especificada após dimensão vazia '[]' inválida (JLS §15.10.1)",
+                        line=getattr(dim, "line", new_tok.line),
+                        column=getattr(dim, "column", new_tok.column),
+                        expected="']'",
+                        found=dim.__class__.__name__,
+                    )
+            if initializer is not None and any(dim is not None for dim in dimensions):
+                raise SyntacticError(
+                    message="Não é permitido especificar tamanho de dimensão e inicializador '{...}' na mesma criação de array (JLS §15.10.1)",
+                    line=initializer.line,
+                    column=initializer.column,
+                    expected="apenas dimensões vazias '[]' antes do inicializador '{...}'",
+                    found="{",
+                )
+            if initializer is None and all(dim is None for dim in dimensions):
+                raise SyntacticError(
+                    message="Criação de array exige ao menos uma expressão de dimensão ou um inicializador '{...}' (JLS §15.10.1)",
+                    line=new_tok.line,
+                    column=new_tok.column,
+                    expected="dimensão numérica ou inicializador '{...}'",
+                    found="[]",
+                )
             base_type.array_dimensions = len(dimensions)
             base_type.dims_annotations = dims_annotations
             return ArrayCreationExpression(base_type, dimensions, initializer, new_tok.line, new_tok.column)
 
-        # Caso B: Instanciação de classe: new [@Ann] Classe(args)
+        # Caso B: Instanciação de classe: new [@Ann] Classe(args) [{ corpo anonimo }]
+        if tok.type in PRIMITIVE_TYPE_TOKENS:
+            raise SyntacticError(
+                message=f"Tipo primitivo '{tok.lexeme}' não pode ser instanciado com 'new {tok.lexeme}()'",
+                line=tok.line,
+                column=tok.column,
+                expected="dimensões de array '[...]'",
+                found="(",
+            )
         self.expect(TokenType.LPAREN, "Era esperado '(' após tipo na instanciação com 'new'", expected="'('")
         args = self.parse_arguments()
         self.expect(TokenType.RPAREN, "Era esperado ')' após argumentos da instanciação", expected="')'")
-        return ObjectCreationExpression(base_type, args, line=new_tok.line, column=new_tok.column)
+        anonymous_body = None
+        if self.check(TokenType.LBRACE):
+            self.advance()  # consome '{'
+            anonymous_body = []
+            while not self.check(TokenType.RBRACE) and not self.check(TokenType.EOF):
+                member = self.class_member("<anonymous>")
+                if isinstance(member, ConstructorDeclaration):
+                    raise SyntacticError(
+                        message="Classe anônima não pode declarar construtores explícitos (JLS §15.9.5)",
+                        line=member.line,
+                        column=member.column,
+                        expected="campo, método ou inicializador",
+                        found=member.name,
+                    )
+                anonymous_body.append(member)
+            self.expect(TokenType.RBRACE, "Era esperado '}' para fechar o corpo da classe anônima", expected="'}'")
+        return ObjectCreationExpression(
+            base_type,
+            args,
+            line=new_tok.line,
+            column=new_tok.column,
+            is_diamond=is_diamond,
+            anonymous_body=anonymous_body,
+        )
 
     def parse_array_initializer(self) -> ArrayInitializer:
         """Processa inicializador literal de array: { 1, 2, 3 } ou { {1}, {2} }."""
