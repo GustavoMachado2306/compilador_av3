@@ -222,27 +222,36 @@ class TestLexerNumeros(unittest.TestCase):
     def test_inteiros_decimais_com_underscores_e_sufixo_long(self):
         source = "1_000_000 100L 50l 9_999_999L"
         tokens = Lexer(source).tokenize()
-        self.assertEqual([t.type for t in tokens[:-1]], [TokenType.NUMBER] * 4)
+        self.assertEqual(
+            [t.type for t in tokens[:-1]],
+            [TokenType.INT, TokenType.LONG, TokenType.LONG, TokenType.LONG],
+        )
         self.assertEqual(tokens[0].lexeme, "1_000_000")
         self.assertEqual(tokens[3].lexeme, "9_999_999L")
 
     def test_inteiros_hexadecimais(self):
         source = "0x0 0x1A2B 0XFF 0xCAFE_BABE 0x10L"
         tokens = Lexer(source).tokenize()
-        for tok in tokens[:-1]:
-            self.assertEqual(tok.type, TokenType.NUMBER)
+        self.assertEqual(
+            [t.type for t in tokens[:-1]],
+            [TokenType.INT, TokenType.INT, TokenType.INT, TokenType.INT, TokenType.LONG],
+        )
 
     def test_inteiros_binarios(self):
         source = "0b0 0b1010 0B11_00 0b1L"
         tokens = Lexer(source).tokenize()
-        for tok in tokens[:-1]:
-            self.assertEqual(tok.type, TokenType.NUMBER)
+        self.assertEqual(
+            [t.type for t in tokens[:-1]],
+            [TokenType.INT, TokenType.INT, TokenType.INT, TokenType.LONG],
+        )
 
     def test_inteiros_octais(self):
         source = "0755 0123_456 077L"
         tokens = Lexer(source).tokenize()
-        for tok in tokens[:-1]:
-            self.assertEqual(tok.type, TokenType.NUMBER)
+        self.assertEqual(
+            [t.type for t in tokens[:-1]],
+            [TokenType.INT, TokenType.INT, TokenType.LONG],
+        )
 
     def test_pontos_flutuantes_e_doubles(self):
         source = "3.14 .5 10. 1.23f 1.23F 2.718d 2.718D"
@@ -526,11 +535,18 @@ class TestLexerLiteraisJavaAvancados(unittest.TestCase):
         self.assertEqual([t.type for t in tokens], esperados)
 
     def test_literal_hexadecimal_0x0F_classificado_como_int(self):
-        """Verifica que '0x0F' e hexadecimais terminados em 'F'/'f' são classificados como INT e não float."""
+        """Verifica que '0x0F' e hexadecimais terminados em 'F'/'f' são classificados como INT/LONG e não float."""
         tokens = Lexer("0x0F 0X0F 0xFF 0x1A2B 0xCAFE_BABE 0x10L").tokenize()
+        esperados = [
+            TokenType.INT,
+            TokenType.INT,
+            TokenType.INT,
+            TokenType.INT,
+            TokenType.INT,
+            TokenType.LONG,
+        ]
+        self.assertEqual([tok.type for tok in tokens[:-1]], esperados)
         for tok in tokens[:-1]:
-            self.assertEqual(tok.type, TokenType.INT)
-            self.assertEqual(tok.type.name, "INT")
             self.assertNotEqual(tok.type, TokenType.FLOAT)
             self.assertNotEqual(tok.type, TokenType.DOUBLE)
 
@@ -562,6 +578,53 @@ class TestLexerLiteraisJavaAvancados(unittest.TestCase):
         symbols = SymbolTable()
         errors = SemanticAnalyzer(symbols).analyze(ast)
         self.assertEqual(errors, [])
+
+    def test_classificacao_long_e_demais_literais_numericos(self):
+        """Valida INT, LONG, FLOAT, DOUBLE e alias LONG_LITERAL em todas as bases."""
+        from src.lexer import classify_number
+        self.assertIs(TokenType.LONG_LITERAL, TokenType.LONG)
+
+        casos = [
+            ("10", TokenType.INT),
+            ("10L", TokenType.LONG),
+            ("10l", TokenType.LONG),
+            ("0x10L", TokenType.LONG),
+            ("0b101L", TokenType.LONG),
+            ("077L", TokenType.LONG),
+            ("1.5f", TokenType.FLOAT),
+            ("1.5", TokenType.DOUBLE),
+        ]
+        for lexema, esperado in casos:
+            with self.subTest(lexema=lexema):
+                toks = Lexer(lexema).tokenize()
+                self.assertEqual(len(toks), 2)
+                self.assertEqual(toks[0].type, esperado)
+                self.assertEqual(toks[0].lexeme, lexema)
+                self.assertEqual(classify_number(lexema), esperado)
+
+    def test_numeros_em_expressoes_sem_espacos(self):
+        """Garante que operadores adjacentes a literais numéricos continuam funcionando."""
+        toks = Lexer("10+20L-1.5f*2.0").tokenize()
+        self.assertEqual(
+            [(t.type, t.lexeme) for t in toks[:-1]],
+            [
+                (TokenType.INT, "10"),
+                (TokenType.PLUS, "+"),
+                (TokenType.LONG, "20L"),
+                (TokenType.MINUS, "-"),
+                (TokenType.FLOAT, "1.5f"),
+                (TokenType.STAR, "*"),
+                (TokenType.DOUBLE, "2.0"),
+            ],
+        )
+
+    def test_erros_lexicos_sufixos_e_caracteres_invalidos_apos_numero(self):
+        """Rejeita sufixos duplicados ou caracteres alfanuméricos inválidos colados a números."""
+        invalidos = ["10LL", "10fd", "10abc", "0b12", "0x10LL", "0b101LL", "0x1G", "1.5fx"]
+        for codigo in invalidos:
+            with self.subTest(codigo=codigo):
+                with self.assertRaises(LexicalError):
+                    Lexer(codigo).tokenize()
 
 
 if __name__ == "__main__":

@@ -4839,7 +4839,7 @@ class Parser:
                 if idx + 1 < len(self.tokens):
                     after = self.tokens[idx + 1]
                     valid_cast_starters = {
-                        TokenType.IDENTIFIER, TokenType.INT, TokenType.NUMBER, TokenType.DOUBLE, TokenType.FLOAT,
+                        TokenType.IDENTIFIER, TokenType.INT, TokenType.NUMBER, TokenType.LONG, TokenType.DOUBLE, TokenType.FLOAT,
                         TokenType.STRING_LITERAL, TokenType.CHAR_LITERAL, TokenType.BOOLEAN_LITERAL, TokenType.NULL_LITERAL,
                         TokenType.KEYWORD_THIS, TokenType.KEYWORD_SUPER, TokenType.KEYWORD_NEW, TokenType.KEYWORD_SWITCH,
                         TokenType.LPAREN, TokenType.LOGICAL_NOT, TokenType.BITWISE_NOT,
@@ -5128,6 +5128,10 @@ class Parser:
             tok = self.advance()
             return Literal(tok.lexeme, "NUM", line=tok.line, column=tok.column)
 
+        if self.check(TokenType.LONG):
+            tok = self.advance()
+            return Literal(tok.lexeme, "LONG", line=tok.line, column=tok.column)
+
         if self.check(TokenType.DOUBLE):
             tok = self.advance()
             return Literal(tok.lexeme, "DOUBLE", line=tok.line, column=tok.column)
@@ -5168,6 +5172,8 @@ class Parser:
                 self.advance()
                 expr = self.expression()
                 self.expect(TokenType.RPAREN, "Era esperado ')' para fechar a expressão", expected="')'")
+                if isinstance(expr, ASTNode):
+                    expr.parenthesized = True
                 return expr
             finally:
                 self.depth -= 1

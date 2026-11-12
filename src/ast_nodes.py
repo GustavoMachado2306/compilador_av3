@@ -42,6 +42,8 @@ def _format_children(title: str, children: list) -> str:
 # =============================================================================
 class ASTNode:
     """Classe base para todos os nós da árvore sintática abstrata."""
+    parenthesized: bool = False
+
     def pretty(self) -> str:
         raise NotImplementedError
 

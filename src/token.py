@@ -76,6 +76,7 @@ class TokenType(Enum):
     IDENTIFIER = auto()           # Nomes de variáveis, métodos, classes
     INT = auto()                  # Literal inteiro (decimal, hex, bin, oct)
     NUMBER = INT                  # Alias para retrocompatibilidade com subconjunto didático
+    LONG = auto()                 # Literal inteiro long (sufixo L/l)
     DOUBLE = auto()               # Literais de ponto flutuante double (ex: 3.1415, 2.0)
     FLOAT = auto()                # Literais de ponto flutuante float (ex: 1.23f)
     STRING_LITERAL = auto()       # Texto delimitado por aspas duplas: "..."
@@ -167,6 +168,7 @@ class TokenType(Enum):
     STRING = KEYWORD_STRING
     ID = IDENTIFIER
     INT_LITERAL = INT
+    LONG_LITERAL = LONG
     DOUBLE_LITERAL = DOUBLE
     FLOAT_LITERAL = FLOAT
 

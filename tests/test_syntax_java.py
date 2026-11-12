@@ -376,6 +376,96 @@ class TestEstruturaArquivosJava(unittest.TestCase):
         self.assertTrue(res.symbol_table.exists("nome"))
         self.assertTrue(res.symbol_table.exists("getNome"))
 
+    def test_27_parser_ast_literais_numericos_distintos(self):
+        from src.ast_nodes import Literal
+        source = (
+            "class T {\n"
+            "    void m() {\n"
+            "        int a = 10;\n"
+            "        long b = 10L;\n"
+            "        long c = 10l;\n"
+            "        float d = 2.5f;\n"
+            "        double e = 2.5;\n"
+            "        int f = (int) 10L;\n"
+            "        long g = 10 + 20L;\n"
+            "        boolean h = 10L < 2.5f;\n"
+            "    }\n"
+            "}\n"
+        )
+        ast = Parser(Lexer(source).tokenize()).parse()
+        cls = ast.type_declarations[0]
+        method = cls.members[0]
+        stmts = method.body.statements
+
+        esperados = [
+            ("10", "NUM", "NUM (10)"),
+            ("10L", "LONG", "LONG (10L)"),
+            ("10l", "LONG", "LONG (10l)"),
+            ("2.5f", "FLOAT", "FLOAT (2.5f)"),
+            ("2.5", "DOUBLE", "DOUBLE (2.5)"),
+        ]
+        for idx, (val, kind, pretty_str) in enumerate(esperados):
+            lit = stmts[idx].initializer
+            self.assertIsInstance(lit, Literal)
+            self.assertEqual(lit.value, val)
+            self.assertEqual(lit.kind, kind)
+            self.assertEqual(lit.pretty(), pretty_str)
+
+        cast_lit = stmts[5].initializer.expression
+        self.assertIsInstance(cast_lit, Literal)
+        self.assertEqual(cast_lit.value, "10L")
+        self.assertEqual(cast_lit.kind, "LONG")
+
+        bin_add = stmts[6].initializer
+        self.assertEqual(bin_add.left.kind, "NUM")
+        self.assertEqual(bin_add.right.kind, "LONG")
+
+        bin_rel = stmts[7].initializer
+        self.assertEqual(bin_rel.left.kind, "LONG")
+        self.assertEqual(bin_rel.right.kind, "FLOAT")
+
+    def test_28_parser_ast_fatorial_ternario_com_1L(self):
+        from src.ast_nodes import Literal
+        source = (
+            "class T {\n"
+            "    public static long fatorial(int n) {\n"
+            "        return n <= 1 ? 1L : n * fatorial(n - 1);\n"
+            "    }\n"
+            "}\n"
+        )
+        ast = Parser(Lexer(source).tokenize()).parse()
+        method = ast.type_declarations[0].members[0]
+        ret = method.body.statements[0]
+        cond = ret.expression
+        self.assertIsInstance(cond.then_expr, Literal)
+        self.assertEqual(cond.then_expr.value, "1L")
+        self.assertEqual(cond.then_expr.kind, "LONG")
+        self.assertEqual(cond.else_expr.right.arguments[0].right.kind, "NUM")
+
+    def test_29_ast_retrocompatibilidade_literal_num(self):
+        from src.ast_nodes import Literal
+        lit = Literal("42", "NUM")
+        self.assertEqual(lit.value, "42")
+        self.assertEqual(lit.kind, "NUM")
+        self.assertEqual(lit.pretty(), "NUM (42)")
+        self.assertFalse(lit.parenthesized)
+
+    def test_30_ast_preserva_parenteses_em_literais_minimos(self):
+        source = (
+            "class T {\n"
+            "    int a = -2147483648;\n"
+            "    int b = -(2147483648);\n"
+            "    long c = -9223372036854775808L;\n"
+            "    long d = -(9223372036854775808L);\n"
+            "}\n"
+        )
+        ast = Parser(Lexer(source).tokenize()).parse()
+        members = ast.type_declarations[0].members
+        self.assertFalse(members[0].initializer.operand.parenthesized)
+        self.assertTrue(members[1].initializer.operand.parenthesized)
+        self.assertFalse(members[2].initializer.operand.parenthesized)
+        self.assertTrue(members[3].initializer.operand.parenthesized)
+
 
 if __name__ == "__main__":
     unittest.main()

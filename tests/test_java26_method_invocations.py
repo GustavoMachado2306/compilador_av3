@@ -157,6 +157,90 @@ class TestJava26MethodInvocationsS8(unittest.TestCase):
         """
         self.assertFalse(analyze_source(bad_src).success)
 
+    def test_11_list_generic_add_overloads_and_rejection(self):
+        ok_src = """
+        import java.util.*;
+        interface Figura {}
+        class Retangulo implements Figura {
+            Retangulo(double a, double b) {}
+        }
+        class Triangulo implements Figura {
+            Triangulo(double a, double b) {}
+        }
+        class Main {
+            void run() {
+                List<Figura> figuras = new ArrayList<>();
+                boolean b1 = figuras.add(new Retangulo(4.0, 3.0));
+                boolean b2 = figuras.add(new Triangulo(6.0, 2.5));
+                figuras.add(0, new Retangulo(1.0, 2.0));
+            }
+        }
+        """
+        res = analyze_source(ok_src)
+        self.assertTrue(res.success, msg=res.semantic_errors)
+
+        bad1 = """
+        import java.util.*;
+        interface Figura {}
+        class Main {
+            void run(List<Figura> figuras) {
+                figuras.add("invalido");
+            }
+        }
+        """
+        bad2 = """
+        import java.util.*;
+        interface Figura {}
+        class Retangulo implements Figura {}
+        class Main {
+            void run(List<Figura> figuras) {
+                figuras.add("zero", new Retangulo());
+            }
+        }
+        """
+        self.assertFalse(analyze_source(bad1).success)
+        self.assertFalse(analyze_source(bad2).success)
+
+    def test_12_arrays_tostring_static_overloads_and_println(self):
+        ok_src = """
+        import java.util.*;
+        class Main {
+            void run(double[] pts, int[] nums, Object[] objs, String[] strs, Object obj) {
+                String s1 = Arrays.toString(pts);
+                String s2 = Arrays.toString(nums);
+                String s3 = Arrays.toString(objs);
+                String s4 = Arrays.toString(strs);
+                String s5 = obj.toString();
+                System.out.println(Arrays.toString(pts));
+            }
+        }
+        """
+        res = analyze_source(ok_src)
+        self.assertTrue(res.success, msg=res.semantic_errors)
+
+        bad_zero_arg = """
+        import java.util.*;
+        class Main {
+            void run() {
+                String s = Arrays.toString();
+            }
+        }
+        """
+        self.assertFalse(analyze_source(bad_zero_arg).success)
+
+    def test_13_real_overload_ambiguity_still_rejected(self):
+        ambig_src = """
+        class Amb {
+            void g(String a, Object b) {}
+            void g(Object a, String b) {}
+            void run() {
+                g("x", "y");
+            }
+        }
+        """
+        res = analyze_source(ambig_src)
+        self.assertFalse(res.success)
+
 
 if __name__ == "__main__":
     unittest.main()

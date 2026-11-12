@@ -61,6 +61,71 @@ class TestJava26PrimitiveConversionsS82(unittest.TestCase):
         self._ok("boolean flag = true; long l = flag ? 1 : 2L;")
         self._bad("boolean flag = true; int i = flag ? 1 : 2.5;")
 
+    def test_09_numeric_literal_types_and_promotions(self):
+        self._ok("int a = 10; long b = 10L; long c = 10; float d = 2.5f; double e = 2.5;")
+        self._bad("long a = 10L; int b = a;")
+        self._ok("int a = 10; long b = 20L; long resultado = a + b;")
+        res = analyze_source(
+            "class T { public static long fatorial(int n) { return n <= 1 ? 1L : n * fatorial(n - 1); } }"
+        )
+        self.assertTrue(res.success, msg=res.semantic_errors)
+
+    def test_10_numeric_literal_range_validation_jls_3_10(self):
+        # Limites decimais int/long (incluindo mínimo negativo unário)
+        self._ok("int iMax = 2147483647; int iMin = -2147483648;")
+        self._ok("long lMax = 9223372036854775807L; long lMin = -9223372036854775808L;")
+        self._bad("int x = 2147483648;")
+        self._bad("int x = -2147483649;")
+        self._bad("long y = 9223372036854775808L;")
+        self._bad("long y = -9223372036854775809L;")
+
+        # Bases não decimais: até 32 bits (int) e 64 bits (long) sem sinal
+        self._ok("int h1 = 0x80000000; int h2 = 0xffffffff; long hl = 0xffffffffffffffffL;")
+        self._bad("int hBad = 0x100000000;")
+        self._bad("long hlBad = 0x10000000000000000L;")
+
+        # Ponto flutuante: overflow e underflow
+        self._ok("float f0 = 0.0f; float fMax = 3.4028235e38f; float fMin = 1.4e-45f; double d0 = 0.0;")
+        self._bad("float fOver = 1e50f;")
+        self._bad("float fUnder = 1e-50f;")
+        self._bad("double dOver = 1e500;")
+        self._bad("double dUnder = 1e-400;")
+
+    def test_11_numeric_literal_bases_underscores_and_switch_octal(self):
+        # Binário e octal: limites sem sinal de 32 e 64 bits
+        self._ok("int b32 = 0b11111111111111111111111111111111; int o32 = 037777777777;")
+        self._ok("long o64 = 01777777777777777777777L;")
+        self._bad("int b33 = 0b100000000000000000000000000000000;")
+        self._bad("int o33 = 040000000000;")
+        self._bad("long o65 = 02000000000000000000000L;")
+
+        # Ponto flutuante hexadecimal e underscores em todas as categorias
+        self._ok("double hf = 0x1.0p0; float hff = 0x1.fp3f;")
+        self._bad("float hfOver = 0x1.0p200f;")
+        self._bad("double hdOver = 0x1.0p2000;")
+        self._ok("int u = 1_000_000; long ul = 1_000_000L; double ud = 1_234.567_8d; float uf = 1_2.3_4f;")
+
+        # Duplicidade em switch com literal octal (077 == 63)
+        res = analyze_source(
+            "class T { int f(int x) { return switch (x) { case 077 -> 1; case 63 -> 2; default -> 0; }; } }"
+        )
+        self.assertFalse(res.success)
+
+    def test_12_parenthesized_minimum_integer_literals_jls_3_10_1(self):
+        # Valores mínimos diretos aceitos
+        self._ok("int a = -2147483648; long b = -9223372036854775808L;")
+        self._ok("int a = (-2147483648); long b = (-9223372036854775808L);")
+
+        # Valores mínimos entre parênteses rejeitados (não são operando direto de '-')
+        self._bad("int a = -(2147483648);")
+        self._bad("int a = -((2147483648));")
+        self._bad("long b = -(9223372036854775808L);")
+        self._bad("long b = -((9223372036854775808L));")
+
+        # Parênteses em expressões numéricas comuns (sem falsos positivos)
+        self._ok("int a = (10); long b = (100L); int c = -(10); int d = -((10));")
+        self._ok("int a = (10 + 20); long b = (100L + 200L); int c = -(10 + 20);")
+
 
 if __name__ == "__main__":
     unittest.main()

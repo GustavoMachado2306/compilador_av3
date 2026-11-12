@@ -64,12 +64,12 @@ def classify_number(lexeme: str) -> TokenType:
     """
     # 1. Regra de Hexadecimal Inteiro ANTES de float/double
     if HEX_INT_REGEX.match(lexeme):
-        return TokenType.INT
+        return TokenType.LONG if lexeme.endswith(('l', 'L')) else TokenType.INT
     # 2. Regra de Ponto Flutuante (Float / Double)
     if FLOAT_DOUBLE_REGEX.match(lexeme):
         return TokenType.FLOAT if lexeme.endswith(('f', 'F')) else TokenType.DOUBLE
     # 3. Demais inteiros (decimais, binários, octais)
-    return TokenType.INT
+    return TokenType.LONG if lexeme.endswith(('l', 'L')) else TokenType.INT
 
 # =============================================================================
 # SEÇÃO 1: MAPEAMENTO DE PALAVRAS-CHAVE E LITERAIS JAVA
@@ -497,6 +497,21 @@ class Lexer:
     # -------------------------------------------------------------------------
     # 3.3 RECONHECIMENTO DE NÚMEROS E VALIDAÇÃO DE SUFIXOS E UNDERSCORES
     # -------------------------------------------------------------------------
+    def _validate_number_boundary(
+        self, current_tokens: list, lexeme: str, start_line: int
+    ) -> None:
+        """Garante que não haja sufixos ou caracteres alfanuméricos inválidos colados ao literal numérico."""
+        if not self._is_at_end():
+            next_ch = self._peek()
+            if next_ch.isalnum() or next_ch == '_':
+                self.tokens = list(current_tokens)
+                raise LexicalError(
+                    f"Literal numérico malformado: caractere/sufixo inválido '{next_ch}' após '{lexeme}'.",
+                    start_line,
+                    self.column,
+                    tokens=current_tokens,
+                )
+
     def _lex_number(self, current_tokens: list) -> Token:
         """
         Processa inteiros decimais, hexadecimais (0x), binários (0b), octais (0),
@@ -637,20 +652,23 @@ class Lexer:
                     self.column += 1
 
             lexeme = self.source[start_pos:self.pos]
+            self._validate_number_boundary(current_tokens, lexeme, start_line)
 
             # -----------------------------------------------------------------
             # REGRA 1: Validação de Hexadecimal Inteiro ANTES de Float/Double.
-            # Garante que '0x0F', '0xFF', etc. sejam classificados como INT,
+            # Garante que '0x0F', '0xFF', etc. sejam classificados como INT/LONG,
             # impedindo que o dígito ou sufixo 'F'/'f' acione tipagem float por engano.
             # -----------------------------------------------------------------
             if HEX_INT_REGEX.match(lexeme):
-                return Token(TokenType.INT, lexeme, start_line, start_col)
+                tok_type = TokenType.LONG if lexeme.endswith(('l', 'L')) else TokenType.INT
+                return Token(tok_type, lexeme, start_line, start_col)
 
             if has_hex_p or FLOAT_DOUBLE_REGEX.match(lexeme):
                 tok_type = TokenType.FLOAT if lexeme.endswith(('f', 'F')) else TokenType.DOUBLE
                 return Token(tok_type, lexeme, start_line, start_col)
 
-            return Token(TokenType.INT, lexeme, start_line, start_col)
+            tok_type = TokenType.LONG if lexeme.endswith(('l', 'L')) else TokenType.INT
+            return Token(tok_type, lexeme, start_line, start_col)
 
         # Caso 2: Binário (0b / 0B)
         if self._peek() == '0' and self._peek(1) in ('b', 'B'):
@@ -707,7 +725,9 @@ class Lexer:
                 self.column += 1
 
             lexeme = self.source[start_pos:self.pos]
-            return Token(TokenType.INT, lexeme, start_line, start_col)
+            self._validate_number_boundary(current_tokens, lexeme, start_line)
+            tok_type = TokenType.LONG if lexeme.endswith(('l', 'L')) else TokenType.INT
+            return Token(tok_type, lexeme, start_line, start_col)
 
         # Caso 3: Decimal, Octal ou Ponto Flutuante
         has_dot = False
@@ -820,6 +840,7 @@ class Lexer:
             self.column += 1
 
         lexeme = self.source[start_pos:self.pos]
+        self._validate_number_boundary(current_tokens, lexeme, start_line)
 
         # Validação de literais octais inválidos (ex: 088 ou 088L sem ponto ou expoente)
         clean_lexeme = lexeme.rstrip('lL')
@@ -842,7 +863,8 @@ class Lexer:
         # REGRA 1: Validação de Hexadecimal Inteiro ANTES de Float/Double
         # -----------------------------------------------------------------
         if HEX_INT_REGEX.match(lexeme):
-            return Token(TokenType.INT, lexeme, start_line, start_col)
+            tok_type = TokenType.LONG if lexeme.endswith(('l', 'L')) else TokenType.INT
+            return Token(tok_type, lexeme, start_line, start_col)
 
         # -----------------------------------------------------------------
         # REGRA 2: Ponto Flutuante (Float / Double)
@@ -851,7 +873,8 @@ class Lexer:
             tok_type = TokenType.FLOAT if lexeme.endswith(('f', 'F')) else TokenType.DOUBLE
             return Token(tok_type, lexeme, start_line, start_col)
 
-        return Token(TokenType.INT, lexeme, start_line, start_col)
+        tok_type = TokenType.LONG if lexeme.endswith(('l', 'L')) else TokenType.INT
+        return Token(tok_type, lexeme, start_line, start_col)
 
     # -------------------------------------------------------------------------
     # 3.4 RECONHECIMENTO DE STRINGS E TEXT BLOCKS COM ESCAPES

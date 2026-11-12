@@ -5,6 +5,8 @@ duplicidade de identificadores e compatibilidade básica de tipos.
 Evita falsos erros para membros qualificados externos como System.out.println(...).
 """
 
+import math
+import struct
 from typing import Any, Dict, List, Optional, Set, Tuple
 from .ast_nodes import (
     ASTNode, CompilationUnit, PackageDeclaration, ClassDeclaration, InterfaceDeclaration,
@@ -137,14 +139,14 @@ class SemanticAnalyzer:
         "Character": ["Comparable", "Serializable", "Object"],
         "Void": ["Object"],
         "Iterable": ["Object"],
-        "Collection": ["Iterable", "Object"],
-        "List": ["Collection", "Iterable", "Object"],
-        "ArrayList": ["List", "Collection", "Iterable", "Serializable", "Cloneable", "Object"],
-        "LinkedList": ["List", "Collection", "Iterable", "Serializable", "Cloneable", "Object"],
-        "Set": ["Collection", "Iterable", "Object"],
-        "HashSet": ["Set", "Collection", "Iterable", "Serializable", "Cloneable", "Object"],
+        "Collection": ["Iterable<E>", "Object"],
+        "List": ["Collection<E>", "Iterable<E>", "Object"],
+        "ArrayList": ["List<E>", "Collection<E>", "Iterable<E>", "Serializable", "Cloneable", "Object"],
+        "LinkedList": ["List<E>", "Collection<E>", "Iterable<E>", "Serializable", "Cloneable", "Object"],
+        "Set": ["Collection<E>", "Iterable<E>", "Object"],
+        "HashSet": ["Set<E>", "Collection<E>", "Iterable<E>", "Serializable", "Cloneable", "Object"],
         "Map": ["Object"],
-        "HashMap": ["Map", "Serializable", "Cloneable", "Object"],
+        "HashMap": ["Map<K, V>", "Serializable", "Cloneable", "Object"],
         "Optional": ["Object"],
         "Record": ["Object"],
         "Enum": ["Comparable", "Serializable", "Object"],
@@ -509,6 +511,17 @@ class SemanticAnalyzer:
         "Arrays": {
             "asList": [{"params": ["T..."], "ret": "List<T>", "static": True, "varargs": True, "tparams": ["T"]}],
             "sort": [{"params": ["int[]"], "ret": "void", "static": True, "varargs": False, "tparams": []}],
+            "toString": [
+                {"params": ["boolean[]"], "ret": "String", "static": True, "varargs": False, "tparams": []},
+                {"params": ["byte[]"], "ret": "String", "static": True, "varargs": False, "tparams": []},
+                {"params": ["char[]"], "ret": "String", "static": True, "varargs": False, "tparams": []},
+                {"params": ["short[]"], "ret": "String", "static": True, "varargs": False, "tparams": []},
+                {"params": ["int[]"], "ret": "String", "static": True, "varargs": False, "tparams": []},
+                {"params": ["long[]"], "ret": "String", "static": True, "varargs": False, "tparams": []},
+                {"params": ["float[]"], "ret": "String", "static": True, "varargs": False, "tparams": []},
+                {"params": ["double[]"], "ret": "String", "static": True, "varargs": False, "tparams": []},
+                {"params": ["Object[]"], "ret": "String", "static": True, "varargs": False, "tparams": []},
+            ],
         },
         "Objects": {
             "requireNonNull": [{"params": ["T"], "ret": "T", "static": True, "varargs": False, "tparams": ["T"]}],
@@ -733,6 +746,7 @@ class SemanticAnalyzer:
         self._pending_lambda_captures = []
         self._lambda_return_exprs_stack = []
         self._inferred_types = {}
+        self._validated_literal_ids: Set[int] = set()
         self._switch_yield_exprs_stack = []
         self._switch_expected_type_stack = []
         if not program:
@@ -2842,17 +2856,15 @@ class SemanticAnalyzer:
         if isinstance(const_expr, Literal):
             kind = getattr(const_expr, "kind", "")
             val = getattr(const_expr, "value", None)
-            if kind in ("NUM", "INT"):
+            if kind in ("NUM", "INT", "LONG"):
                 val_s = str(val)
-                if val_s.lower().endswith("l"):
-                    try:
-                        return ("long", int(val_s[:-1].replace("_", ""), 0))
-                    except ValueError:
-                        return ("lit", val_s)
-                try:
-                    return ("int", int(val_s.replace("_", ""), 0))
-                except ValueError:
-                    return ("lit", val_s)
+                parsed = self._parse_java_int_literal(val_s)
+                if parsed is not None:
+                    num_val, is_long_lit, _ = parsed
+                    if kind == "LONG" or is_long_lit:
+                        return ("long", num_val)
+                    return ("int", num_val)
+                return ("lit", val_s)
             if kind in ("FLOAT", "DOUBLE", "CHAR", "STRING", "TEXT_BLOCK", "BOOLEAN", "NULL"):
                 return ("lit", kind, str(val))
             return ("lit", kind, str(val))
@@ -2895,7 +2907,7 @@ class SemanticAnalyzer:
                         err_line,
                     )
                 )
-            elif kind in ("NUM", "INT") and val_s.lower().endswith("l") and not self.enable_preview_primitive_patterns:
+            elif (kind == "LONG" or (kind in ("NUM", "INT") and val_s.lower().endswith("l"))) and not self.enable_preview_primitive_patterns:
                 self.errors.append(
                     SemanticError(
                         "Constante do tipo 'long' em 'case' requer recurso preview (JEP 530) e está desabilitada no modo padrão Java SE 26 (JLS §14.11.1).",
@@ -3278,7 +3290,9 @@ class SemanticAnalyzer:
             supers, is_ext = self._direct_supertypes(cur)
             if is_ext:
                 saw_external = True
+            tvar_map = self._type_var_mapping_for_type(cur)
             for s in supers:
+                s = self._substitute_type_vars(s, tvar_map) or s
                 s_simple = self._simple_base_name(s) or ""
                 if s_simple == sup_s:
                     # Verifica compatibilidade genérica caso haja argumentos no supertipo direto
@@ -4037,6 +4051,8 @@ class SemanticAnalyzer:
             val_s = str(getattr(const_expr, "value", ""))
             if kind in ("STRING", "TEXT_BLOCK"):
                 return "String"
+            if kind == "LONG":
+                return "Long" if selector_type not in self.PRIMITIVE_TYPES else "long"
             if kind in ("NUM", "INT"):
                 if val_s.lower().endswith("l"):
                     return "Long" if selector_type not in self.PRIMITIVE_TYPES else "long"
@@ -5472,6 +5488,8 @@ class SemanticAnalyzer:
                     escapes = {"\\n": 10, "\\r": 13, "\\t": 9, "\\b": 8, "\\f": 12, "\\'": 39, '\\"': 34, "\\\\": 92}
                     if inner in escapes:
                         return escapes[inner]
+                return None
+            if kind == "LONG":
                 return None
             if kind in ("NUM", "INT"):
                 if val.endswith(("l", "L", "f", "F", "d", "D")) and not val.startswith(("0x", "0X")):
@@ -6938,6 +6956,137 @@ class SemanticAnalyzer:
         self._inferred_types[id(node)] = target_type
         return target_type
 
+    @staticmethod
+    def _parse_java_int_literal(val_s: str) -> Optional[Tuple[int, bool, int]]:
+        """Interpreta um literal inteiro Java (decimal, hex, binário ou octal) retornando (valor, is_long, base)."""
+        s = val_s.strip()
+        is_long = s.endswith(("l", "L"))
+        body = (s[:-1] if is_long else s).replace("_", "")
+        if not body:
+            return None
+        try:
+            if body.startswith(("0x", "0X")):
+                return int(body[2:], 16), is_long, 16
+            if body.startswith(("0b", "0B")):
+                return int(body[2:], 2), is_long, 2
+            if len(body) > 1 and body.startswith("0") and not (
+                "." in body or "e" in body.lower() or body.endswith(("f", "F", "d", "D"))
+            ):
+                return int(body[1:], 8), is_long, 8
+            if body.isdigit():
+                return int(body, 10), is_long, 10
+        except ValueError:
+            return None
+        return None
+
+    def _validate_numeric_literal(self, node: Literal, negated: bool = False) -> None:
+        """Valida faixa de literais inteiros (JLS §3.10.1) e ponto flutuante (JLS §3.10.2)."""
+        nid = id(node)
+        if nid in self._validated_literal_ids:
+            return
+        self._validated_literal_ids.add(nid)
+
+        kind = getattr(node, "kind", "")
+        if kind not in ("NUM", "INT", "LONG", "FLOAT", "DOUBLE"):
+            return
+
+        val_s = str(getattr(node, "value", "")).strip()
+        line = getattr(node, "line", 1)
+
+        is_fp_text = (
+            kind in ("FLOAT", "DOUBLE")
+            or "." in val_s
+            or ("e" in val_s.lower() and not val_s.startswith(("0x", "0X")))
+            or ("p" in val_s.lower() and val_s.startswith(("0x", "0X")))
+            or (val_s.endswith(("f", "F", "d", "D")) and not val_s.startswith(("0x", "0X")))
+        )
+
+        if kind in ("NUM", "INT", "LONG") and not is_fp_text:
+            parsed = self._parse_java_int_literal(val_s)
+            if parsed is None:
+                return
+            num_val, is_long_lit, base = parsed
+            is_long = (kind == "LONG") or is_long_lit
+            if base == 10:
+                if is_long:
+                    max_val = (1 << 63) if negated else ((1 << 63) - 1)
+                else:
+                    max_val = (1 << 31) if negated else ((1 << 31) - 1)
+            else:
+                max_val = ((1 << 64) - 1) if is_long else ((1 << 32) - 1)
+            if num_val > max_val:
+                tname = "long" if is_long else "int"
+                self.errors.append(
+                    SemanticError(
+                        f"Literal inteiro '{tname}' fora da faixa permitida: '{val_s}' (JLS §3.10.1).",
+                        line,
+                    )
+                )
+            return
+
+        is_float = (kind == "FLOAT") or val_s.endswith(("f", "F"))
+        raw = val_s[:-1] if val_s.endswith(("f", "F", "d", "D")) else val_s
+        clean = raw.replace("_", "")
+        tname = "float" if is_float else "double"
+
+        if clean.startswith(("0x", "0X")):
+            mant = clean[2:].split("p", 1)[0].split("P", 1)[0]
+            has_nonzero = any(c in "123456789abcdefABCDEF" for c in mant)
+            try:
+                fval = float.fromhex(clean)
+            except OverflowError:
+                self.errors.append(
+                    SemanticError(
+                        f"Literal de ponto flutuante '{tname}' muito grande (overflow): '{val_s}' (JLS §3.10.2).",
+                        line,
+                    )
+                )
+                return
+            except ValueError:
+                return
+        else:
+            mant = clean.split("e", 1)[0].split("E", 1)[0]
+            has_nonzero = any(c in "123456789" for c in mant)
+            try:
+                fval = float(clean)
+            except ValueError:
+                return
+
+        if math.isinf(fval):
+            self.errors.append(
+                SemanticError(
+                    f"Literal de ponto flutuante '{tname}' muito grande (overflow): '{val_s}' (JLS §3.10.2).",
+                    line,
+                )
+            )
+            return
+
+        if is_float:
+            try:
+                packed = struct.pack(">f", fval)
+            except OverflowError:
+                self.errors.append(
+                    SemanticError(
+                        f"Literal de ponto flutuante 'float' muito grande (overflow): '{val_s}' (JLS §3.10.2).",
+                        line,
+                    )
+                )
+                return
+            if has_nonzero and packed in (b"\x00\x00\x00\x00", b"\x80\x00\x00\x00"):
+                self.errors.append(
+                    SemanticError(
+                        f"Literal de ponto flutuante 'float' muito pequeno (underflow): '{val_s}' (JLS §3.10.2).",
+                        line,
+                    )
+                )
+        elif has_nonzero and fval == 0.0:
+            self.errors.append(
+                SemanticError(
+                    f"Literal de ponto flutuante 'double' muito pequeno (underflow): '{val_s}' (JLS §3.10.2).",
+                    line,
+                )
+            )
+
     def _validate_unary_op(self, node: UnaryOp):
         """Valida tipo e modificabilidade dos operandos em operadores unários (JLS §15.14 / §15.15)."""
         line = getattr(node, "line", 1)
@@ -6952,7 +7101,10 @@ class SemanticAnalyzer:
                 )
             return
 
-        self._check_expression_flow(node.operand)
+        if node.op == "-" and isinstance(node.operand, Literal) and not getattr(node.operand, "parenthesized", False):
+            self._validate_numeric_literal(node.operand, negated=True)
+        else:
+            self._check_expression_flow(node.operand)
         op_type = self.infer_type(node.operand)
         if not op_type or op_type in ("Object", "var", "desconhecido") or self._is_type_variable(op_type):
             return
@@ -7527,6 +7679,10 @@ class SemanticAnalyzer:
         if node is None:
             return empty
 
+        if isinstance(node, Literal):
+            self._validate_numeric_literal(node, negated=False)
+            return empty
+
         if isinstance(node, Identifier):
             line = getattr(node, "line", 1)
             if self._check_early_target_ref(node.name, line):
@@ -7891,6 +8047,8 @@ class SemanticAnalyzer:
                 return "double"
             if node.kind == "FLOAT":
                 return "float"
+            if node.kind == "LONG":
+                return "long"
             if node.kind in ("NUM", "INT"):
                 val_str = str(node.value)
                 if val_str.startswith(("0x", "0X")) and not any(c in val_str for c in ('p', 'P', '.')):
