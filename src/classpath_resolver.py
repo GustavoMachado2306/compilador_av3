@@ -761,8 +761,7 @@ class ClassFileParser:
                 reader.read_u2()
                 cp[idx] = ("MethodHandle",)
             elif tag in (CP_METHOD_TYPE, CP_MODULE, CP_PACKAGE):
-                reader.read_u2()
-                cp[idx] = ("NameRef", tag)
+                cp[idx] = ("NameRef", tag, reader.read_u2())
             else:
                 raise ClassFormatError(f"Tag de Constant Pool desconhecida: {tag} (índice {idx}).")
             idx += 1
@@ -779,6 +778,35 @@ class ClassFileParser:
         if 0 < idx < len(cp) and cp[idx] and cp[idx][0] == "Class":
             return cls._cp_utf8(cp, cp[idx][1])
         return ""
+
+    @classmethod
+    def _cp_nameref_name(cls, cp: List[Any], idx: int) -> str:
+        if 0 < idx < len(cp) and cp[idx] and cp[idx][0] == "NameRef" and len(cp[idx]) >= 3:
+            return cls._cp_utf8(cp, cp[idx][2])
+        return ""
+
+    @classmethod
+    def parse_module_info_bytes(cls, data: bytes) -> Optional[Dict[str, Any]]:
+        """Extrai descritor modular (nome, exports não qualificados e requires transitive) de module-info.class (JVMS §4.7.25)."""
+        if len(data) < 10:
+            return None
+        reader = _ByteReader(data)
+        if reader.read_u4() != 0xCAFEBABE:
+            return None
+        _minor = reader.read_u2()
+        _major = reader.read_u2()
+        cp = cls._read_constant_pool(reader)
+        _access_flags = reader.read_u2()
+        _this_class = reader.read_u2()
+        _super_class = reader.read_u2()
+        iface_count = reader.read_u2()
+        for _ in range(iface_count):
+            reader.read_u2()
+        cls._read_members(reader, cp)
+        cls._read_members(reader, cp)
+        attrs = cls._read_attributes(reader, cp)
+        mod_attr = attrs.get("Module")
+        return mod_attr if isinstance(mod_attr, dict) else None
 
     @classmethod
     def _read_members(cls, reader: _ByteReader, cp: List[Any]) -> List[Dict[str, Any]]:
@@ -840,6 +868,35 @@ class ClassFileParser:
                 attrs["InnerClasses"] = ics
             elif attr_name == "Record":
                 attrs["Record"] = True
+            elif attr_name == "Module" and len(raw) >= 12:
+                mr = _ByteReader(raw)
+                mod_name = cls._cp_nameref_name(cp, mr.read_u2())
+                _mod_flags = mr.read_u2()
+                _mod_ver = mr.read_u2()
+                req_count = mr.read_u2()
+                transitive_reqs: List[str] = []
+                for _ in range(req_count):
+                    req_name = cls._cp_nameref_name(cp, mr.read_u2())
+                    req_flags = mr.read_u2()
+                    _req_ver = mr.read_u2()
+                    if req_name and (req_flags & 0x0020):  # ACC_TRANSITIVE
+                        transitive_reqs.append(req_name)
+                exp_count = mr.read_u2()
+                exported_pkgs: List[str] = []
+                for _ in range(exp_count):
+                    exp_pkg = cls._cp_nameref_name(cp, mr.read_u2())
+                    _exp_flags = mr.read_u2()
+                    to_count = mr.read_u2()
+                    for _ in range(to_count):
+                        mr.read_u2()
+                    if exp_pkg and to_count == 0:
+                        exported_pkgs.append(exp_pkg.replace("/", "."))
+                if mod_name:
+                    attrs["Module"] = {
+                        "name": mod_name,
+                        "exports": exported_pkgs,
+                        "transitive_requires": transitive_reqs,
+                    }
         return attrs
 
     @staticmethod
@@ -868,6 +925,7 @@ class ClasspathEntry:
     def __init__(self, path: str):
         self.path = path
         self._fqn_to_member: Dict[str, str] = {}
+        self._module_info_members: List[str] = []
         self._loaded = False
 
     def ensure_indexed(self) -> None:
@@ -880,6 +938,24 @@ class ClasspathEntry:
 
     def read_class_bytes(self, fqn: str) -> Optional[bytes]:
         raise NotImplementedError
+
+    def list_module_descriptors(self) -> List[Dict[str, Any]]:
+        self.ensure_indexed()
+        descriptors: List[Dict[str, Any]] = []
+        for member_ref in self._module_info_members:
+            raw = self._read_raw_member(member_ref)
+            if raw is None:
+                continue
+            try:
+                parsed = ClassFileParser.parse_module_info_bytes(raw)
+            except Exception:
+                parsed = None
+            if parsed is not None:
+                descriptors.append(parsed)
+        return descriptors
+
+    def _read_raw_member(self, member_ref: str) -> Optional[bytes]:
+        return None
 
     def list_fqns(self) -> Sequence[str]:
         self.ensure_indexed()
@@ -907,10 +983,17 @@ class DirectoryClasspathEntry(ClasspathEntry):
             return
         for class_file in root.rglob("*.class"):
             rel = class_file.relative_to(root).as_posix()
-            if rel.endswith("module-info.class") or rel.endswith("package-info.class"):
+            if rel.endswith("module-info.class"):
+                self._module_info_members.append(str(class_file))
+                continue
+            if rel.endswith("package-info.class"):
                 continue
             internal_name = rel[:-6]  # remove '.class'
             self._register_internal_member(internal_name, str(class_file))
+
+    def _read_raw_member(self, member_ref: str) -> Optional[bytes]:
+        p = Path(member_ref)
+        return p.read_bytes() if p.is_file() else None
 
     def read_class_bytes(self, fqn: str) -> Optional[bytes]:
         self.ensure_indexed()
@@ -957,25 +1040,29 @@ class JarClasspathEntry(ClasspathEntry):
                 rel = name[plen:]
             else:
                 rel = name
-            if rel.endswith("module-info.class") or rel.endswith("package-info.class"):
+            if rel.endswith("module-info.class"):
+                self._module_info_members.append(name)
+                continue
+            if rel.endswith("package-info.class"):
                 continue
             internal_name = rel[:-6]
             self._register_internal_member(internal_name, name)
+
+    def _read_raw_member(self, member_ref: str) -> Optional[bytes]:
+        if self._keep_open:
+            zf = self._open_zip()
+            return zf.read(member_ref) if zf is not None else None
+        if not os.path.isfile(self.path):
+            return None
+        with zipfile.ZipFile(self.path, "r") as zf:
+            return zf.read(member_ref)
 
     def read_class_bytes(self, fqn: str) -> Optional[bytes]:
         self.ensure_indexed()
         member = self._fqn_to_member.get(fqn)
         if not member:
             return None
-        if self._keep_open:
-            zf = self._open_zip()
-            if zf is None:
-                return None
-            return zf.read(member)
-        if not os.path.isfile(self.path):
-            return None
-        with zipfile.ZipFile(self.path, "r") as zf:
-            return zf.read(member)
+        return self._read_raw_member(member)
 
     def close(self) -> None:
         if self._zip is not None:
@@ -1123,6 +1210,141 @@ def _get_cached_default_jdk() -> Tuple[
     return bundle
 
 
+BUILTIN_STD_MODULE_EXPORTS: Dict[str, Tuple[str, ...]] = {
+    "java.base": (
+        "java.lang",
+        "java.util",
+        "java.io",
+        "java.nio",
+        "java.nio.file",
+        "java.nio.file.attribute",
+        "java.nio.file.spi",
+        "java.nio.channels",
+        "java.nio.channels.spi",
+        "java.nio.charset",
+        "java.nio.charset.spi",
+        "java.math",
+        "java.net",
+        "java.net.spi",
+        "java.text",
+        "java.text.spi",
+        "java.time",
+        "java.time.chrono",
+        "java.time.format",
+        "java.time.temporal",
+        "java.time.zone",
+        "java.util.concurrent",
+        "java.util.concurrent.atomic",
+        "java.util.concurrent.locks",
+        "java.util.function",
+        "java.util.jar",
+        "java.util.random",
+        "java.util.regex",
+        "java.util.spi",
+        "java.util.stream",
+        "java.util.zip",
+        "java.lang.annotation",
+        "java.lang.classfile",
+        "java.lang.constant",
+        "java.lang.foreign",
+        "java.lang.invoke",
+        "java.lang.module",
+        "java.lang.ref",
+        "java.lang.reflect",
+        "java.lang.runtime",
+        "java.security",
+        "java.security.cert",
+        "java.security.interfaces",
+        "java.security.spec",
+        "javax.crypto",
+        "javax.crypto.interfaces",
+        "javax.crypto.spec",
+        "javax.net",
+        "javax.net.ssl",
+        "javax.security.auth",
+        "javax.security.auth.callback",
+        "javax.security.auth.login",
+        "javax.security.auth.spi",
+        "javax.security.auth.x500",
+        "javax.security.cert",
+    ),
+    "java.logging": ("java.util.logging",),
+    "java.transaction.xa": ("javax.transaction.xa",),
+    "java.xml": (
+        "javax.xml",
+        "javax.xml.catalog",
+        "javax.xml.datatype",
+        "javax.xml.namespace",
+        "javax.xml.parsers",
+        "javax.xml.stream",
+        "javax.xml.stream.events",
+        "javax.xml.stream.util",
+        "javax.xml.transform",
+        "javax.xml.transform.dom",
+        "javax.xml.transform.sax",
+        "javax.xml.transform.stax",
+        "javax.xml.transform.stream",
+        "javax.xml.validation",
+        "javax.xml.xpath",
+        "org.w3c.dom",
+        "org.xml.sax",
+        "org.xml.sax.ext",
+        "org.xml.sax.helpers",
+    ),
+    "java.sql": ("java.sql", "javax.sql"),
+    "java.naming": ("javax.naming", "javax.naming.directory", "javax.naming.event", "javax.naming.ldap", "javax.naming.spi"),
+    "java.management": (
+        "java.lang.management",
+        "javax.management",
+        "javax.management.loading",
+        "javax.management.modelmbean",
+        "javax.management.monitor",
+        "javax.management.openmbean",
+        "javax.management.relation",
+        "javax.management.remote",
+        "javax.management.timer",
+    ),
+    "java.desktop": (
+        "java.awt",
+        "java.awt.color",
+        "java.awt.datatransfer",
+        "java.awt.desktop",
+        "java.awt.dnd",
+        "java.awt.event",
+        "java.awt.font",
+        "java.awt.geom",
+        "java.awt.im",
+        "java.awt.image",
+        "java.awt.print",
+        "javax.imageio",
+        "javax.swing",
+        "javax.swing.border",
+        "javax.swing.event",
+        "javax.swing.filechooser",
+        "javax.swing.table",
+        "javax.swing.text",
+        "javax.swing.text.html",
+        "javax.swing.text.html.parser",
+        "javax.swing.tree",
+    ),
+    "java.net.http": ("java.net.http",),
+    "java.compiler": ("javax.annotation.processing", "javax.lang.model", "javax.lang.model.element", "javax.lang.model.type", "javax.lang.model.util", "javax.tools"),
+    "java.scripting": ("javax.script",),
+    "java.instrument": ("java.lang.instrument",),
+    "java.se": (),
+}
+
+BUILTIN_STD_MODULE_TRANSITIVE_REQUIRES: Dict[str, Tuple[str, ...]] = {
+    "java.sql": ("java.logging", "java.transaction.xa", "java.xml"),
+    "java.desktop": ("java.xml",),
+    "java.se": (
+        "java.compiler", "java.desktop", "java.instrument", "java.logging",
+        "java.management", "java.naming", "java.net.http", "java.scripting",
+        "java.sql", "java.transaction.xa", "java.xml",
+    ),
+}
+
+
 def _unpack_import(imp: Any) -> Tuple[Optional[str], bool, bool]:
     """Extrai (nome, is_wildcard, is_static) de ImportDeclaration ou tupla compatível."""
     if isinstance(imp, tuple):
@@ -1160,6 +1382,8 @@ class ExternalSymbolResolver:
         self._std_fqn_index: Dict[str, Tuple[ClasspathEntry, str]] = {}
         self._std_parsed_cache: Dict[Tuple[int, str], Optional[ExternalTypeInfo]] = {}
         self._type_cache: Dict[str, Optional[ExternalTypeInfo]] = {}
+        self._module_descriptors: Optional[Dict[str, Dict[str, Any]]] = None
+        self._module_exports_cache: Dict[str, Optional[List[str]]] = {}
         self._diagnostics: List[ClasspathDiagnostic] = []
         self._stdlib_meta: Dict[str, Any] = {
             "stdlib_available": False,
@@ -1261,6 +1485,101 @@ class ExternalSymbolResolver:
     def has_class(self, fqn: str) -> bool:
         return (fqn in self._fqn_index) or (fqn in self._std_fqn_index)
 
+    def _ensure_module_descriptors(self) -> Dict[str, Dict[str, Any]]:
+        if self._module_descriptors is None:
+            descs: Dict[str, Dict[str, Any]] = {}
+            for ent in self._entries:
+                try:
+                    for md in ent.list_module_descriptors():
+                        mname = md.get("name")
+                        if mname and mname not in descs:
+                            descs[mname] = md
+                except Exception:
+                    continue
+            self._module_descriptors = descs
+        return self._module_descriptors
+
+    def _has_indexed_package(self, pkg_name: str) -> bool:
+        prefix = pkg_name + "."
+        for fqn in self._std_fqn_index:
+            if fqn.startswith(prefix) and "." not in fqn[len(prefix):]:
+                return True
+        for fqn in self._fqn_index:
+            if fqn.startswith(prefix) and "." not in fqn[len(prefix):]:
+                return True
+        return False
+
+    def has_module(self, module_name: str) -> bool:
+        """Retorna True se o módulo existir em module-info indexado ou na stdlib compatível disponível."""
+        return self.get_module_exported_packages(module_name) is not None
+
+    def get_module_exported_packages(self, module_name: str) -> Optional[List[str]]:
+        """Retorna lista ordenada de pacotes exportados (incluindo requires transitive) ou None se módulo não resolvido."""
+        if not module_name:
+            return None
+        if module_name in self._module_exports_cache:
+            return self._module_exports_cache[module_name]
+        descs = self._ensure_module_descriptors()
+        visited: Set[str] = set()
+        pkgs: List[str] = []
+        seen_pkgs: Set[str] = set()
+        found_any = False
+
+        def _visit(mod: str) -> None:
+            nonlocal found_any
+            if mod in visited:
+                return
+            visited.add(mod)
+            if mod in descs:
+                found_any = True
+                for p in descs[mod].get("exports", []):
+                    if p not in seen_pkgs:
+                        seen_pkgs.add(p)
+                        pkgs.append(p)
+                for req in descs[mod].get("transitive_requires", []):
+                    _visit(req)
+                return
+            if self.include_stdlib and self._stdlib_meta.get("stdlib_available") and mod in BUILTIN_STD_MODULE_EXPORTS:
+                std_pkgs = BUILTIN_STD_MODULE_EXPORTS[mod]
+                if any(self._has_indexed_package(p) for p in std_pkgs) or mod == "java.se":
+                    found_any = True
+                    for p in std_pkgs:
+                        if p not in seen_pkgs:
+                            seen_pkgs.add(p)
+                            pkgs.append(p)
+                    for req in BUILTIN_STD_MODULE_TRANSITIVE_REQUIRES.get(mod, ()):
+                        _visit(req)
+
+        _visit(module_name)
+        res = pkgs if found_any else None
+        self._module_exports_cache[module_name] = res
+        return res
+
+    def collect_on_demand_candidates(
+        self,
+        simple_name: str,
+        on_demand_pkgs: Sequence[str],
+        current_package: str = "",
+    ) -> Tuple[List[str], List[str]]:
+        """Coleta FQNs candidatos únicos para import sob demanda e separa os acessíveis (JLS §7.5.2 / §7.5.5)."""
+        all_cands: List[str] = []
+        seen_cands: Set[str] = set()
+        seen_pkgs: Set[str] = set()
+        for pkg_prefix in on_demand_pkgs:
+            if not pkg_prefix or pkg_prefix in seen_pkgs:
+                continue
+            seen_pkgs.add(pkg_prefix)
+            cand = f"{pkg_prefix}.{simple_name}"
+            if cand not in seen_cands and self.has_class(cand):
+                seen_cands.add(cand)
+                all_cands.append(cand)
+        accessible: List[str] = []
+        for cand in all_cands:
+            cinfo = self.get_type_info_by_fqn(cand)
+            if cinfo is None or cinfo.access == "public" or (current_package and cinfo.package == current_package):
+                accessible.append(cand)
+        return accessible, all_cands
+
     def resolve_fqn(
         self,
         type_name: str,
@@ -1278,6 +1597,8 @@ class ExternalSymbolResolver:
         # 1. Imports explícitos de tipo único (ex: import java.nio.file.Path;)
         if "." not in clean:
             for imp in imports:
+                if getattr(imp, "is_module", False):
+                    continue
                 imp_name, is_wild, is_stat = _unpack_import(imp)
                 if is_stat or is_wild:
                     continue
@@ -1289,6 +1610,8 @@ class ExternalSymbolResolver:
             # Nome parcialmente qualificado após import (ex: Map.Entry com import java.util.Map;)
             head, rest = clean.split(".", 1)
             for imp in imports:
+                if getattr(imp, "is_module", False):
+                    continue
                 imp_name, is_wild, is_stat = _unpack_import(imp)
                 if is_stat or is_wild:
                     continue
@@ -1303,24 +1626,33 @@ class ExternalSymbolResolver:
             if self.has_class(same_pkg):
                 return same_pkg
 
-        # 3. Pacote implícito java.lang.* (JLS §7.3)
-        jl_cand = f"java.lang.{clean}"
-        if self.has_class(jl_cand):
-            return jl_cand
-
-        # 4. Imports sob demanda (wildcard: import pkg.*;)
-        wildcard_matches: List[str] = []
+        # 3. Imports sob demanda (import pkg.*; e import module M;) + java.lang.* implícito (JLS §7.3 / §7.5.5)
+        on_demand_pkgs: List[str] = []
         for imp in imports:
+            if getattr(imp, "is_module", False):
+                mod_name = getattr(imp, "name", None)
+                if mod_name:
+                    on_demand_pkgs.extend(self.get_module_exported_packages(mod_name) or ())
+                continue
             pkg_prefix, is_wild, is_stat = _unpack_import(imp)
             if is_stat or not is_wild or not pkg_prefix:
                 continue
-            cand = f"{pkg_prefix}.{clean}"
-            if self.has_class(cand) and cand not in wildcard_matches:
-                wildcard_matches.append(cand)
-        if wildcard_matches:
-            return wildcard_matches[0]
+            on_demand_pkgs.append(pkg_prefix)
+        on_demand_pkgs.append("java.lang")
 
-        # 5. Fallback opcional de compatibilidade para nomes legados sem import explícito
+        accessible_matches, all_matches = self.collect_on_demand_candidates(
+            clean,
+            on_demand_pkgs,
+            current_package=current_package,
+        )
+        if len(accessible_matches) > 1:
+            return None
+        if len(accessible_matches) == 1:
+            return accessible_matches[0]
+        if all_matches:
+            return all_matches[0]
+
+        # 4. Fallback opcional de compatibilidade para nomes legados sem import explícito
         if compat_fqns and clean in compat_fqns:
             mapped = compat_fqns[clean]
             if self.has_class(mapped):

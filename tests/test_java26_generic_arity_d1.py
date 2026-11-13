@@ -373,8 +373,8 @@ class TestJava26GenericArityD1(unittest.TestCase):
         import java.util.function.*;
         class MRefArr {
             void m() {
-                IntFunction<List<String>[]> f1 = List<String>[]::new;
-                IntFunction<Map<String, Integer>[]> f2 = Map<String, Integer>[]::new;
+                IntFunction<List<?>[]> f1 = List<?>[]::new;
+                IntFunction<Map<?, ?>[]> f2 = Map<?, ?>[]::new;
                 IntFunction<String[]> f3 = String[]::new;
             }
         }
@@ -416,12 +416,12 @@ class TestJava26GenericArityD1(unittest.TestCase):
             msg=res_bad_map.semantic_errors,
         )
 
-        # 6. Tipo genérico não resolvido em referência de criação de array — sem falso positivo
+        # 6. Tipo genérico não resolvido reificável em referência de criação de array — sem falso positivo
         unresolved = """
         import java.util.function.*;
         class MRefArr {
             void m() {
-                IntFunction<Object> f = UnknownGen<String, Integer>[]::new;
+                IntFunction<Object> f = UnknownGen<?, ?>[]::new;
             }
         }
         """

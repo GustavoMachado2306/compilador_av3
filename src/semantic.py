@@ -39,7 +39,7 @@ from .ast_nodes import (
     ObjectCreationExpression, ArrayInitializer, ArrayCreationExpression,
     CastExpression, InstanceOfExpression, PatternInstanceOfExpression,
     LambdaExpression, MethodReference,
-    ModuleDeclaration, InstanceInitializer, StaticInitializer, ConstructorBody,
+    ModuleDeclaration, ExportsDirective, RequiresDirective, InstanceInitializer, StaticInitializer, ConstructorBody,
     SuperclassConstructorInvocation, AlternateConstructorInvocation,
     TypeReference, WildcardType, Annotation, MarkerAnnotation,
     SingleElementAnnotation, NormalAnnotation, ElementValue, ElementValueList,
@@ -1064,6 +1064,8 @@ class SemanticAnalyzer:
         )
         self._reported_classpath_diags: Set[Tuple[str, str]] = set()
         self._checked_explicit_imports: Set[str] = set()
+        self._checked_module_imports: Set[str] = set()
+        self._declared_modules: Dict[str, Dict[str, List[str]]] = {}
         self.errors = []
         self.unresolved_checks: List[str] = []
         self._in_early_construction_context = False
@@ -1088,6 +1090,8 @@ class SemanticAnalyzer:
         self._enclosing_type_names: List[str] = []
         self._current_type_is_local: bool = False
         self._in_static_context: bool = False
+        self._anon_enclosing_blocked: bool = False
+        self._static_context_local_keys: Set[str] = set()
         self._lambda_scope_floor_stack: List[int] = []
         self._pending_lambda_captures: List[Tuple[str, Dict[str, Any], int]] = []
         self._lambda_return_exprs_stack: List[List[Optional[ASTNode]]] = []
@@ -1112,6 +1116,7 @@ class SemanticAnalyzer:
         self._type_inference = JLS18ConstraintSolver(self)
         self._exception_analyzer = ExceptionAnalyzer(self)
         self._inheritance_analyzer = InheritanceAccessAnalyzer(self)
+        self._reachability_const_bools: Dict[int, Optional[bool]] = {}
 
     def _save_exec_context(self) -> Dict[str, Any]:
         return {
@@ -1130,6 +1135,7 @@ class SemanticAnalyzer:
             "decl_type_scopes": self._local_declared_type_scopes,
             "local_type_flag": self._current_type_is_local,
             "in_static": self._in_static_context,
+            "anon_enc_blocked": self._anon_enclosing_blocked,
             "lambda_floors": self._lambda_scope_floor_stack,
             "lambda_captures": self._pending_lambda_captures,
             "lambda_rets": self._lambda_return_exprs_stack,
@@ -1166,6 +1172,7 @@ class SemanticAnalyzer:
         self._local_declared_type_scopes = saved["decl_type_scopes"]
         self._current_type_is_local = saved["local_type_flag"]
         self._in_static_context = saved["in_static"]
+        self._anon_enclosing_blocked = saved.get("anon_enc_blocked", False)
         self._lambda_scope_floor_stack = saved["lambda_floors"]
         self._pending_lambda_captures = saved["lambda_captures"]
         self._lambda_return_exprs_stack = saved["lambda_rets"]
@@ -1590,6 +1597,8 @@ class SemanticAnalyzer:
         self._enclosing_type_names = []
         self._current_type_is_local = False
         self._in_static_context = False
+        self._anon_enclosing_blocked = False
+        self._static_context_local_keys = set()
         self._lambda_scope_floor_stack = []
         self._pending_lambda_captures = []
         self._lambda_return_exprs_stack = []
@@ -1613,7 +1622,11 @@ class SemanticAnalyzer:
         self._active_type_params = []
         self._subtype_visiting = set()
         self._reported_classpath_diags = set()
+        self._reachability_const_bools = {}
         self._checked_explicit_imports = set()
+        self._checked_module_imports = set()
+        self._declared_modules = {}
+        self._declared_top_level_pkg_names: Set[Tuple[str, str]] = set()
         self._exception_analyzer.reset()
         self._inheritance_analyzer.reset()
 
@@ -1633,6 +1646,25 @@ class SemanticAnalyzer:
             elif diag.kind == "missing_entry":
                 self._record_unresolved(diag.message)
 
+    def _get_declared_module_exported_packages(self, module_name: str, seen: Optional[Set[str]] = None) -> List[str]:
+        """Retorna pacotes exportados (e requires transitive) de módulos declarados nas unidades internas."""
+        if not module_name:
+            return []
+        if seen is None:
+            seen = set()
+        if module_name in seen:
+            return []
+        seen.add(module_name)
+        if module_name not in self._declared_modules:
+            return list(self._classpath_resolver.get_module_exported_packages(module_name) or [])
+        meta = self._declared_modules[module_name]
+        pkgs = list(meta.get("exports", []))
+        for req in meta.get("transitive_requires", []):
+            for p in self._get_declared_module_exported_packages(req, seen):
+                if p not in pkgs:
+                    pkgs.append(p)
+        return pkgs
+
     def _current_import_context(self) -> Tuple[str, List[Tuple[str, bool]]]:
         """Retorna (pacote_atual, lista[(nome_import, is_wildcard)]) da CompilationUnit ativa."""
         pkg = getattr(self._inheritance_analyzer, "_current_unit_package", "") or ""
@@ -1640,10 +1672,20 @@ class SemanticAnalyzer:
         imports: List[Tuple[str, bool]] = []
         if unit is not None:
             for imp in getattr(unit, "imports", []) or []:
-                if not getattr(imp, "is_static", False) and getattr(imp, "name", None):
-                    is_wild = bool(getattr(imp, "is_wildcard", False))
-                    iname = imp.name[:-2] if (is_wild and imp.name.endswith(".*")) else imp.name
-                    imports.append((iname, is_wild))
+                if getattr(imp, "is_static", False) or not getattr(imp, "name", None):
+                    continue
+                if getattr(imp, "is_module", False):
+                    mod_name = imp.name
+                    for exp_pkg in self._get_declared_module_exported_packages(mod_name):
+                        imports.append((exp_pkg, True))
+                    ext_pkgs = self._classpath_resolver.get_module_exported_packages(mod_name)
+                    if ext_pkgs:
+                        for exp_pkg in ext_pkgs:
+                            imports.append((exp_pkg, True))
+                    continue
+                is_wild = bool(getattr(imp, "is_wildcard", False))
+                iname = imp.name[:-2] if (is_wild and imp.name.endswith(".*")) else imp.name
+                imports.append((iname, is_wild))
         return pkg, imports
 
     def _format_ext_type(self, type_str: Optional[str]) -> Optional[str]:
@@ -1709,9 +1751,23 @@ class SemanticAnalyzer:
         return ext
 
     def _validate_unit_imports(self, unit: CompilationUnit) -> None:
-        """Verifica imports explícitos não-estáticos contra tipos internos, compatíveis ou bytecode externo."""
+        """Verifica imports explícitos não-estáticos e imports de módulo contra tipos/módulos internos ou externos."""
         self._flush_classpath_diagnostics(line=1)
         for imp in getattr(unit, "imports", []) or []:
+            if getattr(imp, "is_module", False):
+                iname = getattr(imp, "name", None)
+                if not iname or iname in self._checked_module_imports:
+                    continue
+                self._checked_module_imports.add(iname)
+                iline = getattr(imp, "line", 1)
+                if iname in self._declared_modules:
+                    continue
+                if self._classpath_resolver.has_module(iname):
+                    continue
+                self._record_unresolved(
+                    f"Módulo '{iname}' não encontrado no classpath/jmods ou sem descritor modular no runtime atual (linha {iline})."
+                )
+                continue
             if getattr(imp, "is_static", False) or getattr(imp, "is_wildcard", False):
                 continue
             iname = getattr(imp, "name", None)
@@ -1878,6 +1934,7 @@ class SemanticAnalyzer:
             self._exception_analyzer.push_callable_frame("top_level", "escopo superior", [], enforce_unreported=False)
             try:
                 self._check_stmt_list_with_flow(statements)
+                self._check_stmt_list_reachability(statements, True)
             finally:
                 self._exception_analyzer.pop_callable_frame()
 
@@ -1966,6 +2023,22 @@ class SemanticAnalyzer:
         for tdecl in getattr(unit, "type_declarations", []):
             visit_type(tdecl)
 
+        mod_decl = getattr(unit, "module_declaration", None)
+        if isinstance(mod_decl, ModuleDeclaration) and getattr(mod_decl, "name", None):
+            exports: List[str] = []
+            trans_reqs: List[str] = []
+            for d in getattr(mod_decl, "directives", []) or []:
+                if isinstance(d, ExportsDirective) and not getattr(d, "to_modules", None):
+                    if getattr(d, "package_name", None):
+                        exports.append(d.package_name)
+                elif isinstance(d, RequiresDirective) and getattr(d, "is_transitive", False):
+                    if getattr(d, "module_name", None):
+                        trans_reqs.append(d.module_name)
+            self._declared_modules[mod_decl.name] = {
+                "exports": exports,
+                "transitive_requires": trans_reqs,
+            }
+
     def _index_local_type_decl(self, node: ASTNode):
         """Registra declarações de tipos locais (inclusive aninhados e enums locais) no escopo de bloco atual."""
         if not self._local_declared_type_scopes:
@@ -2015,8 +2088,12 @@ class SemanticAnalyzer:
             pushed_key = self._inheritance_analyzer.push_enclosing_type(type_decl)
         saved_is_local = self._current_type_is_local
         self._current_type_is_local = is_local
+        added_static_local = False
         if is_local:
             self._index_local_type_decl(type_decl)
+            if pushed_key and (self._in_static_context or self._in_early_construction_context or self._anon_enclosing_blocked):
+                self._static_context_local_keys.add(pushed_key)
+                added_static_local = True
         try:
             if isinstance(type_decl, ClassDeclaration):
                 self.analyze_class(type_decl, is_nested=is_nested, is_local=is_local)
@@ -2032,6 +2109,8 @@ class SemanticAnalyzer:
                 self._analyze_annotations(getattr(type_decl, "annotations", []), valid_targets={"MODULE"})
                 self.symbols.declare(type_decl.name, "module", type_decl.line, category="modulo")
         finally:
+            if added_static_local and pushed_key:
+                self._static_context_local_keys.discard(pushed_key)
             self._current_type_is_local = saved_is_local
             if tname and not isinstance(type_decl, ModuleDeclaration):
                 self._inheritance_analyzer.pop_enclosing_type(pushed_key)
@@ -2118,7 +2197,21 @@ class SemanticAnalyzer:
                     )
 
     def _declare_type_symbol(self, name: str, type_label: str, category: str, dup_label: str, line: int):
-        """Declara símbolo de tipo no escopo atual reportando duplicidade no mesmo escopo."""
+        """Declara símbolo de tipo no escopo atual reportando duplicidade no mesmo escopo/pacote."""
+        if len(self._enclosing_type_names) <= 1 and getattr(self._inheritance_analyzer, "_current_unit", None) is not None:
+            cur_pkg = getattr(self._inheritance_analyzer, "_current_unit_package", "") or ""
+            pkg_key = (cur_pkg, name)
+            if pkg_key in self._declared_top_level_pkg_names:
+                prev = self.symbols.lookup(name)
+                prev_line = f" (declarada na linha {prev['line']})" if prev and "line" in prev else ""
+                self.errors.append(SemanticError(f"{dup_label} '{name}' declarada novamente{prev_line}.", line))
+                return
+            self._declared_top_level_pkg_names.add(pkg_key)
+            if self.symbols.lookup(name) is None:
+                self.symbols.declare(name, type_label, line, category=category)
+            elif cur_pkg:
+                self.symbols.declare(f"{cur_pkg}.{name}", type_label, line, category=category)
+            return
         prev = self.symbols.lookup(name)
         if not self.symbols.declare(name, type_label, line, category=category):
             prev_line = f" (declarada na linha {prev['line']})" if prev and "line" in prev else ""
@@ -2184,6 +2277,7 @@ class SemanticAnalyzer:
                         self.check_assignment_type(eff_type, member.initializer, member.name, member.line)
                     else:
                         self.check_expression(member.initializer)
+                    self._check_reachability_in_expr(member.initializer)
                     self._check_lambda_capture_boundaries()
                 finally:
                     popped = self._exception_analyzer.pop_callable_frame()
@@ -2233,6 +2327,7 @@ class SemanticAnalyzer:
                         self.check_assignment_type(eff_type, decl.initializer, decl.name, decl.line)
                     else:
                         self.check_expression(decl.initializer)
+                    self._check_reachability_in_expr(decl.initializer)
                     self._check_lambda_capture_boundaries()
                 finally:
                     popped = self._exception_analyzer.pop_callable_frame()
@@ -2330,6 +2425,7 @@ class SemanticAnalyzer:
                     )
             if member.body:
                 self.analyze_block(member.body)
+                self._check_stmt_reachability(member.body, True)
             self._check_lambda_capture_boundaries()
         finally:
             if pushed_exc_frame:
@@ -2532,9 +2628,11 @@ class SemanticAnalyzer:
                         self._emit_ctor_invocation_throws(ctor_owner, None, member.line, is_enum=is_enum)
                         self._check_stmt_list_with_flow(member.body.prologue)
                         self._check_stmt_list_with_flow(member.body.epilogue)
+                    self._check_constructor_body_reachability(member.body)
                 elif isinstance(member.body, Block):
                     self._emit_ctor_invocation_throws(ctor_owner, None, member.line, is_enum=is_enum)
                     self.analyze_block(member.body)
+                    self._check_stmt_reachability(member.body, True)
 
             if self._flow_exit_frames and self._flow_exit_frames[-1] is ctor_frame:
                 self._flow_exit_frames.pop()
@@ -2652,6 +2750,7 @@ class SemanticAnalyzer:
                             self._flow_da = set(inst_da | static_da)
                             self._flow_du = set(inst_du)
                         self.analyze_block(member.block)
+                        self._check_stmt_reachability(member.block, True)
                         self._check_lambda_capture_boundaries()
                         if self._flow_reachable:
                             if is_stat_init:
@@ -3130,6 +3229,7 @@ class SemanticAnalyzer:
                         init_ctx = self._enter_exec_context("initializer", return_type=None, is_static=False)
                         try:
                             self.analyze_block(member.block)
+                            self._check_stmt_reachability(member.block, True)
                             self._check_lambda_capture_boundaries()
                         finally:
                             self._restore_exec_context(init_ctx)
@@ -3139,6 +3239,7 @@ class SemanticAnalyzer:
                         init_ctx = self._enter_exec_context("initializer", return_type=None, is_static=True)
                         try:
                             self.analyze_block(member.block)
+                            self._check_stmt_reachability(member.block, True)
                             self._check_lambda_capture_boundaries()
                         finally:
                             self._restore_exec_context(init_ctx)
@@ -3715,11 +3816,59 @@ class SemanticAnalyzer:
                 )
 
     def _check_type_parameters_annotations(self, type_params: List[ASTNode]):
-        """Valida annotations em TypeParameters e seus bounds (JLS §4.4, §9.7.4)."""
-        for tp in type_params or []:
+        """Valida annotations em TypeParameters e seus bounds (JLS §4.4, §9.7.4), além de circularidade entre bounds."""
+        tp_list = list(type_params or [])
+        tp_names = {getattr(tp, "name", "") for tp in tp_list if getattr(tp, "name", None)}
+        deps: Dict[str, List[str]] = {}
+        tp_lines: Dict[str, int] = {}
+        for tp in tp_list:
+            tp_name = getattr(tp, "name", "")
+            tp_lines[tp_name] = getattr(tp, "line", 1)
             self._analyze_annotations(getattr(tp, "annotations", []), valid_targets={"TYPE_PARAMETER", "TYPE_USE"})
+            direct: List[str] = []
             for b in getattr(tp, "bounds", []):
                 self._check_type_ref_annotations(b)
+                b_name = getattr(b, "name", None)
+                if (
+                    tp_name
+                    and b_name in tp_names
+                    and not getattr(b, "type_arguments", [])
+                    and (getattr(b, "array_dimensions", 0) or 0) == 0
+                ):
+                    direct.append(b_name)
+            if tp_name:
+                deps[tp_name] = direct
+
+        for tp in tp_list:
+            start = getattr(tp, "name", "")
+            if not start:
+                continue
+            visiting: Set[str] = {start}
+            stack = list(deps.get(start, []))
+            seen: Set[str] = set()
+            has_cycle = False
+            while stack:
+                cur = stack.pop()
+                if cur in visiting:
+                    has_cycle = True
+                    break
+                if cur in seen:
+                    continue
+                seen.add(cur)
+                for nxt in deps.get(cur, []):
+                    if nxt == start or nxt in visiting:
+                        has_cycle = True
+                        break
+                    stack.append(nxt)
+                if has_cycle:
+                    break
+            if has_cycle:
+                self.errors.append(
+                    SemanticError(
+                        f"Dependência cíclica no limite (bound) do parâmetro de tipo '{start}' (JLS §4.4 / §8.1.2).",
+                        tp_lines.get(start, 1),
+                    )
+                )
 
     def _is_explicitly_imported_from_other_pkg(self, simple_name: str) -> bool:
         """Indica se simple_name foi importado explicitamente de outro pacote diferente do compat/java.lang."""
@@ -5403,6 +5552,8 @@ class SemanticAnalyzer:
         true_st = flow.true_state if flow.true_state is not None else cur
         false_st = flow.false_state if flow.false_state is not None else cur
         c_val = self._eval_constant_boolean(cond)
+        if not self._flow_suppress_errors:
+            self._reachability_const_bools[id(cond)] = c_val
         if c_val is True:
             false_st = self._flow_unreachable()
         elif c_val is False:
@@ -5677,9 +5828,11 @@ class SemanticAnalyzer:
             if meta is not None:
                 return (meta["kind"], meta["node"])
         if base in self._declared_types:
-            return self._declared_types[base]
+            if "." in base or getattr(self._inheritance_analyzer, "_current_unit", None) is None or base not in self._inheritance_analyzer._simple_to_keys:
+                return self._declared_types[base]
         if simple in self._declared_types:
-            return self._declared_types[simple]
+            if "." in base or getattr(self._inheritance_analyzer, "_current_unit", None) is None or simple not in self._inheritance_analyzer._simple_to_keys:
+                return self._declared_types[simple]
         return None
 
     def _direct_supertypes(self, type_name: str) -> Tuple[List[str], bool]:
@@ -6845,9 +6998,12 @@ class SemanticAnalyzer:
                         p_line,
                     )
                 )
+            _err_before_record_tref = len(self.errors)
             if tref is not None:
                 for ta in getattr(tref, "type_arguments", []):
                     self._check_type_ref_annotations(ta)
+                self._check_type_ref_arity(tref)
+                self._check_type_ref_bounds(tref)
 
             r_type = self._normalize_type_str(tref) or getattr(pattern, "type_name", None) or ""
             target_source_type = expected_comp_type if is_component else selector_type
@@ -6890,7 +7046,7 @@ class SemanticAnalyzer:
                     )
                 g_tparams = getattr(rnode, "type_parameters", []) or []
                 _, g_args, _ = self._extract_generic_args(r_type)
-                if g_args and g_tparams and len(g_args) != len(g_tparams):
+                if len(self.errors) == _err_before_record_tref and g_args and g_tparams and len(g_args) != len(g_tparams):
                     self.errors.append(
                         SemanticError(
                             f"Número de argumentos genéricos incompatível em record pattern '{r_type}' (esperado {len(g_tparams)}, encontrado {len(g_args)}).",
@@ -7035,6 +7191,487 @@ class SemanticAnalyzer:
         if isinstance(stmt, SynchronizedStatement):
             return self._stmt_completes_normally(stmt.body)
         return True
+
+    def _reachability_const_bool(self, expr: Optional[ASTNode]) -> Optional[bool]:
+        """Retorna o valor booleano constante em tempo de compilação de uma condição para análise JLS §14.22."""
+        if expr is None:
+            return None
+        if id(expr) in self._reachability_const_bools:
+            return self._reachability_const_bools[id(expr)]
+        return self._eval_constant_boolean(expr)
+
+    def _check_reachability_in_expr(self, expr: Optional[ASTNode], visited: Optional[Set[int]] = None) -> None:
+        """Verifica código inalcançável dentro de lambdas de bloco e switch expressions em expressões alcançáveis."""
+        if expr is None or not isinstance(expr, ASTNode):
+            return
+        if isinstance(
+            expr,
+            (
+                TypeReference,
+                ClassDeclaration,
+                InterfaceDeclaration,
+                EnumDeclaration,
+                RecordDeclaration,
+                AnnotationInterfaceDeclaration,
+                MethodDeclaration,
+                ConstructorDeclaration,
+                InstanceInitializer,
+                StaticInitializer,
+                FieldDeclaration,
+            ),
+        ):
+            return
+        if visited is None:
+            visited = set()
+        nid = id(expr)
+        if nid in visited:
+            return
+        visited.add(nid)
+        if isinstance(expr, LambdaExpression):
+            if getattr(expr, "is_block_body", False) and isinstance(getattr(expr, "body", None), Block):
+                self._check_stmt_reachability(expr.body, True)
+            else:
+                self._check_reachability_in_expr(getattr(expr, "body", None), visited)
+            return
+        if isinstance(expr, SwitchExpression):
+            self._check_switch_reachability(expr, is_expression=True, reachable=True, visited=visited)
+            return
+        if hasattr(expr, "__dict__"):
+            for key, val in expr.__dict__.items():
+                if key == "anonymous_body":
+                    continue
+                if isinstance(val, ASTNode):
+                    self._check_reachability_in_expr(val, visited)
+                elif isinstance(val, (list, tuple)):
+                    for item in val:
+                        if isinstance(item, ASTNode):
+                            self._check_reachability_in_expr(item, visited)
+
+    def _check_switch_reachability(
+        self,
+        switch_node: ASTNode,
+        is_expression: bool,
+        reachable: bool,
+        visited: Optional[Set[int]] = None,
+    ) -> Tuple[bool, Set[Optional[str]], Set[Optional[str]]]:
+        """Analisa alcançabilidade interna e conclusão normal de switch statement/expression (JLS §14.22)."""
+        self._check_reachability_in_expr(getattr(switch_node, "selector", getattr(switch_node, "expression", None)), visited)
+        sb = getattr(switch_node, "switch_block", None)
+        if sb is None:
+            any_norm = False
+            has_default = getattr(switch_node, "default_block", None) is not None
+            brks: Set[Optional[str]] = set()
+            conts: Set[Optional[str]] = set()
+            for case_clause in list(getattr(switch_node, "cases", []) or []):
+                stmts = list(getattr(case_clause, "statements", []) or [])
+                cn, cb, cc = self._check_stmt_list_reachability(stmts, reachable)
+                any_norm = any_norm or cn
+                brks |= cb
+                conts |= cc
+            def_blk = getattr(switch_node, "default_block", None)
+            if def_blk is not None:
+                dn, db, dc = self._check_stmt_reachability(def_blk, reachable)
+                last_norm = dn
+                brks |= db
+                conts |= dc
+            else:
+                last_norm = True if not getattr(switch_node, "cases", None) else any_norm
+            completes = reachable and ((not has_default) or last_norm or (None in brks))
+            return completes, (brks - {None}), conts
+
+        brks = set()
+        conts = set()
+        has_default = False
+        has_pattern_or_null = False
+        sel_expr = getattr(switch_node, "expression", None)
+        sel_type: Optional[str] = self._inferred_types.get(id(sel_expr)) if sel_expr is not None else None
+        if sel_type is None and sel_expr is not None:
+            saved_supp = self._flow_suppress_errors
+            self._flow_suppress_errors = True
+            try:
+                sel_type = self.infer_type(sel_expr)
+            finally:
+                self._flow_suppress_errors = saved_supp
+
+        def _is_legacy_switch_selector(t: Optional[str]) -> bool:
+            if not t or t in ("var", "desconhecido", "null"):
+                return True
+            clean = self._strip_leading_type_annotations(t) or t
+            stripped = self._strip_generics(clean) or ""
+            base, dims = self._split_type_dims(stripped)
+            if dims > 0:
+                return False
+            if base in (
+                "char", "byte", "short", "int",
+                "Character", "Byte", "Short", "Integer", "String",
+                "java.lang.Character", "java.lang.Byte", "java.lang.Short", "java.lang.Integer", "java.lang.String",
+            ):
+                return True
+            if self._lookup_type_param_bounds(base) is not None:
+                return False
+            tdecl = self._lookup_type_decl(base)
+            if tdecl is not None:
+                return tdecl[0] == "enum"
+            meta = self._inheritance_analyzer.get_type_meta(base)
+            if meta is not None:
+                return meta.get("kind") == "enum"
+            ext = self._resolve_external_type(base)
+            if ext is not None:
+                return ext.kind == "enum" or ext.super_class == "java.lang.Enum"
+            if not self._is_known_type(base):
+                return True
+            return False
+
+        def _scan_switch_label(lb: ASTNode) -> None:
+            nonlocal has_default, has_pattern_or_null
+            if isinstance(lb, DefaultLabel) or getattr(lb, "has_default", False):
+                has_default = True
+            if getattr(lb, "patterns", None) or getattr(lb, "is_null", False):
+                has_pattern_or_null = True
+
+        if sb.is_rule_based:
+            any_rule_completes = False
+            for rule in list(getattr(sb, "switch_rules", []) or []):
+                for lb in list(getattr(rule, "labels", []) or []):
+                    _scan_switch_label(lb)
+                    guard = getattr(lb, "guard", None)
+                    if guard is not None:
+                        self._check_reachability_in_expr(getattr(guard, "expression", None), visited)
+                if getattr(rule, "is_throw", False):
+                    self._check_reachability_in_expr(getattr(rule, "body", None), visited)
+                elif getattr(rule, "is_block", False) and isinstance(getattr(rule, "body", None), Block):
+                    rn, rb, rc = self._check_stmt_reachability(rule.body, reachable)
+                    any_rule_completes = any_rule_completes or rn
+                    brks |= rb
+                    conts |= rc
+                elif getattr(rule, "body", None) is not None:
+                    self._check_reachability_in_expr(rule.body, visited)
+                    any_rule_completes = True
+            is_enhanced = (not _is_legacy_switch_selector(sel_type)) or has_pattern_or_null
+            no_default_fallback = (not is_enhanced) and (not has_default)
+            completes = reachable and (
+                (not sb.switch_rules)
+                or no_default_fallback
+                or any_rule_completes
+                or (None in brks)
+            )
+            return completes, (brks - {None}), conts
+
+        groups = list(getattr(sb, "statement_groups", []) or [])
+        last_group_completes = True
+        has_trailing_empty_labels = bool(getattr(sb, "trailing_labels", []))
+        for lb in list(getattr(sb, "trailing_labels", []) or []):
+            _scan_switch_label(lb)
+        for grp in groups:
+            for lb in list(getattr(grp, "labels", []) or []):
+                _scan_switch_label(lb)
+                guard = getattr(lb, "guard", None)
+                if guard is not None:
+                    self._check_reachability_in_expr(getattr(guard, "expression", None), visited)
+            stmts = list(getattr(grp, "statements", []) or [])
+            gn, gb, gc = self._check_stmt_list_reachability(stmts, reachable)
+            last_group_completes = gn
+            brks |= gb
+            conts |= gc
+        if not groups or has_trailing_empty_labels:
+            last_group_completes = True
+        is_enhanced = (not _is_legacy_switch_selector(sel_type)) or has_pattern_or_null
+        no_default_fallback = (not is_enhanced) and (not has_default)
+        completes = reachable and (
+            (not groups)
+            or has_trailing_empty_labels
+            or no_default_fallback
+            or last_group_completes
+            or (None in brks)
+        )
+        return completes, (brks - {None}), conts
+
+    def _check_stmt_list_reachability(
+        self, stmts: List[ASTNode], reachable: bool
+    ) -> Tuple[bool, Set[Optional[str]], Set[Optional[str]]]:
+        """Verifica sequência de instruções emitindo erro na primeira instrução inalcançável (JLS §14.22)."""
+        if not stmts:
+            return reachable, set(), set()
+        curr = reachable
+        all_brks: Set[Optional[str]] = set()
+        all_conts: Set[Optional[str]] = set()
+        reported = False
+        for s in stmts:
+            if not curr:
+                if not reported:
+                    self.errors.append(
+                        SemanticError("Instrução inalcançável (JLS §14.22).", getattr(s, "line", 1))
+                    )
+                    reported = True
+                continue
+            curr, sb, sc = self._check_stmt_reachability(s, True)
+            all_brks |= sb
+            all_conts |= sc
+        return curr, all_brks, all_conts
+
+    def _check_constructor_body_reachability(self, body: ConstructorBody) -> None:
+        """Verifica alcançabilidade em corpo flexível de construtor (prólogo, invocação explícita e epílogo — JLS §14.22)."""
+        prologue = list(getattr(body, "prologue", []) or [])
+        curr, _, _ = self._check_stmt_list_reachability(prologue, True)
+        inv = getattr(body, "constructor_invocation", None)
+        epilogue = list(getattr(body, "epilogue", []) or [])
+        if not curr:
+            target_node = inv if inv is not None else (epilogue[0] if epilogue else None)
+            if target_node is not None:
+                self.errors.append(
+                    SemanticError("Instrução inalcançável (JLS §14.22).", getattr(target_node, "line", 1))
+                )
+            return
+        if inv is not None:
+            for arg in list(getattr(inv, "arguments", []) or []):
+                self._check_reachability_in_expr(arg)
+        self._check_stmt_list_reachability(epilogue, True)
+
+    def _check_stmt_reachability(
+        self,
+        stmt: Optional[ASTNode],
+        reachable: bool,
+        direct_labels: Optional[Set[str]] = None,
+    ) -> Tuple[bool, Set[Optional[str]], Set[Optional[str]]]:
+        """Implementa as regras de alcançabilidade e conclusão normal de instruções da JLS §14.22."""
+        if stmt is None or not reachable:
+            return reachable, set(), set()
+
+        if isinstance(stmt, Block):
+            return self._check_stmt_list_reachability(list(getattr(stmt, "statements", []) or []), reachable)
+
+        if isinstance(stmt, LabeledStatement):
+            lbl = getattr(stmt, "label", None)
+            inner = getattr(stmt, "statement", None)
+            pass_labels: Optional[Set[str]] = None
+            if isinstance(inner, (LabeledStatement, WhileStatement, DoWhileStatement, ForStatement, EnhancedForStatement)):
+                pass_labels = set(direct_labels or ())
+                if lbl:
+                    pass_labels.add(lbl)
+            in_norm, in_brks, in_conts = self._check_stmt_reachability(inner, reachable, direct_labels=pass_labels)
+            had_break = (lbl is not None) and (lbl in in_brks)
+            rem_brks = in_brks - ({lbl} if lbl else set())
+            rem_conts = in_conts - ({lbl} if lbl else set())
+            return (in_norm or had_break), rem_brks, rem_conts
+
+        if isinstance(stmt, IfStatement):
+            self._check_reachability_in_expr(stmt.condition)
+            t_norm, t_brks, t_conts = self._check_stmt_reachability(stmt.then_branch, reachable)
+            if stmt.else_branch is None:
+                return reachable, t_brks, t_conts
+            e_norm, e_brks, e_conts = self._check_stmt_reachability(stmt.else_branch, reachable)
+            return (t_norm or e_norm), (t_brks | e_brks), (t_conts | e_conts)
+
+        if isinstance(stmt, WhileStatement):
+            self._check_reachability_in_expr(stmt.condition)
+            c_val = self._reachability_const_bool(stmt.condition)
+            if c_val is False:
+                if stmt.body is not None:
+                    self.errors.append(
+                        SemanticError(
+                            "Instrução inalcançável (JLS §14.22).",
+                            getattr(stmt.body, "line", getattr(stmt, "line", 1)),
+                        )
+                    )
+                return True, set(), set()
+            _, b_brks, b_conts = self._check_stmt_reachability(stmt.body, reachable)
+            has_unlabeled_brk = None in b_brks
+            consume = {None} | set(direct_labels or ())
+            return ((c_val is not True) or has_unlabeled_brk), (b_brks - {None}), (b_conts - consume)
+
+        if isinstance(stmt, DoWhileStatement):
+            b_norm, b_brks, b_conts = self._check_stmt_reachability(stmt.body, reachable)
+            self._check_reachability_in_expr(stmt.condition)
+            c_val = self._reachability_const_bool(stmt.condition)
+            consume = {None} | set(direct_labels or ())
+            can_cont_this = bool(b_conts & consume)
+            has_unlabeled_brk = None in b_brks
+            completes = ((c_val is not True) and (b_norm or can_cont_this)) or has_unlabeled_brk
+            return completes, (b_brks - {None}), (b_conts - consume)
+
+        if isinstance(stmt, ForStatement):
+            self._check_reachability_in_expr(stmt.init)
+            self._check_reachability_in_expr(stmt.condition)
+            self._check_reachability_in_expr(stmt.update)
+            c_val = self._reachability_const_bool(stmt.condition) if stmt.condition is not None else True
+            if c_val is False:
+                if stmt.body is not None:
+                    self.errors.append(
+                        SemanticError(
+                            "Instrução inalcançável (JLS §14.22).",
+                            getattr(stmt.body, "line", getattr(stmt, "line", 1)),
+                        )
+                    )
+                return True, set(), set()
+            _, b_brks, b_conts = self._check_stmt_reachability(stmt.body, reachable)
+            has_unlabeled_brk = None in b_brks
+            consume = {None} | set(direct_labels or ())
+            return ((c_val is not True) or has_unlabeled_brk), (b_brks - {None}), (b_conts - consume)
+
+        if isinstance(stmt, EnhancedForStatement):
+            self._check_reachability_in_expr(stmt.iterable)
+            _, b_brks, b_conts = self._check_stmt_reachability(stmt.body, reachable)
+            consume = {None} | set(direct_labels or ())
+            return True, (b_brks - {None}), (b_conts - consume)
+
+        if isinstance(stmt, SwitchStatement):
+            return self._check_switch_reachability(stmt, is_expression=False, reachable=reachable)
+
+        if isinstance(stmt, TryStatement):
+            res_spec = getattr(stmt, "resource_specification", None)
+            res_nodes = res_spec.resources if res_spec is not None else getattr(stmt, "resources", [])
+            for r in list(res_nodes or []):
+                self._check_reachability_in_expr(r)
+            body_norm, brks, conts = self._check_stmt_reachability(stmt.body, reachable)
+            any_catch_norm = False
+            for c in list(getattr(stmt, "catches", []) or []):
+                cn, cb, cc = self._check_stmt_reachability(c.body, reachable)
+                any_catch_norm = any_catch_norm or cn
+                brks |= cb
+                conts |= cc
+            fin = getattr(stmt, "finally_block", None)
+            if fin is not None:
+                fin_norm, fb, fc = self._check_stmt_reachability(fin, reachable)
+                if not fin_norm:
+                    return False, fb, fc
+                return (body_norm or any_catch_norm), (brks | fb), (conts | fc)
+            return (body_norm or any_catch_norm), brks, conts
+
+        if isinstance(stmt, SynchronizedStatement):
+            self._check_reachability_in_expr(stmt.lock)
+            return self._check_stmt_reachability(stmt.body, reachable)
+
+        if isinstance(stmt, BreakStatement):
+            return False, {getattr(stmt, "label", None)}, set()
+
+        if isinstance(stmt, ContinueStatement):
+            return False, set(), {getattr(stmt, "label", None)}
+
+        if isinstance(stmt, (ReturnStatement, ThrowStatement, YieldStatement)):
+            self._check_reachability_in_expr(getattr(stmt, "expression", None))
+            return False, set(), set()
+
+        self._check_reachability_in_expr(stmt)
+        return True, set(), set()
+
+    def _stmt_completes_normally_jls1422(self, stmt: Optional[ASTNode], direct_labels: Optional[Set[str]] = None) -> bool:
+        """Consulta pura de conclusão normal segundo JLS §14.22 sem emitir erros duplicados."""
+        if stmt is None:
+            return True
+        if isinstance(stmt, (ReturnStatement, ThrowStatement, YieldStatement, BreakStatement, ContinueStatement)):
+            return False
+        if isinstance(stmt, Block):
+            for s in list(getattr(stmt, "statements", []) or []):
+                if not self._stmt_completes_normally_jls1422(s):
+                    return False
+            return True
+        if isinstance(stmt, LabeledStatement):
+            lbl = getattr(stmt, "label", None)
+            inner = getattr(stmt, "statement", None)
+            in_norm = self._stmt_completes_normally_jls1422(inner)
+            return in_norm or (lbl is not None and self._contains_reachable_break(inner, target_label=lbl))
+        if isinstance(stmt, IfStatement):
+            if stmt.else_branch is None:
+                return True
+            return self._stmt_completes_normally_jls1422(stmt.then_branch) or self._stmt_completes_normally_jls1422(stmt.else_branch)
+        if isinstance(stmt, WhileStatement):
+            c_val = self._reachability_const_bool(stmt.condition)
+            if c_val is False:
+                return True
+            return (c_val is not True) or self._contains_reachable_break(stmt.body, target_label=None)
+        if isinstance(stmt, DoWhileStatement):
+            c_val = self._reachability_const_bool(stmt.condition)
+            return (
+                (c_val is not True and (self._stmt_completes_normally_jls1422(stmt.body) or self._contains_continue_to_current_loop(stmt.body)))
+                or self._contains_reachable_break(stmt.body, target_label=None)
+            )
+        if isinstance(stmt, ForStatement):
+            c_val = self._reachability_const_bool(stmt.condition) if stmt.condition is not None else True
+            if c_val is False:
+                return True
+            return (c_val is not True) or self._contains_reachable_break(stmt.body, target_label=None)
+        if isinstance(stmt, TryStatement):
+            fin = getattr(stmt, "finally_block", None)
+            if fin is not None and not self._stmt_completes_normally_jls1422(fin):
+                return False
+            if self._stmt_completes_normally_jls1422(stmt.body):
+                return True
+            return any(self._stmt_completes_normally_jls1422(c.body) for c in list(getattr(stmt, "catches", []) or []))
+        if isinstance(stmt, SynchronizedStatement):
+            return self._stmt_completes_normally_jls1422(stmt.body)
+        if isinstance(stmt, SwitchStatement):
+            sb = getattr(stmt, "switch_block", None)
+            if sb is None:
+                has_def = getattr(stmt, "default_block", None) is not None
+                if not has_def:
+                    return True
+                return self._stmt_completes_normally_jls1422(stmt.default_block) or self._contains_reachable_break(stmt, target_label=None)
+            has_def = False
+            if sb.is_rule_based:
+                any_norm = False
+                for r in list(getattr(sb, "switch_rules", []) or []):
+                    if any(isinstance(lb, DefaultLabel) or getattr(lb, "has_default", False) for lb in list(getattr(r, "labels", []) or [])):
+                        has_def = True
+                    if getattr(r, "is_throw", False):
+                        continue
+                    if getattr(r, "is_block", False) and isinstance(getattr(r, "body", None), Block):
+                        if self._stmt_completes_normally_jls1422(r.body):
+                            any_norm = True
+                    elif getattr(r, "body", None) is not None:
+                        any_norm = True
+                return (not has_def) or any_norm or not sb.switch_rules or self._contains_reachable_break(stmt, target_label=None)
+            groups = list(getattr(sb, "statement_groups", []) or [])
+            for lb in list(getattr(sb, "trailing_labels", []) or []):
+                if isinstance(lb, DefaultLabel) or getattr(lb, "has_default", False):
+                    has_def = True
+            for g in groups:
+                for lb in list(getattr(g, "labels", []) or []):
+                    if isinstance(lb, DefaultLabel) or getattr(lb, "has_default", False):
+                        has_def = True
+            if not has_def or not groups or getattr(sb, "trailing_labels", []):
+                return True
+            last_norm = all(self._stmt_completes_normally_jls1422(s) for s in list(getattr(groups[-1], "statements", []) or []))
+            return last_norm or self._contains_reachable_break(stmt, target_label=None)
+        return True
+
+    def _contains_reachable_break(
+        self,
+        node: Optional[ASTNode],
+        target_label: Optional[str] = None,
+        in_nested: bool = False,
+    ) -> bool:
+        """Verifica se há break alcançável direcionado ao bloco/laço alvo (JLS §14.22)."""
+        if node is None:
+            return False
+        if isinstance(node, BreakStatement):
+            if node.label is None:
+                return (target_label is None) and (not in_nested)
+            return target_label is not None and node.label == target_label
+        if isinstance(node, (LambdaExpression, ClassDeclaration, InterfaceDeclaration, EnumDeclaration, RecordDeclaration, AnnotationInterfaceDeclaration)):
+            return False
+        if isinstance(node, Block):
+            for s in list(getattr(node, "statements", []) or []):
+                if self._contains_reachable_break(s, target_label, in_nested):
+                    return True
+                if not self._stmt_completes_normally_jls1422(s):
+                    return False
+            return False
+        if isinstance(node, (WhileStatement, DoWhileStatement, ForStatement, EnhancedForStatement, SwitchStatement, SwitchExpression)):
+            in_nested = True
+        if isinstance(node, WhileStatement) and self._reachability_const_bool(node.condition) is False:
+            return False
+        if isinstance(node, ForStatement) and node.condition is not None and self._reachability_const_bool(node.condition) is False:
+            return False
+        if hasattr(node, "__dict__"):
+            for val in node.__dict__.values():
+                if isinstance(val, ASTNode):
+                    if self._contains_reachable_break(val, target_label, in_nested):
+                        return True
+                elif isinstance(val, (list, tuple)):
+                    for item in val:
+                        if isinstance(item, ASTNode) and self._contains_reachable_break(item, target_label, in_nested):
+                            return True
+        return False
 
     def _contains_break_targeting(
         self,
@@ -8637,6 +9274,19 @@ class SemanticAnalyzer:
                         for res_t, res_ln in res_close_targets:
                             if not res_t or res_t in ("var", "desconhecido"):
                                 self._exception_analyzer.mark_unresolved_thrower()
+                                continue
+                            clean_res_t = self._strip_leading_type_annotations(res_t) or res_t
+                            if (
+                                clean_res_t in self.PRIMITIVE_TYPES
+                                or clean_res_t == "void"
+                                or self._is_subtype(clean_res_t, "AutoCloseable") is False
+                            ):
+                                self.errors.append(
+                                    SemanticError(
+                                        f"Recurso de tipo '{clean_res_t}' em try-with-resources não implementa 'java.lang.AutoCloseable' (JLS §14.20.3).",
+                                        res_ln,
+                                    )
+                                )
                                 continue
                             close_sigs, is_known_res, is_decl_res = self._collect_type_methods(res_t, "close")
                             zero_close = [
@@ -10982,6 +11632,7 @@ class SemanticAnalyzer:
             )
             if isinstance(arr_tref, TypeReference):
                 self._check_type_ref_annotations(arr_tref)
+                self._check_array_component_reifiable(arr_tref, line, "referência de criação de array '::new'")
         elif not getattr(node, "is_array_creation", False):
             if isinstance(node.target, Identifier) and (node.target.name in ("this", "super") or (node.target.name and node.target.name[0].isupper())):
                 pass
@@ -11048,7 +11699,7 @@ class SemanticAnalyzer:
             elif isinstance(node.target, Identifier):
                 tname = node.target.name
             elif isinstance(node.target, MemberAccess):
-                tname = self._dotted_name(node.target) or ""
+                tname = self._extract_qualified_name(node.target) or ""
             else:
                 tname = self._normalize_type_str(node.target) or ""
             ctors, is_known_c, tkind = self._collect_type_constructors(tname)
@@ -11058,6 +11709,14 @@ class SemanticAnalyzer:
                 and tdecl[0] == "class"
                 and "abstract" in (getattr(tdecl[1], "modifiers", []) or [])
             )
+            req_enclosing = self._requires_enclosing_instance(tname)
+            has_enclosing = False
+            if req_enclosing is not None:
+                avail_enclosing = self._available_enclosing_instance_types()
+                has_enclosing = any(
+                    enc_t == req_enclosing or self._is_subtype(enc_t, req_enclosing) is True
+                    for enc_t in avail_enclosing
+                )
             if tkind in ("interface", "enum"):
                 self.errors.append(
                     SemanticError(f"Não é possível referenciar construtor de {tkind} '{tname}::new' (JLS §15.13).", line)
@@ -11065,6 +11724,13 @@ class SemanticAnalyzer:
             elif is_abstract_cls:
                 self.errors.append(
                     SemanticError(f"Não é possível referenciar construtor de classe abstrata '{tname}::new' (JLS §15.13.1).", line)
+                )
+            elif req_enclosing is not None and not has_enclosing:
+                self.errors.append(
+                    SemanticError(
+                        f"Não há instância envolvente válida do tipo '{req_enclosing}' no escopo para referenciar construtor de inner class '{tname}::new' (JLS §15.13.1 / §8.1.3).",
+                        line,
+                    )
                 )
             elif ctors:
                 matched_ctor_sig = None
@@ -11659,6 +12325,125 @@ class SemanticAnalyzer:
             return self._check_method_call(node, target_type=target_type)
         return self._check_expression_flow(node)
 
+    def _check_array_component_reifiable(self, type_ref: Optional[ASTNode], line: int, context_desc: str) -> None:
+        """Valida que o tipo componente de criação de array é reificável segundo JLS §4.7 / §15.10.1."""
+        if not isinstance(type_ref, TypeReference):
+            return
+        tname = getattr(type_ref, "name", "") or ""
+        if not tname or tname in self.PRIMITIVE_TYPES or tname == "void":
+            return
+
+        # 1. Variável de tipo em escopo não é reificável: new T[...], T[]::new
+        if "." not in tname and self._lookup_type_param_bounds(tname) is not None:
+            self.errors.append(
+                SemanticError(
+                    f"Criação de array genérico inválido em {context_desc}: variável de tipo '{tname}' não é reificável (JLS §4.7 / §15.10.1).",
+                    line,
+                )
+            )
+            return
+
+        # 2. Tipo parametrizado só é reificável se todos os argumentos em todos os segmentos forem wildcards não limitados '?'
+        seg_targs = getattr(type_ref, "segment_type_arguments", None) or []
+        has_segment_args = any(sa is not None for sa in seg_targs)
+        arg_lists = [sa for sa in seg_targs if sa] if has_segment_args else (
+            [type_ref.type_arguments] if getattr(type_ref, "type_arguments", None) else []
+        )
+        for arg_list in arg_lists:
+            for arg in arg_list:
+                if isinstance(arg, WildcardType) and arg.bound_kind is None and arg.bound_type is None:
+                    continue
+                norm = self._normalize_type_str(type_ref) or tname
+                self.errors.append(
+                    SemanticError(
+                        f"Criação de array genérico inválido com tipo não reificável '{norm}' em {context_desc} (JLS §4.7 / §15.10.1).",
+                        line,
+                    )
+                )
+                return
+
+    def _resolve_inherited_member_type(self, owner_key: Optional[str], member_name: str) -> Optional[str]:
+        """Resolve tipo membro declarado em supertipos de `owner_key` (para `expr.new Inner()` ou herança)."""
+        if not owner_key or not member_name or "." in member_name:
+            return None
+        if getattr(self, "_in_member_type_lookup", False):
+            return None
+        self._in_member_type_lookup = True
+        try:
+            visited: Set[str] = set()
+            queue: List[str] = [owner_key]
+            while queue:
+                cur = queue.pop(0)
+                cur_base = self._strip_generics(cur) or cur
+                cur_key = (
+                    cur_base
+                    if cur_base in self._inheritance_analyzer._type_meta
+                    else (self._inheritance_analyzer.resolve_type_key(cur_base) or cur_base)
+                )
+                if not cur_key or cur_key in visited:
+                    continue
+                visited.add(cur_key)
+                cand = f"{cur_key}.{member_name}"
+                if cand in self._inheritance_analyzer._type_meta:
+                    return cand
+                if self._resolve_external_type(cand) is not None:
+                    return cand
+                supers, _ = self._direct_supertypes(cur_key)
+                queue.extend(supers)
+            return None
+        finally:
+            self._in_member_type_lookup = False
+
+    def _requires_enclosing_instance(self, type_name_or_key: Optional[str]) -> Optional[str]:
+        """Retorna a chave da classe envolvente exigida por inner class não-static, ou None (JLS §8.1.3 / §15.9.2)."""
+        if not type_name_or_key:
+            return None
+        meta = self._inheritance_analyzer.get_type_meta(type_name_or_key)
+        if meta is not None:
+            if meta.get("is_local"):
+                return None
+            if not meta.get("is_nested") or meta.get("kind") != "class":
+                return None
+            if "static" in (meta.get("modifiers") or []):
+                return None
+            enc_key = meta.get("enclosing_key")
+            if not enc_key:
+                return None
+            enc_meta = self._inheritance_analyzer.get_type_meta(enc_key)
+            if enc_meta is not None and enc_meta.get("kind") in ("interface", "annotation_interface"):
+                return None
+            return enc_key
+        ext = self._resolve_external_type(type_name_or_key)
+        if ext is not None:
+            if not ext.is_nested or ext.kind != "class":
+                return None
+            if "static" in (ext.modifiers or []) or not ext.enclosing_fqn:
+                return None
+            enc_ext = self._resolve_external_type(ext.enclosing_fqn)
+            if enc_ext is not None and enc_ext.kind in ("interface", "annotation_interface"):
+                return None
+            return ext.enclosing_fqn
+        return None
+
+    def _available_enclosing_instance_types(self) -> List[str]:
+        """Lista os tipos envolventes com instância ativa alcançável no escopo léxico atual (JLS §15.9.2)."""
+        if self._in_static_context or self._in_early_construction_context or self._anon_enclosing_blocked:
+            return []
+        keys = list(self._inheritance_analyzer._enclosing_type_keys)
+        avail: List[str] = []
+        for idx in range(len(keys) - 1, -1, -1):
+            k = keys[idx]
+            avail.append(k)
+            if k in self._static_context_local_keys:
+                break
+            meta = self._inheritance_analyzer._type_meta.get(k)
+            if meta is not None:
+                if "static" in (meta.get("modifiers") or []):
+                    break
+                if meta.get("kind") in ("interface", "annotation_interface", "enum", "record") and meta.get("is_nested"):
+                    break
+        return avail
+
     def _check_object_creation(self, node: ObjectCreationExpression, target_type: Optional[str] = None) -> "_FlowResult":
         """Valida criação de objetos, construtores, diamond <>, classe anônima e abstrata/interface."""
         line = getattr(node, "line", 1)
@@ -11667,7 +12452,12 @@ class SemanticAnalyzer:
         full_name = self._normalize_type_str(tref) or base_name
         has_qual_target = getattr(node, "target", None) is not None
         self._check_type_ref_annotations(tref, skip_type_access=has_qual_target, skip_arity=has_qual_target)
-        qual_lookup_name = base_name
+        resolved_unqual = self._inheritance_analyzer.resolve_type_key(base_name)
+        qual_lookup_name = (
+            resolved_unqual
+            if (resolved_unqual and resolved_unqual in self._inheritance_analyzer._type_meta)
+            else base_name
+        )
         outer_subst: Optional[Dict[str, str]] = None
         if has_qual_target:
             self._check_expression_flow(node.target)
@@ -11678,10 +12468,43 @@ class SemanticAnalyzer:
                 outer_key = self._inheritance_analyzer.resolve_type_key(outer_base) or outer_base
                 candidate_inner = f"{outer_key}.{base_name}"
                 resolved_inner = self._inheritance_analyzer.resolve_type_key(candidate_inner)
+                if resolved_inner is None:
+                    resolved_inner = self._resolve_inherited_member_type(outer_key, base_name)
                 qual_lookup_name = resolved_inner or candidate_inner
             self._inheritance_analyzer.check_type_access(qual_lookup_name, line)
             self._check_type_ref_arity(tref, resolved_name_override=qual_lookup_name)
             self._check_type_ref_bounds(tref, resolved_name_override=qual_lookup_name, outer_subst=outer_subst)
+
+        req_enclosing = self._requires_enclosing_instance(qual_lookup_name)
+        target_meta = self._inheritance_analyzer.get_type_meta(qual_lookup_name)
+        if has_qual_target:
+            if target_meta is not None and target_meta.get("is_local"):
+                self.errors.append(
+                    SemanticError(
+                        f"Não é possível qualificar a instanciação da classe local '{base_name}' (JLS §15.9).",
+                        line,
+                    )
+                )
+            elif req_enclosing is None and (target_meta is not None or self._resolve_external_type(qual_lookup_name) is not None):
+                self.errors.append(
+                    SemanticError(
+                        f"Instanciação qualificada '{base_name}' inválida: '{qual_lookup_name}' não é uma classe interna de instância (JLS §15.9).",
+                        line,
+                    )
+                )
+        elif req_enclosing is not None:
+            avail_enclosing = self._available_enclosing_instance_types()
+            has_enclosing_inst = any(
+                avail == req_enclosing or self._is_subtype(avail, req_enclosing) is True
+                for avail in avail_enclosing
+            )
+            if not has_enclosing_inst:
+                self.errors.append(
+                    SemanticError(
+                        f"Não é possível instanciar a classe interna não-estática '{base_name}' sem uma instância externa válida de '{req_enclosing}' (JLS §15.9.2).",
+                        line,
+                    )
+                )
         is_diamond = bool(getattr(node, "is_diamond", False))
         anon_body = getattr(node, "anonymous_body", None)
 
@@ -11819,7 +12642,9 @@ class SemanticAnalyzer:
             anon_inst_throws: List[Tuple[str, int, str]] = []
             anon_super_key = self._inheritance_analyzer.resolve_type_key(base_name) or base_name
             self.symbols.enter_scope()
+            next_anon_blocked = bool(self._in_static_context or self._in_early_construction_context or self._anon_enclosing_blocked)
             saved_ctx = self._enter_exec_context("type_body", return_type=None, share_locals=True)
+            self._anon_enclosing_blocked = next_anon_blocked
             try:
                 self._analyze_class_like_members(
                     anon_body,
@@ -12442,7 +13267,9 @@ class SemanticAnalyzer:
 
         if isinstance(node, ArrayCreationExpression):
             line = getattr(node, "line", 1)
-            self._check_type_ref_annotations(getattr(node, "type_ref", None))
+            arr_tref = getattr(node, "type_ref", None)
+            self._check_type_ref_annotations(arr_tref)
+            self._check_array_component_reifiable(arr_tref, line, "expressão de criação de array 'new ...[]'")
             for dim in node.dimensions:
                 if dim is not None:
                     self._check_expression_flow(dim)

@@ -149,9 +149,9 @@ class TestJava26LoopsLabelsS6(unittest.TestCase):
     def test_06_labels_sequenciais_com_mesmo_nome_permitidos_e_aninhados_rejeitados(self):
         seq_ok = """
         class Demo {
-            void ok() {
-                laco: while (false) {}
-                laco: while (false) {}
+            void ok(boolean cond) {
+                laco: while (cond) {}
+                laco: while (cond) {}
             }
         }
         """
@@ -159,9 +159,9 @@ class TestJava26LoopsLabelsS6(unittest.TestCase):
 
         nested_bad = """
         class Demo {
-            void bad() {
+            void bad(boolean cond) {
                 laco: {
-                    laco: while (false) {}
+                    laco: while (cond) {}
                 }
             }
         }

@@ -539,9 +539,9 @@ class TestJava26GenericBoundsD2(unittest.TestCase):
             class Uso {
                 Caixa<Integer>[] arr;
                 void m() {
-                    IntFunction<Caixa<Integer>[]> f1 = Caixa<Integer>[]::new;
+                    IntFunction<Caixa<?>[]> f1 = Caixa<?>[]::new;
                     Supplier<Caixa<Double>> f2 = Caixa<Double>::new;
-                    Object a = new Caixa<Integer>[2];
+                    Object a = new Caixa<?>[2];
                 }
             }
             """

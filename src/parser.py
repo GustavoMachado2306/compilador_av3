@@ -354,7 +354,11 @@ class Parser:
             )
 
         # SingleModuleImport (Java 23+ / 26): import module ModuleName;
-        if self.check(TokenType.IDENTIFIER) and self.peek().lexeme == "module":
+        if (
+            self.check(TokenType.IDENTIFIER)
+            and self.peek().lexeme == "module"
+            and self.peek_offset(1).type != TokenType.DOT
+        ):
             self.advance() # consome 'module'
             if not self.check(TokenType.IDENTIFIER):
                 t = self.peek()

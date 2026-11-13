@@ -1373,7 +1373,7 @@ class JLS18ConstraintSolver:
             elif isinstance(mref.target, Identifier):
                 tname = mref.target.name
             elif isinstance(mref.target, MemberAccess):
-                tname = host._dotted_name(mref.target) or ""
+                tname = host._extract_qualified_name(mref.target) or ""
             else:
                 tname = host._normalize_type_str(mref.target) or ""
             ctors, is_known_c, _ = host._collect_type_constructors(tname)

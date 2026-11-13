@@ -81,8 +81,8 @@ class TestJava26TryStatementsS6(unittest.TestCase):
 
     def test_03_try_with_resources_var_multiplos_e_ponto_virgula_opcional(self):
         source = """
-        class InputStream {}
-        class OutputStream {}
+        class InputStream implements AutoCloseable { public void close() {} }
+        class OutputStream implements AutoCloseable { public void close() {} }
         class Demo {
             InputStream abrirEntrada() { return null; }
             OutputStream abrirSaida() { return null; }
@@ -118,7 +118,7 @@ class TestJava26TryStatementsS6(unittest.TestCase):
 
     def test_04_try_with_resources_java9_variable_reference(self):
         source = """
-        class InputStream {}
+        class InputStream implements AutoCloseable { public void close() {} }
         class Demo {
             InputStream abrir() { return null; }
             void processar(InputStream e) {}

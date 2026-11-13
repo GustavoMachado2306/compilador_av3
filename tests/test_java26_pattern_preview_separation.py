@@ -241,6 +241,7 @@ class TestJava26PatternPreviewSeparation(unittest.TestCase):
         self.assertTrue(any("case null" in str(e) for e in res_null.semantic_errors), msg=res_null.semantic_errors)
 
     def test_05_componente_primitivo_record_pattern_preview_desativado(self):
+        # JEP 530 (Preview em Java SE 26): componentes primitivos explícitos em RecordPattern exigem preview (incluindo match exato)
         cases = [
             """
             record P(int x) {}
@@ -293,6 +294,8 @@ class TestJava26PatternPreviewSeparation(unittest.TestCase):
             with self.subTest(code=code):
                 res = analyze_source(code, enable_preview_primitive_patterns=False)
                 self.assertFalse(res.success, msg=f"Componente primitivo em RecordPattern deve falhar sem preview: {code}")
+                res_on = analyze_source(code, enable_preview_primitive_patterns=True)
+                self.assertTrue(res_on.success, msg=f"Componente primitivo em RecordPattern deveria passar com preview: {res_on.semantic_errors} / {res_on.syntactic_error}")
 
         # SemanticAnalyzer direto também deve rejeitar componente primitivo sem preview
         for code in (cases[0], cases[1], cases[4]):
@@ -301,6 +304,34 @@ class TestJava26PatternPreviewSeparation(unittest.TestCase):
                 len(sem.errors) > 0,
                 msg=f"SemanticAnalyzer deve rejeitar componente primitivo sem preview: {code}",
             )
+
+        # JEP 530 (Preview): conversão ou unboxing primitivo em componente de RecordPattern também exige preview
+        preview_conversion_cases = [
+            """
+            record P(int x) {}
+            class D { void f(Object o) { if (o instanceof P(long x)) {} } }
+            """,
+            """
+            record L(long x) {}
+            class D { void f(Object o) { if (o instanceof L(int x)) {} } }
+            """,
+            """
+            record Box<T>(T v) {}
+            class D { void f(Object o) { if (o instanceof Box<Integer>(int x)) {} } }
+            """,
+            """
+            record Box<T>(T v) {}
+            class D { void f(Object o) { if (o instanceof Box<Object>(int x)) {} } }
+            """,
+        ]
+        for code in preview_conversion_cases:
+            with self.subTest(preview_only=code):
+                res_off = analyze_source(code, enable_preview_primitive_patterns=False)
+                self.assertFalse(res_off.success, msg=f"Conversão/unboxing primitivo deveria exigir preview: {code}")
+                res_on = analyze_source(code, enable_preview_primitive_patterns=True)
+                self.assertTrue(res_on.success, msg=f"Conversão/unboxing primitivo deveria passar com preview: {res_on.semantic_errors}")
+                sem = self._run_semantic_with_preview_ast(code, semantic_preview=False)
+                self.assertTrue(len(sem.errors) > 0, msg=f"SemanticAnalyzer deve rejeitar conversão primitiva sem preview: {code}")
 
     def test_06_componente_primitivo_record_pattern_preview_ativado(self):
         valid_preview = """

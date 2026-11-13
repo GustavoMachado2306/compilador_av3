@@ -108,6 +108,7 @@ class InheritanceAccessAnalyzer:
         self._current_unit: Optional[Any] = None
         self._current_unit_package: str = ""
         self._enclosing_type_keys: List[str] = []
+        self._reported_ambiguous_refs: Set[Tuple[int, str, int]] = set()
 
     def reset(self) -> None:
         self._type_meta = {}
@@ -116,6 +117,7 @@ class InheritanceAccessAnalyzer:
         self._current_unit = None
         self._current_unit_package = ""
         self._enclosing_type_keys = []
+        self._reported_ambiguous_refs = set()
 
     def _err(self, msg: str, line: int) -> Any:
         from .semantic import SemanticError
@@ -265,6 +267,113 @@ class InheritanceAccessAnalyzer:
             return self._type_meta[key]
         return None
 
+    def _collect_on_demand_resolution_candidates(
+        self,
+        base: str,
+        ctx_unit: Optional[Any],
+        ctx_pkg: str,
+    ) -> Tuple[List[str], List[str], List[str]]:
+        """Coleta candidatos internos e externos acessíveis sob imports on-demand/módulo (JLS §7.5.2 / §7.5.5)."""
+        if not ctx_unit or not base or "." in base:
+            return [], [], []
+        imports = getattr(ctx_unit, "imports", []) or []
+        on_demand_pkgs: List[str] = []
+        seen_pkgs: Set[str] = set()
+        for imp in imports:
+            if getattr(imp, "is_static", False):
+                continue
+            if getattr(imp, "is_wildcard", False):
+                iname = getattr(imp, "name", "")
+                if iname:
+                    p = iname[:-2] if iname.endswith(".*") else iname
+                    if p and p not in seen_pkgs:
+                        seen_pkgs.add(p)
+                        on_demand_pkgs.append(p)
+            elif getattr(imp, "is_module", False):
+                mod_name = getattr(imp, "name", "")
+                if mod_name:
+                    mod_pkgs: List[str] = []
+                    if hasattr(self.host, "_get_declared_module_exported_packages"):
+                        mod_pkgs.extend(self.host._get_declared_module_exported_packages(mod_name) or ())
+                    elif hasattr(self.host, "_classpath_resolver"):
+                        mod_pkgs.extend(self.host._classpath_resolver.get_module_exported_packages(mod_name) or ())
+                    for p in mod_pkgs:
+                        if p and p not in seen_pkgs:
+                            seen_pkgs.add(p)
+                            on_demand_pkgs.append(p)
+
+        all_internal: List[str] = []
+        accessible_internal: List[str] = []
+        for pname in on_demand_pkgs:
+            cand = f"{pname}.{base}" if pname else base
+            meta = self._type_meta.get(cand)
+            if meta is not None and cand not in all_internal:
+                all_internal.append(cand)
+                if meta.get("access") == "public" or meta.get("package", "") == ctx_pkg:
+                    accessible_internal.append(cand)
+
+        accessible_external: List[str] = []
+        if hasattr(self.host, "_classpath_resolver"):
+            ext_pkgs = list(on_demand_pkgs)
+            if "java.lang" not in seen_pkgs:
+                ext_pkgs.append("java.lang")
+            accessible_external, _ = self.host._classpath_resolver.collect_on_demand_candidates(
+                base,
+                ext_pkgs,
+                current_package=ctx_pkg,
+            )
+
+        combined_accessible: List[str] = []
+        for c in accessible_internal + accessible_external:
+            if c not in combined_accessible:
+                combined_accessible.append(c)
+        return combined_accessible, accessible_internal, all_internal
+
+    def find_on_demand_ambiguity(self, type_name: Optional[str]) -> Optional[List[str]]:
+        """Retorna lista de FQNs conflitantes se type_name simples for ambíguo entre imports sob demanda/módulo."""
+        if not type_name or not self._current_unit:
+            return None
+        clean = self.host._strip_leading_type_annotations(type_name) or type_name
+        stripped = self.host._strip_generics(clean)
+        if not stripped:
+            return None
+        base, dims = self.host._split_type_dims(stripped)
+        if dims > 0 or "." in base or base in self.host.PRIMITIVE_TYPES or base in ("void", "var", "null", "desconhecido"):
+            return None
+        if self.host._lookup_type_param_bounds(base) is not None:
+            return None
+
+        # Precedência 1: escopo local e tipos aninhados no contexto atual
+        for lscope in reversed(self.host._local_declared_type_scopes):
+            if base in lscope:
+                return None
+        for enc_key in reversed(self._enclosing_type_keys):
+            if f"{enc_key}.{base}" in self._type_meta:
+                return None
+
+        # Precedência 2: tipo declarado na própria unidade / mesmo pacote ou import de tipo único
+        ctx_unit = self._current_unit
+        ctx_pkg = self._current_unit_package
+        same_pkg_key = f"{ctx_pkg}.{base}" if ctx_pkg else base
+        if same_pkg_key in self._type_meta:
+            return None
+        if ctx_pkg and hasattr(self.host, "_classpath_resolver") and self.host._classpath_resolver.has_class(same_pkg_key):
+            return None
+        for imp in getattr(ctx_unit, "imports", []) or []:
+            if (
+                not getattr(imp, "is_static", False)
+                and not getattr(imp, "is_wildcard", False)
+                and not getattr(imp, "is_module", False)
+            ):
+                iname = getattr(imp, "name", "")
+                if iname and iname.split(".")[-1] == base:
+                    return None
+
+        combined_accessible, _, _ = self._collect_on_demand_resolution_candidates(base, ctx_unit, ctx_pkg)
+        if len(combined_accessible) > 1:
+            return combined_accessible
+        return None
+
     def resolve_type_key(
         self,
         type_name: Optional[str],
@@ -294,7 +403,7 @@ class InheritanceAccessAnalyzer:
                     if nkey:
                         return nkey
 
-        # Tipos aninhados dentro da hierarquia envolvente atual
+        # Tipos aninhados dentro da hierarquia envolvente atual (incluindo herdados de supertipos)
         for enc_key in reversed(self._enclosing_type_keys):
             candidate_nested = f"{enc_key}.{base}"
             if candidate_nested in self._type_meta:
@@ -302,6 +411,9 @@ class InheritanceAccessAnalyzer:
             emeta = self._type_meta.get(enc_key)
             if emeta and emeta["name"] == base:
                 return enc_key
+            inh_nested = self.host._resolve_inherited_member_type(enc_key, base)
+            if inh_nested:
+                return inh_nested
 
         ctx_unit = self._current_unit
         ctx_pkg = self._current_unit_package
@@ -318,7 +430,11 @@ class InheritanceAccessAnalyzer:
             imports = getattr(ctx_unit, "imports", []) or []
             # 1. Import explícito de tipo único (import pkg.X;)
             for imp in imports:
-                if not getattr(imp, "is_static", False) and not getattr(imp, "is_wildcard", False):
+                if (
+                    not getattr(imp, "is_static", False)
+                    and not getattr(imp, "is_wildcard", False)
+                    and not getattr(imp, "is_module", False)
+                ):
                     iname = getattr(imp, "name", "")
                     if iname and iname.split(".")[-1] == base:
                         if iname in self._type_meta:
@@ -330,13 +446,16 @@ class InheritanceAccessAnalyzer:
             if same_pkg_key in self._type_meta:
                 return same_pkg_key
 
-            # 3. Import sob demanda (import pkg.*;)
-            for imp in imports:
-                if not getattr(imp, "is_static", False) and getattr(imp, "is_wildcard", False):
-                    iname = getattr(imp, "name", "")
-                    cand = f"{iname}.{base}" if iname else base
-                    if cand in self._type_meta:
-                        return cand
+            # 3. Import sob demanda (import pkg.*; e import module M;) com detecção de ambiguidade JLS §7.5.5
+            combined_accessible, accessible_internal, all_internal = self._collect_on_demand_resolution_candidates(
+                base, ctx_unit, ctx_pkg
+            )
+            if len(combined_accessible) > 1:
+                return None
+            if len(accessible_internal) == 1:
+                return accessible_internal[0]
+            if all_internal:
+                return all_internal[0]
 
             # Se existe exatamente no mapa em outro pacote mas não foi importado, NÃO vaza silenciosamente
             if base in self._simple_to_keys:
@@ -345,7 +464,7 @@ class InheritanceAccessAnalyzer:
         keys = self._simple_to_keys.get(base, [])
         if len(keys) == 1:
             return keys[0]
-        if base in self.host._declared_types:
+        if not keys and base in self.host._declared_types:
             return base
         return None
 
@@ -456,6 +575,20 @@ class InheritanceAccessAnalyzer:
         base, _ = self.host._split_type_dims(stripped)
         if not base or base in self.host.PRIMITIVE_TYPES or base in ("void", "var"):
             return True
+
+        ambig = self.find_on_demand_ambiguity(base)
+        if ambig:
+            rkey = (id(self._current_unit), base, line)
+            if rkey not in self._reported_ambiguous_refs:
+                self._reported_ambiguous_refs.add(rkey)
+                cands_str = ", ".join(f"'{c}'" for c in ambig[:4])
+                self.host.errors.append(
+                    self._err(
+                        f"Referência ambígua ao tipo '{base}': múltiplos tipos importados correspondem ({cands_str}) (JLS §7.5.5 / §6.5.5).",
+                        line,
+                    )
+                )
+            return False
 
         resolved = self.resolve_type_key(base)
         if resolved is None and "." not in base and base in self._simple_to_keys and self._current_unit is not None:

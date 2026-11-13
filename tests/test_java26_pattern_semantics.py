@@ -132,7 +132,8 @@ class TestJava26PatternSemanticsAndBoundaries(unittest.TestCase):
         self.assertTrue(res_sw_preview.success, msg=f"Switch primitivo em preview falhou: {res_sw_preview.semantic_errors} / {res_sw_preview.syntactic_error}")
 
     def test_05_componentes_primitivos_em_record_pattern_rejeitados_sem_preview_e_var_valido(self):
-        source = """
+        # JEP 530 (Preview em Java SE 26): componentes primitivos explícitos (exatos ou com conversão) exigem preview
+        source_exact = """
         record Medida(int valor, double peso) {}
         class Demo {
             void f(Object o) {
@@ -142,17 +143,40 @@ class TestJava26PatternSemanticsAndBoundaries(unittest.TestCase):
             }
         }
         """
-        res_default = analyze_source(source, enable_preview_primitive_patterns=False)
+        res_exact_off = analyze_source(source_exact, enable_preview_primitive_patterns=False)
+        self.assertFalse(
+            res_exact_off.success,
+            msg="Componente primitivo explícito em RecordPattern pertence ao preview JEP 530 e deve ser rejeitado sem preview",
+        )
+        self.assertIsNotNone(res_exact_off.syntactic_error)
+
+        res_exact_on = analyze_source(source_exact, enable_preview_primitive_patterns=True)
+        self.assertTrue(
+            res_exact_on.success,
+            msg=f"Com preview habilitado deveria aceitar componente primitivo exato: {res_exact_on.semantic_errors} / {res_exact_on.syntactic_error}",
+        )
+
+        source_conv = """
+        record Medida(int valor, double peso) {}
+        class Demo {
+            void f(Object o) {
+                if (o instanceof Medida(long v, double p)) {
+                    double t = v + p;
+                }
+            }
+        }
+        """
+        res_default = analyze_source(source_conv, enable_preview_primitive_patterns=False)
         self.assertFalse(
             res_default.success,
-            msg="Componente primitivo explícito em RecordPattern pertence ao preview JEP 530 e deve ser rejeitado sem preview",
+            msg="Conversão primitiva em componente de RecordPattern pertence ao preview JEP 530 e deve ser rejeitada sem preview",
         )
         self.assertIsNotNone(res_default.syntactic_error)
 
-        res_preview = analyze_source(source, enable_preview_primitive_patterns=True)
+        res_preview = analyze_source(source_conv, enable_preview_primitive_patterns=True)
         self.assertTrue(
             res_preview.success,
-            msg=f"Com preview habilitado deveria aceitar componentes primitivos: {res_preview.semantic_errors} / {res_preview.syntactic_error}",
+            msg=f"Com preview habilitado deveria aceitar conversão primitiva em componentes: {res_preview.semantic_errors} / {res_preview.syntactic_error}",
         )
 
         stable_var_source = """

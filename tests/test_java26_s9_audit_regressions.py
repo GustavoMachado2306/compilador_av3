@@ -107,11 +107,15 @@ class TestJava26S9AuditRegressions(unittest.TestCase):
     def test_06_preview_isolation_remains_strict_by_default(self):
         src_prim = "class P { boolean f(Object o) { return o instanceof int i; } }"
         src_rec_prim = "record R(int x) {} class P { boolean f(Object o) { return o instanceof R(int x); } }"
+        src_rec_conv = "record R(int x) {} class P { boolean f(Object o) { return o instanceof R(long x); } }"
         src_rec_var = "record R(int x) {} class P { boolean f(Object o) { return o instanceof R(var x); } }"
         self.assertFalse(analyze_source(src_prim, enable_preview_primitive_patterns=False).success)
         self.assertFalse(analyze_source(src_rec_prim, enable_preview_primitive_patterns=False).success)
+        self.assertFalse(analyze_source(src_rec_conv, enable_preview_primitive_patterns=False).success)
         self.assertTrue(analyze_source(src_rec_var, enable_preview_primitive_patterns=False).success)
         self.assertTrue(analyze_source(src_prim, enable_preview_primitive_patterns=True).success)
+        self.assertTrue(analyze_source(src_rec_prim, enable_preview_primitive_patterns=True).success)
+        self.assertTrue(analyze_source(src_rec_conv, enable_preview_primitive_patterns=True).success)
 
 
 if __name__ == "__main__":
