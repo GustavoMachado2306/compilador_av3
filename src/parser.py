@@ -3422,7 +3422,8 @@ class Parser:
                         expected="expressão booleana após 'when'",
                         found=t.lexeme if t.type != TokenType.EOF else "EOF",
                     )
-                guard_expr = self.expression()
+                # Evita que `when flag -> ...` ou `when (flag) -> ...` confunda o '->' da SwitchRule com lambda
+                guard_expr = self.assignment_expression()
                 guard = Guard(expression=guard_expr, line=when_tok.line, column=when_tok.column)
 
             return PatternCaseLabel(

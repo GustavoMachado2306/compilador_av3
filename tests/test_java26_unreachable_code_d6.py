@@ -528,6 +528,27 @@ class TestJava26UnreachableCodeD6(unittest.TestCase):
             }
             """
         )
+        # 10. Guard 'when' com identificador simples e chamada com lambda não confunde '->' da SwitchRule
+        self._assert_ok(
+            """
+            import java.util.function.Predicate;
+            class GuardArrowTest {
+                boolean eval(Predicate<String> p, String v) { return p.test(v); }
+                int m(Object o, boolean flag) {
+                    int a = switch (o) {
+                        case Object x when flag -> 1;
+                        case Object _ -> 0;
+                    };
+                    switch (o) {
+                        case String s when (flag) -> { return a + 1; }
+                        case String s when eval(x -> x.length() > 0, s) -> { return 2; }
+                        case Object _ -> {}
+                    }
+                    return 3;
+                }
+            }
+            """
+        )
 
 
 if __name__ == "__main__":

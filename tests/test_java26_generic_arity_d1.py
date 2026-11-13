@@ -428,6 +428,37 @@ class TestJava26GenericArityD1(unittest.TestCase):
         res_unres = analyze_source(unresolved)
         self.assertEqual(res_unres.semantic_errors, [], msg=res_unres.semantic_errors)
 
+    def test_11_static_nested_from_parameterized_qualifier_rejected(self):
+        invalid_static_qual = [
+            "class O<T> { static class N<V> {} } class Use { O<String>.N<Integer> x; }",
+            "class O<T> { static class N {} } class Use { O<String>.N x; }",
+            "class O<T> { interface I {} } class Use { O<String>.I x; }",
+            "class O<T> { static class Mid { class Inner {} } } class Use { O<String>.Mid.Inner x; }",
+            "class O<T> { static class N<V> {} } class Use { void f(Object o) { Object x = (O<String>.N<Integer>) o; } }",
+        ]
+        for code in invalid_static_qual:
+            with self.subTest(code=code):
+                res = analyze_source(code)
+                self.assertFalse(res.success, msg=code)
+                self.assertTrue(
+                    any("Não é possível selecionar a classe estática" in str(e) for e in res.semantic_errors),
+                    msg=f"{code} -> {res.semantic_errors}",
+                )
+
+        # JLS §15.9: new O<String>.N<Integer>() também é rejeitado (sintaticamente)
+        res_new = analyze_source("class O<T> { static class N<V> {} } class Use { void f() { Object x = new O<String>.N<Integer>(); } }")
+        self.assertFalse(res_new.success)
+
+        valid_non_static_or_raw = [
+            "class O<T> { class Inner<U> {} } class Use { O<String>.Inner<Integer> x; }",
+            "class O<T> { class Inner {} } class Use { O<String>.Inner x; }",
+            "class O<T> { static class N<V> {} } class Use { O.N<Integer> x; }",
+        ]
+        for code in valid_non_static_or_raw:
+            with self.subTest(code=code):
+                res = analyze_source(code)
+                self.assertTrue(res.success, msg=f"{code} -> {res.semantic_errors}")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3949,6 +3949,43 @@ class SemanticAnalyzer:
 
         return None
 
+    def _is_static_nested_type(self, type_name: Optional[str]) -> bool:
+        """Retorna True se `type_name` for um tipo membro estático (explícito ou implícito)."""
+        if not type_name:
+            return False
+        meta = self._inheritance_analyzer.get_type_meta(type_name)
+        if meta is not None:
+            if not meta.get("is_nested"):
+                return False
+            if "static" in (meta.get("modifiers") or []) or meta.get("kind") in (
+                "interface",
+                "annotation_interface",
+                "enum",
+                "record",
+            ):
+                return True
+            enc_key = meta.get("enclosing_key")
+            if enc_key:
+                enc_meta = self._inheritance_analyzer.get_type_meta(enc_key)
+                if enc_meta is not None and enc_meta.get("kind") in ("interface", "annotation_interface"):
+                    return True
+            return False
+        ext = self._resolve_external_type(type_name)
+        if ext is not None and ext.is_nested:
+            if "static" in (ext.modifiers or []) or ext.kind in (
+                "interface",
+                "annotation_interface",
+                "enum",
+                "record",
+            ):
+                return True
+            if ext.enclosing_fqn:
+                enc_ext = self._resolve_external_type(ext.enclosing_fqn)
+                if enc_ext is not None and enc_ext.kind in ("interface", "annotation_interface"):
+                    return True
+            return False
+        return False
+
     def _check_type_ref_arity(
         self,
         type_ref: Optional[ASTNode],
@@ -3965,6 +4002,19 @@ class SemanticAnalyzer:
         parts = tname.split(".")
 
         if seg_targs and len(seg_targs) == len(parts) and not resolved_name_override:
+            for idx in range(1, len(parts)):
+                seg_name = ".".join(parts[: idx + 1])
+                if self._is_static_nested_type(seg_name):
+                    for prev_idx in range(idx):
+                        if seg_targs[prev_idx] is not None:
+                            prev_name = ".".join(parts[: prev_idx + 1])
+                            self.errors.append(
+                                SemanticError(
+                                    f"Não é possível selecionar a classe estática '{seg_name}' a partir do tipo parametrizado '{prev_name}' (JLS §4.5).",
+                                    line,
+                                )
+                            )
+                            break
             for idx, sargs in enumerate(seg_targs):
                 if sargs is None:
                     continue
