@@ -18,14 +18,14 @@ class TestJava26TryStatementsS6(unittest.TestCase):
 
     def test_01_try_catch_e_multiplos_catch_e_finally(self):
         source = """
-        class IOException {}
-        class SQLException {}
+        class IOException extends Exception {}
+        class SQLException extends Exception {}
         class Demo {
-            void executar() {}
+            void executar() throws IOException, SQLException {}
             void tratar(Object e) {}
             void tratarBanco(Object e) {}
             void liberar() {}
-            void run() {
+            void run() throws IOException, SQLException {
                 try {
                     executar();
                 } catch (IOException e) {
@@ -56,10 +56,10 @@ class TestJava26TryStatementsS6(unittest.TestCase):
 
     def test_02_multicatch_preserva_tipos_alternativos_na_ast(self):
         source = """
-        class IOException {}
-        class SQLException {}
+        class IOException extends Exception {}
+        class SQLException extends Exception {}
         class Demo {
-            void executar() {}
+            void executar() throws IOException, SQLException {}
             void tratar(Object e) {}
             void run() {
                 try {

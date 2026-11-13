@@ -532,10 +532,17 @@ class TypeReference(ASTNode):
             annotations=list(self.annotations),
             type_parameters=list(self.type_parameters),
             dims_annotations=list(self.dims_annotations),
+            segment_annotations=[list(sa) for sa in self.segment_annotations],
+            ellipsis_annotations=list(self.ellipsis_annotations),
+            segment_type_arguments=[
+                (list(sta) if sta is not None else None)
+                for sta in self.segment_type_arguments
+            ],
         )
 
     segment_annotations: List[List[ASTNode]] = field(default_factory=list)
     ellipsis_annotations: List[ASTNode] = field(default_factory=list)
+    segment_type_arguments: List[Optional[List[ASTNode]]] = field(default_factory=list)
 
     @property
     def full_name(self) -> str:

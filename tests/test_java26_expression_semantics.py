@@ -107,9 +107,21 @@ class TestJava26ExpressionSemanticsS8(unittest.TestCase):
             }
         }
         """
-        res = analyze_source(source)
-        self.assertTrue(res.success, msg=res.semantic_errors)
-        self.assertTrue(len(res.unresolved_checks) > 0)
+        res_no_std = analyze_source(source, include_stdlib=False)
+        self.assertTrue(res_no_std.success, msg=res_no_std.semantic_errors)
+        self.assertTrue(len(res_no_std.unresolved_checks) > 0)
+
+        unknown_src = """
+        import com.externo.ApiDesconhecida;
+        class Ext2 {
+            void run() {
+                var r = ApiDesconhecida.ping();
+            }
+        }
+        """
+        res_ext = analyze_source(unknown_src)
+        self.assertTrue(res_ext.success, msg=res_ext.semantic_errors)
+        self.assertTrue(len(res_ext.unresolved_checks) > 0)
 
     def test_07_switch_expression_exhaustiveness_with_sealed_records_and_expressions(self):
         source = """

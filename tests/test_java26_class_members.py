@@ -1017,8 +1017,8 @@ class TestJava26ClassMembersS3(unittest.TestCase):
         """
         res = analyze_source(source)
         self.assertFalse(res.success)
-        self.assertTrue(len(res.semantic_errors) >= 2)
-        self.assertTrue(all("early construction context" in str(e) for e in res.semantic_errors))
+        early_errs = [str(e) for e in res.semantic_errors if "early construction context" in str(e)]
+        self.assertGreaterEqual(len(early_errs), 2, msg=res.semantic_errors)
 
     def test_90_referencia_instancia_argumentos_super_e_this(self):
         source = """

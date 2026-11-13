@@ -6,8 +6,19 @@ Evita falsos erros para membros qualificados externos como System.out.println(..
 """
 
 import math
+import re
 import struct
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from .type_inference import JLS18ConstraintSolver
+from .exception_analysis import ExceptionAnalyzer
+from .inheritance_access import InheritanceAccessAnalyzer
+from .classpath_resolver import (
+    ExternalSymbolResolver,
+    ExternalTypeInfo,
+    ExternalMethodInfo,
+    ExternalFieldInfo,
+    DEFAULT_MAX_CLASS_MAJOR,
+)
 from .ast_nodes import (
     ASTNode, CompilationUnit, PackageDeclaration, ClassDeclaration, InterfaceDeclaration,
     InterfaceConstantDeclaration, InterfaceMethodDeclaration,
@@ -104,9 +115,16 @@ class SemanticAnalyzer:
         "Exception": "Throwable",
         "RuntimeException": "Exception",
         "Error": "Throwable",
+        "VirtualMachineError": "Error",
+        "OutOfMemoryError": "VirtualMachineError",
+        "StackOverflowError": "VirtualMachineError",
+        "LinkageError": "Error",
+        "NoClassDefFoundError": "LinkageError",
+        "AssertionError": "Error",
         "IOException": "Exception",
         "FileNotFoundException": "IOException",
         "EOFException": "IOException",
+        "MalformedURLException": "IOException",
         "SQLException": "Exception",
         "IllegalArgumentException": "RuntimeException",
         "IllegalStateException": "RuntimeException",
@@ -117,28 +135,43 @@ class SemanticAnalyzer:
         "ArithmeticException": "RuntimeException",
         "ClassCastException": "RuntimeException",
         "UnsupportedOperationException": "RuntimeException",
-        "ClassNotFoundException": "ReflectiveOperationException",
+        "SecurityException": "RuntimeException",
+        "NoSuchElementException": "RuntimeException",
+        "ConcurrentModificationException": "RuntimeException",
         "ReflectiveOperationException": "Exception",
+        "ClassNotFoundException": "ReflectiveOperationException",
+        "NoSuchMethodException": "ReflectiveOperationException",
+        "NoSuchFieldException": "ReflectiveOperationException",
+        "InstantiationException": "ReflectiveOperationException",
+        "IllegalAccessException": "ReflectiveOperationException",
+        "InvocationTargetException": "ReflectiveOperationException",
         "InterruptedException": "Exception",
+        "CloneNotSupportedException": "Exception",
+        "ParseException": "Exception",
+        "TimeoutException": "Exception",
+        "ExecutionException": "Exception",
+        "URISyntaxException": "Exception",
     }
     BUILTIN_TYPE_SUPERTYPES = {
         "Object": [],
-        "String": ["CharSequence", "Comparable", "Serializable", "Object"],
+        "String": ["CharSequence", "Comparable<String>", "Serializable", "Object"],
         "StringBuilder": ["CharSequence", "Appendable", "Serializable", "Object"],
         "StringBuffer": ["CharSequence", "Appendable", "Serializable", "Object"],
         "CharSequence": ["Object"],
         "Appendable": ["Object"],
         "Number": ["Serializable", "Object"],
-        "Integer": ["Number", "Comparable", "Serializable", "Object"],
-        "Long": ["Number", "Comparable", "Serializable", "Object"],
-        "Double": ["Number", "Comparable", "Serializable", "Object"],
-        "Float": ["Number", "Comparable", "Serializable", "Object"],
-        "Byte": ["Number", "Comparable", "Serializable", "Object"],
-        "Short": ["Number", "Comparable", "Serializable", "Object"],
-        "Boolean": ["Comparable", "Serializable", "Object"],
-        "Character": ["Comparable", "Serializable", "Object"],
+        "Integer": ["Number", "Comparable<Integer>", "Serializable", "Object"],
+        "Long": ["Number", "Comparable<Long>", "Serializable", "Object"],
+        "Double": ["Number", "Comparable<Double>", "Serializable", "Object"],
+        "Float": ["Number", "Comparable<Float>", "Serializable", "Object"],
+        "Byte": ["Number", "Comparable<Byte>", "Serializable", "Object"],
+        "Short": ["Number", "Comparable<Short>", "Serializable", "Object"],
+        "Boolean": ["Comparable<Boolean>", "Serializable", "Object"],
+        "Character": ["Comparable<Character>", "Serializable", "Object"],
         "Void": ["Object"],
         "Iterable": ["Object"],
+        "Iterator": ["Object"],
+        "ListIterator": ["Iterator<E>", "Object"],
         "Collection": ["Iterable<E>", "Object"],
         "java.util.Collection": ["Iterable<E>", "Object"],
         "List": ["Collection<E>", "Iterable<E>", "Object"],
@@ -176,8 +209,37 @@ class SemanticAnalyzer:
         "IntConsumer": ["Object"],
         "IntSupplier": ["Object"],
         "Stream": ["Object"],
-        "PrintStream": ["Object"],
-        "InputStream": ["Object"],
+        "AutoCloseable": ["Object"],
+        "java.lang.AutoCloseable": ["Object"],
+        "Closeable": ["AutoCloseable", "Object"],
+        "java.io.Closeable": ["AutoCloseable", "Object"],
+        "PrintStream": ["OutputStream", "Closeable", "AutoCloseable", "Object"],
+        "InputStream": ["Closeable", "AutoCloseable", "Object"],
+        "java.io.InputStream": ["Closeable", "AutoCloseable", "Object"],
+        "OutputStream": ["Closeable", "AutoCloseable", "Object"],
+        "java.io.OutputStream": ["Closeable", "AutoCloseable", "Object"],
+        "FileInputStream": ["InputStream", "Closeable", "AutoCloseable", "Object"],
+        "java.io.FileInputStream": ["InputStream", "Closeable", "AutoCloseable", "Object"],
+        "FileOutputStream": ["OutputStream", "Closeable", "AutoCloseable", "Object"],
+        "java.io.FileOutputStream": ["OutputStream", "Closeable", "AutoCloseable", "Object"],
+        "Reader": ["Closeable", "AutoCloseable", "Object"],
+        "java.io.Reader": ["Closeable", "AutoCloseable", "Object"],
+        "InputStreamReader": ["Reader", "Closeable", "AutoCloseable", "Object"],
+        "java.io.InputStreamReader": ["Reader", "Closeable", "AutoCloseable", "Object"],
+        "FileReader": ["InputStreamReader", "Reader", "Closeable", "AutoCloseable", "Object"],
+        "java.io.FileReader": ["InputStreamReader", "Reader", "Closeable", "AutoCloseable", "Object"],
+        "BufferedReader": ["Reader", "Closeable", "AutoCloseable", "Object"],
+        "java.io.BufferedReader": ["Reader", "Closeable", "AutoCloseable", "Object"],
+        "Writer": ["Closeable", "AutoCloseable", "Appendable", "Object"],
+        "java.io.Writer": ["Closeable", "AutoCloseable", "Appendable", "Object"],
+        "FileWriter": ["Writer", "Closeable", "AutoCloseable", "Appendable", "Object"],
+        "java.io.FileWriter": ["Writer", "Closeable", "AutoCloseable", "Appendable", "Object"],
+        "File": ["Serializable", "Comparable<File>", "Object"],
+        "java.io.File": ["Serializable", "Comparable<File>", "Object"],
+        "Thread": ["Runnable", "Object"],
+        "java.lang.Thread": ["Runnable", "Object"],
+        "Class": ["Serializable", "Object"],
+        "java.lang.Class": ["Serializable", "Object"],
         "System": ["Object"],
         "Math": ["Object"],
         "Collections": ["Object"],
@@ -193,19 +255,28 @@ class SemanticAnalyzer:
         "String", "Integer", "Long", "Double", "Float", "Byte", "Short", "Boolean", "Character", "Void",
     })
     BUILTIN_INTERFACE_TYPES = frozenset({
-        "CharSequence", "Appendable", "Iterable", "Collection", "List", "Set", "Map",
+        "CharSequence", "Appendable", "Iterable", "Iterator", "ListIterator",
+        "Collection", "List", "Set", "Map", "AutoCloseable", "Closeable",
         "Comparable", "Serializable", "Cloneable", "Runnable", "Callable", "Comparator",
         "Function", "BiFunction", "Consumer", "BiConsumer", "Supplier", "Predicate",
         "BiPredicate", "UnaryOperator", "BinaryOperator", "IntFunction", "ToIntFunction",
         "IntUnaryOperator", "IntBinaryOperator", "IntPredicate", "IntConsumer", "IntSupplier",
         "Stream", "java.util.List", "java.util.Collection",
+        "java.lang.AutoCloseable", "java.io.Closeable",
     })
     BUILTIN_CLASS_TYPES = frozenset({
         "Object", "String", "StringBuilder", "StringBuffer", "Number",
         "Integer", "Long", "Double", "Float", "Byte", "Short", "Boolean",
         "Character", "Void", "ArrayList", "LinkedList", "HashSet", "HashMap",
         "Optional", "Record", "Enum", "Throwable", "Exception",
-        "RuntimeException", "Error", "PrintStream", "InputStream",
+        "RuntimeException", "Error", "PrintStream", "InputStream", "OutputStream",
+        "FileInputStream", "FileOutputStream", "Reader", "InputStreamReader",
+        "FileReader", "BufferedReader", "Writer", "FileWriter", "File",
+        "Thread", "Class",
+        "java.io.InputStream", "java.io.OutputStream", "java.io.FileInputStream",
+        "java.io.FileOutputStream", "java.io.Reader", "java.io.InputStreamReader",
+        "java.io.FileReader", "java.io.BufferedReader", "java.io.Writer",
+        "java.io.FileWriter", "java.io.File", "java.lang.Thread", "java.lang.Class",
         "System", "Math", "Collections", "Arrays", "Objects",
         "java.util.Arrays", "java.util.ArrayList",
     })
@@ -239,15 +310,27 @@ class SemanticAnalyzer:
         "ArrayList": ["E"],
         "java.util.ArrayList": ["E"],
         "LinkedList": ["E"],
+        "java.util.LinkedList": ["E"],
         "Set": ["E"],
+        "java.util.Set": ["E"],
         "HashSet": ["E"],
+        "java.util.HashSet": ["E"],
         "Collection": ["E"],
         "java.util.Collection": ["E"],
         "Iterable": ["T"],
+        "Iterator": ["E"],
+        "ListIterator": ["E"],
         "Optional": ["T"],
+        "java.util.Optional": ["T"],
         "Stream": ["T"],
         "Map": ["K", "V"],
+        "java.util.Map": ["K", "V"],
         "HashMap": ["K", "V"],
+        "java.util.HashMap": ["K", "V"],
+        "Class": ["T"],
+        "java.lang.Class": ["T"],
+        "Enum": ["E"],
+        "java.lang.Enum": ["E"],
         "Comparable": ["T"],
         "Comparator": ["T"],
         "Function": ["T", "R"],
@@ -297,31 +380,95 @@ class SemanticAnalyzer:
             "PI": ("double", True, True),
             "E": ("double", True, True),
         },
+        "Byte": {
+            "MAX_VALUE": ("byte", True, True),
+            "MIN_VALUE": ("byte", True, True),
+            "SIZE": ("int", True, True),
+            "BYTES": ("int", True, True),
+        },
+        "Short": {
+            "MAX_VALUE": ("short", True, True),
+            "MIN_VALUE": ("short", True, True),
+            "SIZE": ("int", True, True),
+            "BYTES": ("int", True, True),
+        },
+        "Character": {
+            "MAX_VALUE": ("char", True, True),
+            "MIN_VALUE": ("char", True, True),
+            "SIZE": ("int", True, True),
+            "BYTES": ("int", True, True),
+        },
         "Integer": {
             "MAX_VALUE": ("int", True, True),
             "MIN_VALUE": ("int", True, True),
+            "SIZE": ("int", True, True),
+            "BYTES": ("int", True, True),
         },
         "Long": {
             "MAX_VALUE": ("long", True, True),
             "MIN_VALUE": ("long", True, True),
+            "SIZE": ("int", True, True),
+            "BYTES": ("int", True, True),
+        },
+        "Float": {
+            "MAX_VALUE": ("float", True, True),
+            "MIN_VALUE": ("float", True, True),
+            "POSITIVE_INFINITY": ("float", True, True),
+            "NEGATIVE_INFINITY": ("float", True, True),
+            "NaN": ("float", True, True),
+            "SIZE": ("int", True, True),
+            "BYTES": ("int", True, True),
         },
         "Double": {
             "MAX_VALUE": ("double", True, True),
             "MIN_VALUE": ("double", True, True),
+            "POSITIVE_INFINITY": ("double", True, True),
+            "NEGATIVE_INFINITY": ("double", True, True),
+            "NaN": ("double", True, True),
+            "SIZE": ("int", True, True),
+            "BYTES": ("int", True, True),
         },
+    }
+    BUILTIN_CONSTANT_VALUES = {
+        "Byte": {"MAX_VALUE": ("byte", 127), "MIN_VALUE": ("byte", -128), "SIZE": ("int", 8), "BYTES": ("int", 1)},
+        "Short": {"MAX_VALUE": ("short", 32767), "MIN_VALUE": ("short", -32768), "SIZE": ("int", 16), "BYTES": ("int", 2)},
+        "Character": {"MAX_VALUE": ("char", 65535), "MIN_VALUE": ("char", 0), "SIZE": ("int", 16), "BYTES": ("int", 2)},
+        "Integer": {"MAX_VALUE": ("int", 2147483647), "MIN_VALUE": ("int", -2147483648), "SIZE": ("int", 32), "BYTES": ("int", 4)},
+        "Long": {"MAX_VALUE": ("long", 9223372036854775807), "MIN_VALUE": ("long", -9223372036854775808), "SIZE": ("int", 64), "BYTES": ("int", 8)},
+        "Float": {
+            "MAX_VALUE": ("float", 3.4028235e38),
+            "MIN_VALUE": ("float", 1.4e-45),
+            "POSITIVE_INFINITY": ("float", float("inf")),
+            "NEGATIVE_INFINITY": ("float", float("-inf")),
+            "NaN": ("float", float("nan")),
+            "SIZE": ("int", 32),
+            "BYTES": ("int", 4),
+        },
+        "Double": {
+            "MAX_VALUE": ("double", 1.7976931348623157e308),
+            "MIN_VALUE": ("double", 4.9e-324),
+            "POSITIVE_INFINITY": ("double", float("inf")),
+            "NEGATIVE_INFINITY": ("double", float("-inf")),
+            "NaN": ("double", float("nan")),
+            "SIZE": ("int", 64),
+            "BYTES": ("int", 8),
+        },
+        "Math": {"PI": ("double", math.pi), "E": ("double", math.e)},
     }
     # Assinaturas embutidas: tipo -> nome_metodo -> lista de dicts {params, ret, static, varargs, tparams}
     BUILTIN_METHODS = {
         "Object": {
-            "toString": [{"params": [], "ret": "String", "static": False, "varargs": False, "tparams": []}],
-            "equals": [{"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
-            "hashCode": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
-            "getClass": [{"params": [], "ret": "Class", "static": False, "varargs": False, "tparams": []}],
-            "notify": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": []}],
-            "notifyAll": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": []}],
+            "toString": [{"params": [], "ret": "String", "static": False, "varargs": False, "tparams": [], "access": "public"}],
+            "equals": [{"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": [], "access": "public"}],
+            "hashCode": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": [], "access": "public"}],
+            "getClass": [{"params": [], "ret": "Class", "static": False, "varargs": False, "tparams": [], "access": "public", "is_final": True}],
+            "clone": [{"params": [], "ret": "Object", "static": False, "varargs": False, "tparams": [], "access": "protected", "throws": ["CloneNotSupportedException"]}],
+            "finalize": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": [], "access": "protected", "throws": ["Throwable"]}],
+            "notify": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": [], "access": "public", "is_final": True}],
+            "notifyAll": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": [], "access": "public", "is_final": True}],
             "wait": [
-                {"params": [], "ret": "void", "static": False, "varargs": False, "tparams": []},
-                {"params": ["long"], "ret": "void", "static": False, "varargs": False, "tparams": []},
+                {"params": [], "ret": "void", "static": False, "varargs": False, "tparams": [], "access": "public", "is_final": True, "throws": ["InterruptedException"]},
+                {"params": ["long"], "ret": "void", "static": False, "varargs": False, "tparams": [], "access": "public", "is_final": True, "throws": ["InterruptedException"]},
             ],
         },
         "CharSequence": {
@@ -460,14 +607,41 @@ class SemanticAnalyzer:
             "valueOf": [{"params": ["boolean"], "ret": "Boolean", "static": True, "varargs": False, "tparams": []}],
             "booleanValue": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
         },
+        "Number": {
+            "intValue": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+            "longValue": [{"params": [], "ret": "long", "static": False, "varargs": False, "tparams": []}],
+            "floatValue": [{"params": [], "ret": "float", "static": False, "varargs": False, "tparams": []}],
+            "doubleValue": [{"params": [], "ret": "double", "static": False, "varargs": False, "tparams": []}],
+            "byteValue": [{"params": [], "ret": "byte", "static": False, "varargs": False, "tparams": []}],
+            "shortValue": [{"params": [], "ret": "short", "static": False, "varargs": False, "tparams": []}],
+        },
+        "Iterator": {
+            "hasNext": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "next": [{"params": [], "ret": "E", "static": False, "varargs": False, "tparams": []}],
+            "remove": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": [], "is_default": True}],
+        },
+        "ListIterator": {
+            "hasNext": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "next": [{"params": [], "ret": "E", "static": False, "varargs": False, "tparams": []}],
+            "hasPrevious": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "previous": [{"params": [], "ret": "E", "static": False, "varargs": False, "tparams": []}],
+            "add": [{"params": ["E"], "ret": "void", "static": False, "varargs": False, "tparams": []}],
+            "set": [{"params": ["E"], "ret": "void", "static": False, "varargs": False, "tparams": []}],
+            "remove": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": [], "is_default": True}],
+        },
         "Collection": {
             "size": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
             "isEmpty": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
             "contains": [{"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "iterator": [{"params": [], "ret": "Iterator<E>", "static": False, "varargs": False, "tparams": []}],
             "add": [{"params": ["E"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "addAll": [{"params": ["Collection<? extends E>"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "containsAll": [{"params": ["Collection<?>"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
             "remove": [{"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "removeAll": [{"params": ["Collection<?>"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "retainAll": [{"params": ["Collection<?>"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
             "clear": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": []}],
-            "stream": [{"params": [], "ret": "Stream<E>", "static": False, "varargs": False, "tparams": []}],
+            "stream": [{"params": [], "ret": "Stream<E>", "static": False, "varargs": False, "tparams": [], "is_default": True}],
         },
         "List": {
             "size": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
@@ -488,13 +662,13 @@ class SemanticAnalyzer:
                 {"params": ["int"], "ret": "E", "static": False, "varargs": False, "tparams": []},
                 {"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": []},
             ],
-            "containsAll": [{"params": ["Collection"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "containsAll": [{"params": ["Collection<?>"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
             "addAll": [
-                {"params": ["Collection"], "ret": "boolean", "static": False, "varargs": False, "tparams": []},
-                {"params": ["int", "Collection"], "ret": "boolean", "static": False, "varargs": False, "tparams": []},
+                {"params": ["Collection<? extends E>"], "ret": "boolean", "static": False, "varargs": False, "tparams": []},
+                {"params": ["int", "Collection<? extends E>"], "ret": "boolean", "static": False, "varargs": False, "tparams": []},
             ],
-            "removeAll": [{"params": ["Collection"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
-            "retainAll": [{"params": ["Collection"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "removeAll": [{"params": ["Collection<?>"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "retainAll": [{"params": ["Collection<?>"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
             "clear": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": []}],
             "equals": [{"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
             "hashCode": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
@@ -505,15 +679,15 @@ class SemanticAnalyzer:
                 {"params": ["int"], "ret": "ListIterator<E>", "static": False, "varargs": False, "tparams": []},
             ],
             "subList": [{"params": ["int", "int"], "ret": "List<E>", "static": False, "varargs": False, "tparams": []}],
-            "sort": [{"params": ["Comparator"], "ret": "void", "static": False, "varargs": False, "tparams": []}],
-            "stream": [{"params": [], "ret": "Stream<E>", "static": False, "varargs": False, "tparams": []}],
+            "sort": [{"params": ["Comparator"], "ret": "void", "static": False, "varargs": False, "tparams": [], "is_default": True}],
+            "stream": [{"params": [], "ret": "Stream<E>", "static": False, "varargs": False, "tparams": [], "is_default": True}],
             "of": [
                 {"params": [], "ret": "List<E>", "static": True, "varargs": False, "tparams": ["E"]},
                 {"params": ["E"], "ret": "List<E>", "static": True, "varargs": False, "tparams": ["E"]},
                 {"params": ["E", "E"], "ret": "List<E>", "static": True, "varargs": False, "tparams": ["E"]},
                 {"params": ["E..."], "ret": "List<E>", "static": True, "varargs": True, "tparams": ["E"]},
             ],
-            "copyOf": [{"params": ["Collection"], "ret": "List<E>", "static": True, "varargs": False, "tparams": ["E"]}],
+            "copyOf": [{"params": ["Collection<? extends E>"], "ret": "List<E>", "static": True, "varargs": False, "tparams": ["E"]}],
         },
         "Set": {
             "of": [
@@ -524,11 +698,13 @@ class SemanticAnalyzer:
         "Map": {
             "get": [{"params": ["Object"], "ret": "V", "static": False, "varargs": False, "tparams": []}],
             "put": [{"params": ["K", "V"], "ret": "V", "static": False, "varargs": False, "tparams": []}],
+            "putAll": [{"params": ["Map<? extends K, ? extends V>"], "ret": "void", "static": False, "varargs": False, "tparams": []}],
             "containsKey": [{"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
             "containsValue": [{"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
             "size": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
             "isEmpty": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
             "keySet": [{"params": [], "ret": "Set<K>", "static": False, "varargs": False, "tparams": []}],
+            "values": [{"params": [], "ret": "Collection<V>", "static": False, "varargs": False, "tparams": []}],
         },
         "Optional": {
             "get": [{"params": [], "ret": "T", "static": False, "varargs": False, "tparams": []}],
@@ -543,6 +719,7 @@ class SemanticAnalyzer:
             "emptyList": [{"params": [], "ret": "List<T>", "static": True, "varargs": False, "tparams": ["T"]}],
             "singletonList": [{"params": ["T"], "ret": "List<T>", "static": True, "varargs": False, "tparams": ["T"]}],
             "sort": [{"params": ["List<T>"], "ret": "void", "static": True, "varargs": False, "tparams": ["T"]}],
+            "copy": [{"params": ["List<? super T>", "List<? extends T>"], "ret": "void", "static": True, "varargs": False, "tparams": ["T"]}],
         },
         "Arrays": {
             "asList": [{"params": ["T..."], "ret": "List<T>", "static": True, "varargs": True, "tparams": ["T"]}],
@@ -652,7 +829,7 @@ class SemanticAnalyzer:
             "apply": [{"params": ["T", "T"], "ret": "T", "static": False, "varargs": False, "tparams": []}],
         },
         "Callable": {
-            "call": [{"params": [], "ret": "V", "static": False, "varargs": False, "tparams": []}],
+            "call": [{"params": [], "ret": "V", "static": False, "varargs": False, "tparams": [], "throws": ["Exception"]}],
         },
         "Runnable": {
             "run": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": []}],
@@ -669,12 +846,83 @@ class SemanticAnalyzer:
         "IntPredicate": {
             "test": [{"params": ["int"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
         },
+        "Throwable": {
+            "getMessage": [{"params": [], "ret": "String", "static": False, "varargs": False, "tparams": []}],
+            "getCause": [{"params": [], "ret": "Throwable", "static": False, "varargs": False, "tparams": []}],
+            "printStackTrace": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": []}],
+        },
+        "AutoCloseable": {
+            "close": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": [], "throws": ["Exception"]}],
+        },
+        "Closeable": {
+            "close": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]}],
+        },
+        "InputStream": {
+            "read": [
+                {"params": [], "ret": "int", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]},
+                {"params": ["byte[]"], "ret": "int", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]},
+            ],
+            "close": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]}],
+        },
+        "OutputStream": {
+            "write": [
+                {"params": ["int"], "ret": "void", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]},
+                {"params": ["byte[]"], "ret": "void", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]},
+            ],
+            "flush": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]}],
+            "close": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]}],
+        },
+        "Reader": {
+            "read": [
+                {"params": [], "ret": "int", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]},
+                {"params": ["char[]"], "ret": "int", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]},
+            ],
+            "close": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]}],
+        },
+        "BufferedReader": {
+            "readLine": [{"params": [], "ret": "String", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]}],
+            "read": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]}],
+            "close": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]}],
+        },
+        "Writer": {
+            "write": [
+                {"params": ["String"], "ret": "void", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]},
+                {"params": ["int"], "ret": "void", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]},
+            ],
+            "flush": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]}],
+            "close": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]}],
+        },
+        "File": {
+            "createNewFile": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": [], "throws": ["IOException"]}],
+            "exists": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "getName": [{"params": [], "ret": "String", "static": False, "varargs": False, "tparams": []}],
+            "getPath": [{"params": [], "ret": "String", "static": False, "varargs": False, "tparams": []}],
+        },
+        "Thread": {
+            "sleep": [{"params": ["long"], "ret": "void", "static": True, "varargs": False, "tparams": [], "throws": ["InterruptedException"]}],
+            "start": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": []}],
+            "join": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": [], "throws": ["InterruptedException"]}],
+        },
+        "Class": {
+            "forName": [{"params": ["String"], "ret": "Class", "static": True, "varargs": False, "tparams": [], "throws": ["ClassNotFoundException"]}],
+            "getName": [{"params": [], "ret": "String", "static": False, "varargs": False, "tparams": []}],
+        },
     }
     BUILTIN_METHODS["java.util.List"] = BUILTIN_METHODS["List"]
     BUILTIN_METHODS["ArrayList"] = BUILTIN_METHODS["List"]
     BUILTIN_METHODS["java.util.ArrayList"] = BUILTIN_METHODS["List"]
     BUILTIN_METHODS["java.util.Collection"] = BUILTIN_METHODS["Collection"]
     BUILTIN_METHODS["java.util.Arrays"] = BUILTIN_METHODS["Arrays"]
+    BUILTIN_METHODS["java.lang.AutoCloseable"] = BUILTIN_METHODS["AutoCloseable"]
+    BUILTIN_METHODS["java.io.Closeable"] = BUILTIN_METHODS["Closeable"]
+    BUILTIN_METHODS["java.io.InputStream"] = BUILTIN_METHODS["InputStream"]
+    BUILTIN_METHODS["java.io.OutputStream"] = BUILTIN_METHODS["OutputStream"]
+    BUILTIN_METHODS["java.io.Reader"] = BUILTIN_METHODS["Reader"]
+    BUILTIN_METHODS["java.io.BufferedReader"] = BUILTIN_METHODS["BufferedReader"]
+    BUILTIN_METHODS["java.io.Writer"] = BUILTIN_METHODS["Writer"]
+    BUILTIN_METHODS["java.io.File"] = BUILTIN_METHODS["File"]
+    BUILTIN_METHODS["java.lang.Thread"] = BUILTIN_METHODS["Thread"]
+    BUILTIN_METHODS["java.lang.Class"] = BUILTIN_METHODS["Class"]
 
     BUILTIN_CONSTRUCTORS = {
         "Object": [[]],
@@ -689,15 +937,133 @@ class SemanticAnalyzer:
         "java.util.HashSet": [[], ["int"], ["Collection"]],
         "HashMap": [[], ["int"], ["Map"]],
         "java.util.HashMap": [[], ["int"], ["Map"]],
-        "Exception": [[], ["String"]],
-        "RuntimeException": [[], ["String"]],
+        "Exception": [[], ["String"], ["Throwable"], ["String", "Throwable"]],
+        "RuntimeException": [[], ["String"], ["Throwable"], ["String", "Throwable"]],
         "IllegalArgumentException": [[], ["String"]],
         "IllegalStateException": [[], ["String"]],
+        "IOException": [[], ["String"], ["Throwable"], ["String", "Throwable"]],
+        "FileNotFoundException": [[], ["String"]],
+        "SQLException": [[], ["String"]],
+        "Thread": [[], ["Runnable"]],
+        "File": [["String"]],
+        "java.io.File": [["String"]],
+        "InputStreamReader": [{"params": ["InputStream"], "throws": []}],
+        "java.io.InputStreamReader": [{"params": ["InputStream"], "throws": []}],
+        "FileReader": [
+            {"params": ["String"], "throws": ["FileNotFoundException"]},
+            {"params": ["File"], "throws": ["FileNotFoundException"]},
+        ],
+        "java.io.FileReader": [
+            {"params": ["String"], "throws": ["FileNotFoundException"]},
+            {"params": ["File"], "throws": ["FileNotFoundException"]},
+        ],
+        "BufferedReader": [{"params": ["Reader"], "throws": []}],
+        "java.io.BufferedReader": [{"params": ["Reader"], "throws": []}],
+        "FileInputStream": [
+            {"params": ["String"], "throws": ["FileNotFoundException"]},
+            {"params": ["File"], "throws": ["FileNotFoundException"]},
+        ],
+        "java.io.FileInputStream": [
+            {"params": ["String"], "throws": ["FileNotFoundException"]},
+            {"params": ["File"], "throws": ["FileNotFoundException"]},
+        ],
+        "FileWriter": [
+            {"params": ["String"], "throws": ["IOException"]},
+            {"params": ["File"], "throws": ["IOException"]},
+        ],
+        "java.io.FileWriter": [
+            {"params": ["String"], "throws": ["IOException"]},
+            {"params": ["File"], "throws": ["IOException"]},
+        ],
+        "FileOutputStream": [
+            {"params": ["String"], "throws": ["FileNotFoundException"]},
+            {"params": ["File"], "throws": ["FileNotFoundException"]},
+        ],
+        "java.io.FileOutputStream": [
+            {"params": ["String"], "throws": ["FileNotFoundException"]},
+            {"params": ["File"], "throws": ["FileNotFoundException"]},
+        ],
     }
 
-    def __init__(self, symbol_table, enable_preview_primitive_patterns: bool = False):
+    BUILTIN_COMPAT_FQNS: Dict[str, str] = {
+        "Closeable": "java.io.Closeable",
+        "InputStream": "java.io.InputStream",
+        "OutputStream": "java.io.OutputStream",
+        "FileInputStream": "java.io.FileInputStream",
+        "FileOutputStream": "java.io.FileOutputStream",
+        "Reader": "java.io.Reader",
+        "InputStreamReader": "java.io.InputStreamReader",
+        "FileReader": "java.io.FileReader",
+        "BufferedReader": "java.io.BufferedReader",
+        "Writer": "java.io.Writer",
+        "FileWriter": "java.io.FileWriter",
+        "File": "java.io.File",
+        "PrintStream": "java.io.PrintStream",
+        "Serializable": "java.io.Serializable",
+        "IOException": "java.io.IOException",
+        "FileNotFoundException": "java.io.FileNotFoundException",
+        "EOFException": "java.io.EOFException",
+        "Collection": "java.util.Collection",
+        "List": "java.util.List",
+        "ArrayList": "java.util.ArrayList",
+        "LinkedList": "java.util.LinkedList",
+        "Set": "java.util.Set",
+        "HashSet": "java.util.HashSet",
+        "Map": "java.util.Map",
+        "HashMap": "java.util.HashMap",
+        "Iterator": "java.util.Iterator",
+        "ListIterator": "java.util.ListIterator",
+        "Comparator": "java.util.Comparator",
+        "Optional": "java.util.Optional",
+        "Collections": "java.util.Collections",
+        "Arrays": "java.util.Arrays",
+        "Objects": "java.util.Objects",
+        "Function": "java.util.function.Function",
+        "BiFunction": "java.util.function.BiFunction",
+        "Consumer": "java.util.function.Consumer",
+        "BiConsumer": "java.util.function.BiConsumer",
+        "Supplier": "java.util.function.Supplier",
+        "Predicate": "java.util.function.Predicate",
+        "BiPredicate": "java.util.function.BiPredicate",
+        "UnaryOperator": "java.util.function.UnaryOperator",
+        "BinaryOperator": "java.util.function.BinaryOperator",
+        "Stream": "java.util.stream.Stream",
+        "Collector": "java.util.stream.Collector",
+        "Collectors": "java.util.stream.Collectors",
+        "Callable": "java.util.concurrent.Callable",
+        "Future": "java.util.concurrent.Future",
+        "Target": "java.lang.annotation.Target",
+        "Retention": "java.lang.annotation.Retention",
+        "Repeatable": "java.lang.annotation.Repeatable",
+        "Documented": "java.lang.annotation.Documented",
+        "Inherited": "java.lang.annotation.Inherited",
+        "ElementType": "java.lang.annotation.ElementType",
+        "RetentionPolicy": "java.lang.annotation.RetentionPolicy",
+        "SQLException": "java.sql.SQLException",
+    }
+
+    _JAVA_LANG_SIMPLIFY_RE = re.compile(r"(?<![.\w$])java\.lang\.([A-Z][A-Za-z0-9_$]*)(?!\.[A-Za-z0-9_$])")
+
+    def __init__(
+        self,
+        symbol_table,
+        enable_preview_primitive_patterns: bool = False,
+        classpath: Optional[Sequence[str]] = None,
+        include_stdlib: bool = True,
+        max_class_major: Optional[int] = None,
+    ):
         self.symbols = symbol_table
         self.enable_preview_primitive_patterns = enable_preview_primitive_patterns
+        self._classpath: List[str] = list(classpath) if classpath is not None else []
+        self._include_stdlib: bool = include_stdlib
+        self._max_class_major: int = DEFAULT_MAX_CLASS_MAJOR if max_class_major is None else max_class_major
+        self._classpath_resolver = ExternalSymbolResolver(
+            classpath=self._classpath,
+            include_stdlib=include_stdlib,
+            max_class_major=self._max_class_major,
+        )
+        self._reported_classpath_diags: Set[Tuple[str, str]] = set()
+        self._checked_explicit_imports: Set[str] = set()
         self.errors = []
         self.unresolved_checks: List[str] = []
         self._in_early_construction_context = False
@@ -728,6 +1094,24 @@ class SemanticAnalyzer:
         self._inferred_types: Dict[int, str] = {}
         self._switch_yield_exprs_stack: List[List[Tuple[Optional[ASTNode], int]]] = []
         self._switch_expected_type_stack: List[Optional[str]] = []
+        self._flow_da: Set[Any] = set()
+        self._flow_du: Set[Any] = set()
+        self._flow_reachable: bool = True
+        self._flow_tracked: Dict[Any, Dict[str, Any]] = {}
+        self._flow_exit_frames: List[Dict[str, Any]] = []
+        self._flow_write_trackers: List[Set[Any]] = []
+        self._flow_pending_labels: Set[str] = set()
+        self._flow_suppress_errors: bool = False
+        self._flow_blank_final_fields: Dict[str, Dict[str, Any]] = {}
+        self._flow_in_delegating_ctor: bool = False
+        self._const_eval_stack: Set[Tuple[str, str]] = set()
+        self._capture_vars: Dict[str, Dict[str, Any]] = {}
+        self._capture_counter: int = 0
+        self._active_type_params: List[Dict[str, List[str]]] = []
+        self._subtype_visiting: Set[Tuple[str, str]] = set()
+        self._type_inference = JLS18ConstraintSolver(self)
+        self._exception_analyzer = ExceptionAnalyzer(self)
+        self._inheritance_analyzer = InheritanceAccessAnalyzer(self)
 
     def _save_exec_context(self) -> Dict[str, Any]:
         return {
@@ -751,6 +1135,19 @@ class SemanticAnalyzer:
             "lambda_rets": self._lambda_return_exprs_stack,
             "switch_yields": self._switch_yield_exprs_stack,
             "switch_expected": self._switch_expected_type_stack,
+            "flow_da": set(self._flow_da),
+            "flow_du": set(self._flow_du),
+            "flow_reachable": self._flow_reachable,
+            "flow_tracked": dict(self._flow_tracked),
+            "flow_exit_frames": self._flow_exit_frames,
+            "flow_write_trackers": self._flow_write_trackers,
+            "flow_pending_labels": self._flow_pending_labels,
+            "flow_suppress_errors": self._flow_suppress_errors,
+            "flow_blank_final_fields": self._flow_blank_final_fields,
+            "flow_in_delegating_ctor": self._flow_in_delegating_ctor,
+            "exc_frames": self._exception_analyzer.snapshot_frames(),
+            "tparams_snapshot": list(self._active_type_params),
+            "restore_flow": True,
         }
 
     def _restore_exec_context(self, saved: Dict[str, Any]):
@@ -774,6 +1171,21 @@ class SemanticAnalyzer:
         self._lambda_return_exprs_stack = saved["lambda_rets"]
         self._switch_yield_exprs_stack = saved["switch_yields"]
         self._switch_expected_type_stack = saved["switch_expected"]
+        if "tparams_snapshot" in saved:
+            self._active_type_params = list(saved["tparams_snapshot"])
+        if saved.get("restore_flow", True):
+            self._flow_da = saved["flow_da"]
+            self._flow_du = saved["flow_du"]
+            self._flow_reachable = saved["flow_reachable"]
+            self._flow_tracked = saved["flow_tracked"]
+            self._flow_exit_frames = saved["flow_exit_frames"]
+            self._flow_write_trackers = saved["flow_write_trackers"]
+            self._flow_pending_labels = saved["flow_pending_labels"]
+            self._flow_suppress_errors = saved["flow_suppress_errors"]
+            self._flow_blank_final_fields = saved["flow_blank_final_fields"]
+            self._flow_in_delegating_ctor = saved["flow_in_delegating_ctor"]
+            if "exc_frames" in saved:
+                self._exception_analyzer.restore_frames(saved["exc_frames"])
 
     def _enter_exec_context(
         self,
@@ -786,6 +1198,8 @@ class SemanticAnalyzer:
         is_static: Optional[bool] = None,
     ) -> Dict[str, Any]:
         saved = self._save_exec_context()
+        if kind == "switch_expression":
+            saved["restore_flow"] = False
         self._in_early_construction_context = False
         self._in_compact_constructor = is_compact
         self._compact_component_names = compact_names if compact_names is not None else set()
@@ -816,15 +1230,342 @@ class SemanticAnalyzer:
                     [{}] if kind in callable_roots else []
                 )
             self._local_type_scopes = [{}] if kind in callable_roots else []
+            self._flow_da = set()
+            self._flow_du = set()
+            self._flow_reachable = True
+            self._flow_tracked = {}
+            self._flow_exit_frames = []
+            self._flow_write_trackers = []
+            self._flow_pending_labels = set()
+            self._flow_in_delegating_ctor = False
+            if kind == "type_body":
+                self._flow_blank_final_fields = {}
         else:
             self._lambda_scope_floor_stack = list(self._lambda_scope_floor_stack)
             self._lambda_return_exprs_stack = list(self._lambda_return_exprs_stack)
             self._switch_yield_exprs_stack = list(self._switch_yield_exprs_stack)
             self._switch_expected_type_stack = list(self._switch_expected_type_stack)
+            if kind == "lambda":
+                # Lambda herda variáveis DA/tracked externas como leitura, mas tem fluxo próprio isolado
+                self._flow_da = set(self._flow_da)
+                self._flow_du = set(self._flow_du)
+                self._flow_reachable = True
+                self._flow_tracked = dict(self._flow_tracked)
+                self._flow_exit_frames = []
+                self._flow_write_trackers = []
+                self._flow_pending_labels = set()
         return saved
 
-    def analyze(self, program: ASTNode) -> List[SemanticError]:
-        """Executa a análise semântica sobre a árvore sintática."""
+    def _flow_snapshot(self) -> Tuple[Set[Any], Set[Any], bool]:
+        """Captura um retrato imutável do estado atual de atribuição definitiva (DA, DU, alcançável)."""
+        return (set(self._flow_da), set(self._flow_du), self._flow_reachable)
+
+    def _flow_restore(self, snap: Tuple[Set[Any], Set[Any], bool]):
+        """Restaura o estado atual de atribuição definitiva a partir de um retrato."""
+        da, du, reach = snap
+        self._flow_da = set(da)
+        self._flow_du = set(du)
+        self._flow_reachable = reach
+
+    def _flow_unreachable(self) -> Tuple[Set[Any], Set[Any], bool]:
+        """Retorna estado inalcançável (vacuamente DA e DU segundo JLS §16.1)."""
+        return (set(), set(), False)
+
+    def _flow_join_states(self, *states: Tuple[Set[Any], Set[Any], bool]) -> Tuple[Set[Any], Set[Any], bool]:
+        """Une múltiplos estados de fluxo na junção de caminhos (interseção de DA e DU para caminhos alcançáveis)."""
+        live = [(da, du) for da, du, reach in states if reach]
+        if not live:
+            return (set(), set(), False)
+        res_da = set(live[0][0])
+        res_du = set(live[0][1])
+        for da, du in live[1:]:
+            res_da &= da
+            res_du &= du
+        return (res_da, res_du, True)
+
+    def _flow_cleanup_scope(self, scope_dict: Optional[Dict[str, Dict[str, Any]]]):
+        """Remove variáveis de um bloco encerrado do rastreamento de fluxo para evitar colisão de IDs."""
+        if not scope_dict:
+            return
+        for info in scope_dict.values():
+            vid = ("local", id(info))
+            self._flow_da.discard(vid)
+            self._flow_du.discard(vid)
+            self._flow_tracked.pop(vid, None)
+
+    def _flow_record_write_id(self, vid: Any):
+        """Registra uma escrita alcançável em todos os rastreadores de escrita ativos (try/finally)."""
+        if not self._flow_reachable:
+            return
+        for tracker in self._flow_write_trackers:
+            tracker.add(vid)
+
+    def _flow_push_exit_frame(self, kind: str, labels: Optional[Set[str]] = None) -> Dict[str, Any]:
+        """Empilha quadro de desvio estruturado (loop, switch, label ou try_finally)."""
+        frame: Dict[str, Any] = {
+            "kind": kind,
+            "labels": set(labels or ()),
+            "breaks": [],
+            "continues": [],
+            "yields": [],
+            "returns": [],
+            "pending_breaks": [],
+            "pending_continues": [],
+            "pending_yields": [],
+            "pending_returns": [],
+        }
+        self._flow_exit_frames.append(frame)
+        return frame
+
+    def _flow_record_yield(self):
+        """Registra estado DA/DU de um 'yield' e encerra o fluxo normal subsequente."""
+        if not self._flow_reachable:
+            return
+        snap = self._flow_snapshot()
+        for frame in reversed(self._flow_exit_frames):
+            if frame["kind"] == "try_finally":
+                frame["pending_yields"].append(snap)
+                self._flow_reachable = False
+                return
+            if frame["kind"] == "switch_expr":
+                frame["yields"].append(snap)
+                self._flow_reachable = False
+                return
+        self._flow_reachable = False
+
+    def _flow_record_return(self):
+        """Registra saída por 'return' (para construtores com campos final) e encerra o fluxo normal."""
+        if not self._flow_reachable:
+            return
+        snap = self._flow_snapshot()
+        for frame in reversed(self._flow_exit_frames):
+            if frame["kind"] == "try_finally":
+                frame["pending_returns"].append(snap)
+                self._flow_reachable = False
+                return
+            if frame["kind"] == "callable":
+                frame["returns"].append(snap)
+                self._flow_reachable = False
+                return
+        self._flow_reachable = False
+
+    def _flow_record_break(self, label: Optional[str]):
+        """Registra estado DA/DU de um 'break' e encerra o fluxo normal subsequente."""
+        if not self._flow_reachable:
+            return
+        snap = self._flow_snapshot()
+        for frame in reversed(self._flow_exit_frames):
+            fkind = frame["kind"]
+            if fkind == "try_finally":
+                frame["pending_breaks"].append((label, snap))
+                self._flow_reachable = False
+                return
+            if label is not None:
+                if label in frame["labels"]:
+                    frame["breaks"].append(snap)
+                    self._flow_reachable = False
+                    return
+            else:
+                if fkind in ("loop", "switch"):
+                    frame["breaks"].append(snap)
+                    self._flow_reachable = False
+                    return
+        self._flow_reachable = False
+
+    def _flow_record_continue(self, label: Optional[str]):
+        """Registra estado DA/DU de um 'continue' e encerra o fluxo normal subsequente."""
+        if not self._flow_reachable:
+            return
+        snap = self._flow_snapshot()
+        for frame in reversed(self._flow_exit_frames):
+            fkind = frame["kind"]
+            if fkind == "try_finally":
+                frame["pending_continues"].append((label, snap))
+                self._flow_reachable = False
+                return
+            if label is not None:
+                if fkind == "loop" and label in frame["labels"]:
+                    frame["continues"].append(snap)
+                    self._flow_reachable = False
+                    return
+            else:
+                if fkind == "loop":
+                    frame["continues"].append(snap)
+                    self._flow_reachable = False
+                    return
+        self._flow_reachable = False
+
+    def _flow_forward_abrupt_through_finally(
+        self,
+        pending_breaks: List[Tuple[Optional[str], Tuple[Set[Any], Set[Any], bool]]],
+        pending_continues: List[Tuple[Optional[str], Tuple[Set[Any], Set[Any], bool]]],
+        finally_da_added: Set[Any],
+        finally_may_write: Set[Any],
+        finally_completes: bool,
+        pending_yields: Optional[List[Tuple[Set[Any], Set[Any], bool]]] = None,
+        pending_returns: Optional[List[Tuple[Set[Any], Set[Any], bool]]] = None,
+    ):
+        """Propaga desvios retidos por um try/finally aos quadros externos após passar pelo finally."""
+        if not finally_completes:
+            return
+        for lbl, (bda, bdu, breach) in pending_breaks:
+            new_snap = (bda | finally_da_added, bdu - finally_may_write, breach)
+            for frame in reversed(self._flow_exit_frames):
+                fkind = frame["kind"]
+                if fkind == "try_finally":
+                    frame["pending_breaks"].append((lbl, new_snap))
+                    break
+                if lbl is not None:
+                    if lbl in frame["labels"]:
+                        frame["breaks"].append(new_snap)
+                        break
+                elif fkind in ("loop", "switch"):
+                    frame["breaks"].append(new_snap)
+                    break
+        for lbl, (cda, cdu, creach) in pending_continues:
+            new_snap = (cda | finally_da_added, cdu - finally_may_write, creach)
+            for frame in reversed(self._flow_exit_frames):
+                fkind = frame["kind"]
+                if fkind == "try_finally":
+                    frame["pending_continues"].append((lbl, new_snap))
+                    break
+                if lbl is not None:
+                    if fkind == "loop" and lbl in frame["labels"]:
+                        frame["continues"].append(new_snap)
+                        break
+                elif fkind == "loop":
+                    frame["continues"].append(new_snap)
+                    break
+        for yda, ydu, yreach in (pending_yields or []):
+            new_snap = (yda | finally_da_added, ydu - finally_may_write, yreach)
+            for frame in reversed(self._flow_exit_frames):
+                if frame["kind"] == "try_finally":
+                    frame["pending_yields"].append(new_snap)
+                    break
+                if frame["kind"] == "switch_expr":
+                    frame["yields"].append(new_snap)
+                    break
+        for rda, rdu, rreach in (pending_returns or []):
+            new_snap = (rda | finally_da_added, rdu - finally_may_write, rreach)
+            for frame in reversed(self._flow_exit_frames):
+                if frame["kind"] == "try_finally":
+                    frame["pending_returns"].append(new_snap)
+                    break
+                if frame["kind"] == "callable":
+                    frame["returns"].append(new_snap)
+                    break
+
+    def _flow_check_read(self, name: str, line: int, is_this_qualified: bool = False):
+        """Verifica se variável local ou campo blank final foi definitivamente inicializado antes da leitura."""
+        if not self._flow_reachable or self._flow_suppress_errors or not name or name == "_":
+            return
+        if not is_this_qualified:
+            local_info = self._find_local_var_info(name)
+            if local_info is not None:
+                vid = ("local", id(local_info))
+                if vid in self._flow_tracked and vid not in self._flow_da:
+                    self.errors.append(
+                        SemanticError(f"A variável local '{name}' pode não ter sido inicializada (JLS §16).", line)
+                    )
+                return
+        if self._callable_kind in ("constructor", "initializer") and name in self._flow_blank_final_fields:
+            finfo = self._flow_blank_final_fields[name]
+            if is_this_qualified and finfo.get("is_static", False):
+                return
+            if finfo.get("is_final", False):
+                vid = finfo["vid"]
+                if vid in self._flow_tracked and vid not in self._flow_da:
+                    self.errors.append(
+                        SemanticError(f"O campo 'final' '{name}' pode não ter sido inicializado antes da leitura (JLS §16).", line)
+                    )
+
+    def _flow_apply_local_write(self, name: str, line: int, is_compound: bool = False, is_this_qualified: bool = False):
+        """Aplica escrita em variável local ou campo final conforme regras DA/DU da JLS §16."""
+        if not name or name == "_":
+            return
+        if not is_this_qualified:
+            local_info = self._find_local_var_info(name)
+            if local_info is not None:
+                vid = ("local", id(local_info))
+                if is_compound:
+                    if self._flow_reachable and not self._flow_suppress_errors:
+                        if vid in self._flow_tracked and vid not in self._flow_da:
+                            self.errors.append(
+                                SemanticError(f"A variável local '{name}' pode não ter sido inicializada (JLS §16).", line)
+                            )
+                        if local_info.get("is_final", False):
+                            self.errors.append(
+                                SemanticError(f"Não é possível modificar a variável 'final' '{name}'.", line)
+                            )
+                    self._record_lambda_capture(name, line)
+                    local_info["reassigned"] = True
+                    if self._flow_reachable:
+                        self._flow_da.add(vid)
+                        self._flow_du.discard(vid)
+                        self._flow_record_write_id(vid)
+                    return
+
+                # Atribuição simples '='
+                was_du = (vid in self._flow_du) if vid in self._flow_tracked else (not local_info.get("has_initializer", True))
+                if self._flow_reachable and not self._flow_suppress_errors:
+                    if local_info.get("is_final", False) and not was_du:
+                        self.errors.append(
+                            SemanticError(f"Não é possível modificar a variável 'final' '{name}'.", line)
+                        )
+                self._record_lambda_capture(name, line)
+                if not was_du:
+                    local_info["reassigned"] = True
+                else:
+                    local_info["has_initializer"] = True
+                if self._flow_reachable:
+                    self._flow_da.add(vid)
+                    self._flow_du.discard(vid)
+                    self._flow_record_write_id(vid)
+                return
+
+        if self._callable_kind in ("constructor", "initializer") and name in self._flow_blank_final_fields:
+            finfo = self._flow_blank_final_fields[name]
+            if finfo.get("is_final", False) and not self._flow_in_delegating_ctor:
+                if is_this_qualified and finfo.get("is_static", False):
+                    return
+                vid = finfo["vid"]
+                if is_compound:
+                    if self._flow_reachable and not self._flow_suppress_errors:
+                        self.errors.append(
+                            SemanticError(f"Não é possível modificar o campo 'final' '{name}' com operador composto.", line)
+                        )
+                    if self._flow_reachable:
+                        self._flow_da.add(vid)
+                        self._flow_du.discard(vid)
+                        self._flow_record_write_id(vid)
+                    return
+                if self._flow_reachable and not self._flow_suppress_errors and vid not in self._flow_du:
+                    self.errors.append(
+                        SemanticError(f"O campo 'final' '{name}' já pode ter sido inicializado (JLS §16).", line)
+                    )
+                if self._flow_reachable:
+                    self._flow_da.add(vid)
+                    self._flow_du.discard(vid)
+                    self._flow_record_write_id(vid)
+
+    def _snapshot_local_var_flags(self) -> List[Tuple[Dict[str, Any], bool, bool]]:
+        """Captura sinalizadores mutáveis de variáveis locais externas antes de passo especulativo de laço."""
+        saved = []
+        for scope in self._local_var_scopes:
+            for info in scope.values():
+                saved.append((info, info.get("has_initializer", True), info.get("reassigned", False)))
+        for scope in self._active_pattern_scopes:
+            for info in scope.values():
+                saved.append((info, info.get("has_initializer", True), info.get("reassigned", False)))
+        return saved
+
+    def _restore_local_var_flags(self, saved: List[Tuple[Dict[str, Any], bool, bool]]):
+        """Restaura sinalizadores mutáveis de variáveis locais externas após passo especulativo de laço."""
+        for info, has_init, reassigned in saved:
+            info["has_initializer"] = has_init
+            info["reassigned"] = reassigned
+
+    def _reset_analyzer_state(self):
         self.errors = []
         self.unresolved_checks = []
         self._in_early_construction_context = False
@@ -856,12 +1597,261 @@ class SemanticAnalyzer:
         self._validated_literal_ids: Set[int] = set()
         self._switch_yield_exprs_stack = []
         self._switch_expected_type_stack = []
+        self._flow_da = set()
+        self._flow_du = set()
+        self._flow_reachable = True
+        self._flow_tracked = {}
+        self._flow_exit_frames = []
+        self._flow_write_trackers = []
+        self._flow_pending_labels = set()
+        self._flow_suppress_errors = False
+        self._flow_blank_final_fields = {}
+        self._flow_in_delegating_ctor = False
+        self._const_eval_stack = set()
+        self._capture_vars = {}
+        self._capture_counter = 0
+        self._active_type_params = []
+        self._subtype_visiting = set()
+        self._reported_classpath_diags = set()
+        self._checked_explicit_imports = set()
+        self._exception_analyzer.reset()
+        self._inheritance_analyzer.reset()
+
+    def get_classpath_coverage(self) -> Dict[str, Any]:
+        """Retorna relatório honesto de cobertura da biblioteca padrão e classpath externo."""
+        return self._classpath_resolver.coverage_report()
+
+    def _flush_classpath_diagnostics(self, line: int = 1) -> None:
+        """Converte diagnósticos de classpath/bytecode (versão incompatível, corrupção, ausência) em mensagens semânticas."""
+        for diag in self._classpath_resolver.get_diagnostics():
+            key = (diag.kind, diag.target or diag.message)
+            if key in self._reported_classpath_diags:
+                continue
+            self._reported_classpath_diags.add(key)
+            if diag.kind in ("unsupported_class_version", "corrupt_classfile"):
+                self.errors.append(SemanticError(diag.message, line))
+            elif diag.kind == "missing_entry":
+                self._record_unresolved(diag.message)
+
+    def _current_import_context(self) -> Tuple[str, List[Tuple[str, bool]]]:
+        """Retorna (pacote_atual, lista[(nome_import, is_wildcard)]) da CompilationUnit ativa."""
+        pkg = getattr(self._inheritance_analyzer, "_current_unit_package", "") or ""
+        unit = getattr(self._inheritance_analyzer, "_current_unit", None)
+        imports: List[Tuple[str, bool]] = []
+        if unit is not None:
+            for imp in getattr(unit, "imports", []) or []:
+                if not getattr(imp, "is_static", False) and getattr(imp, "name", None):
+                    is_wild = bool(getattr(imp, "is_wildcard", False))
+                    iname = imp.name[:-2] if (is_wild and imp.name.endswith(".*")) else imp.name
+                    imports.append((iname, is_wild))
+        return pkg, imports
+
+    def _format_ext_type(self, type_str: Optional[str]) -> Optional[str]:
+        """Normaliza FQNs java.lang.<Nome> vindos do bytecode para compatibilidade com tipos simples quando não sombreados."""
+        if not type_str:
+            return type_str
+        def _repl(match: re.Match) -> str:
+            sname = match.group(1)
+            if "$" in sname:
+                return f"java.lang.{sname.replace('$', '.')}"
+            if self._lookup_type_decl(sname) is not None:
+                return match.group(0)
+            return sname
+        return self._JAVA_LANG_SIMPLIFY_RE.sub(_repl, type_str)
+
+    def _is_partial_external_stdlib(self, ext: ExternalTypeInfo) -> bool:
+        """Indica se o tipo pertence à stdlib carregada a partir de uma JDK/JRE anterior ao alvo Java 26."""
+        return self._classpath_resolver.is_older_stdlib() and ext.fqn.startswith(("java.", "javax.", "jdk.", "sun."))
+
+
+    def _lookup_internal_type_key(self, raw_base: Optional[str], context_type: Optional[str] = None) -> Optional[str]:
+        """Resolve chave canônica somente se o tipo pertencer às unidades de compilação internas."""
+        if not raw_base:
+            return None
+        key = self._inheritance_analyzer.resolve_type_key(raw_base, context_type=context_type)
+        if key is not None and (key in self._inheritance_analyzer._type_meta or self._lookup_type_decl(key) is not None):
+            return key
+        return None
+
+    def _resolve_external_type(self, type_name: Optional[str]) -> Optional[ExternalTypeInfo]:
+        """Resolve tipo externo no classpath respeitando estritamente a precedência dos tipos declarados na unidade."""
+        if not type_name:
+            return None
+        clean = self._strip_leading_type_annotations(type_name) or type_name
+        stripped = self._strip_generics(clean)
+        if not stripped:
+            return None
+        base, _ = self._split_type_dims(stripped)
+        if not base or base in self.PRIMITIVE_TYPES or base in ("void", "var", "null", "desconhecido"):
+            return None
+        if self._is_capture_var(base) or self._is_wildcard_arg(base) or self._lookup_type_param_bounds(base) is not None:
+            return None
+
+        # Precedência absoluta da unidade de compilação (JLS §6.5 / Requisito 12)
+        simple = base.split(".")[-1]
+        for lscope in reversed(self._local_declared_type_scopes):
+            if base in lscope or ("." not in base and simple in lscope):
+                return None
+        internal_key = self._inheritance_analyzer.resolve_type_key(base)
+        if internal_key is not None and internal_key in self._inheritance_analyzer._type_meta:
+            return None
+        if "." not in base and self._lookup_type_decl(base) is not None:
+            return None
+
+        pkg, imports = self._current_import_context()
+        ext = self._classpath_resolver.resolve_type(
+            base,
+            current_package=pkg,
+            imports=imports,
+            compat_fqns=self.BUILTIN_COMPAT_FQNS,
+        )
+        self._flush_classpath_diagnostics(line=1)
+        return ext
+
+    def _validate_unit_imports(self, unit: CompilationUnit) -> None:
+        """Verifica imports explícitos não-estáticos contra tipos internos, compatíveis ou bytecode externo."""
+        self._flush_classpath_diagnostics(line=1)
+        for imp in getattr(unit, "imports", []) or []:
+            if getattr(imp, "is_static", False) or getattr(imp, "is_wildcard", False):
+                continue
+            iname = getattr(imp, "name", None)
+            if not iname or iname in self._checked_explicit_imports:
+                continue
+            self._checked_explicit_imports.add(iname)
+            iline = getattr(imp, "line", 1)
+            if iname in self._inheritance_analyzer._type_meta:
+                continue
+            ext = self._classpath_resolver.get_type_info_by_fqn(iname)
+            self._flush_classpath_diagnostics(line=iline)
+            if ext is not None:
+                ok, reason = self._inheritance_analyzer.is_type_accessible(ext.fqn)
+                if not ok and reason:
+                    self.errors.append(SemanticError(reason, iline))
+                continue
+            simple = iname.split(".")[-1]
+            if self.BUILTIN_COMPAT_FQNS.get(simple) == iname:
+                continue
+            self._record_unresolved(
+                f"Classe ou interface importada '{iname}' não encontrada no classpath ou biblioteca padrão (linha {iline})."
+            )
+
+    def _ext_field_to_dict(self, finfo: ExternalFieldInfo, ext_owner: ExternalTypeInfo, tvar_map: Dict[str, str]) -> Dict[str, Any]:
+        """Converte metadados de campo de bytecode para o formato interno do analisador semântico."""
+        raw_t = self._format_ext_type(finfo.type) or finfo.type or "Object"
+        ftype = self._substitute_type_vars(raw_t, tvar_map) or raw_t
+        cat = "constante_interface" if ext_owner.kind == "interface" else ("constante_enum" if finfo.is_static and finfo.is_final and ext_owner.kind == "enum" else "campo")
+        return {
+            "type": ftype,
+            "is_static": finfo.is_static,
+            "is_final": finfo.is_final,
+            "category": cat,
+            "owner": ext_owner.simple_name,
+            "owner_key": ext_owner.fqn,
+            "access": finfo.access,
+            "constant_value": finfo.constant_value,
+        }
+
+
+    _COMPAT_DEDUP_RE = re.compile(
+        r"(?<![.\w$])(" + "|".join(sorted(BUILTIN_COMPAT_FQNS.keys(), key=len, reverse=True)) + r")(?![.\w$])"
+    )
+
+    def _sig_dedup_key(
+        self,
+        params: List[str],
+        varargs: bool,
+        sig: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[Any, ...]:
+        """Normaliza assinaturas de bytecode e BUILTIN_METHODS para evitar duplicatas no resolvedor de sobrecarga."""
+        canon_params = tuple(
+            self._COMPAT_DEDUP_RE.sub(lambda m: self.BUILTIN_COMPAT_FQNS[m.group(1)], prm or "")
+            for prm in params
+        )
+        tparams = (sig or {}).get("tparams") or []
+        if not tparams:
+            return (canon_params, bool(varargs))
+        tparam_bounds = (sig or {}).get("tparam_bounds") or {}
+        canon_tparams = tuple(
+            (
+                tp,
+                tuple(
+                    self._COMPAT_DEDUP_RE.sub(lambda m: self.BUILTIN_COMPAT_FQNS[m.group(1)], b or "")
+                    for b in (tparam_bounds.get(tp) or ["Object"])
+                ),
+            )
+            for tp in tparams
+        )
+        return (canon_params, bool(varargs), canon_tparams)
+
+    def _ext_method_to_sig(self, minfo: ExternalMethodInfo, ext_owner: ExternalTypeInfo, tvar_map: Dict[str, str]) -> Dict[str, Any]:
+        """Converte metadados de método/construtor de bytecode para assinatura de sobrecarga e herança."""
+        params: List[str] = []
+        raw_params = list(minfo.params or [])
+        for idx, p in enumerate(raw_params):
+            fmt_p = self._format_ext_type(p) or p
+            if minfo.varargs and idx == len(raw_params) - 1 and fmt_p.endswith("[]"):
+                fmt_p = fmt_p[:-2]
+            if tvar_map:
+                fmt_p = self._substitute_type_vars(fmt_p, tvar_map) or fmt_p
+            params.append(fmt_p)
+
+        if minfo.is_constructor:
+            ret_t = ext_owner.simple_name
+        else:
+            raw_ret = self._format_ext_type(minfo.ret) or minfo.ret or "void"
+            ret_t = (self._substitute_type_vars(raw_ret, tvar_map) or raw_ret) if tvar_map else raw_ret
+
+        tparam_bounds: Dict[str, List[str]] = {}
+        for tp in minfo.tparams:
+            bs = minfo.tparam_bounds.get(tp, ["java.lang.Object"])
+            tparam_bounds[tp] = [self._format_ext_type(b) or b for b in bs] or ["Object"]
+
+        throws_list: List[str] = []
+        for th in minfo.throws:
+            fmt_th = self._format_ext_type(th) or th
+            if tvar_map:
+                fmt_th = self._substitute_type_vars(fmt_th, tvar_map) or fmt_th
+            throws_list.append(fmt_th)
+
+        return {
+            "name": minfo.name,
+            "params": params,
+            "ret": ret_t,
+            "static": minfo.static,
+            "varargs": minfo.varargs,
+            "tparams": list(minfo.tparams),
+            "tparam_bounds": tparam_bounds,
+            "throws": throws_list,
+            "owner": ext_owner.simple_name,
+            "owner_key": ext_owner.fqn,
+            "owner_kind": ext_owner.kind,
+            "access": minfo.access,
+            "is_abstract": minfo.is_abstract,
+            "is_final": minfo.is_final,
+            "is_default": minfo.is_default,
+        }
+
+    def _collect_unit_static_imports(self, unit: CompilationUnit):
+        self._static_imports = set()
+        self._has_wildcard_static_import = False
+        for imp in getattr(unit, "imports", []):
+            if getattr(imp, "is_static", False):
+                if getattr(imp, "is_wildcard", False):
+                    self._has_wildcard_static_import = True
+                elif getattr(imp, "name", None):
+                    self._static_imports.add(imp.name.split(".")[-1])
+
+    def analyze(self, program: ASTNode) -> List[SemanticError]:
+        """Executa a análise semântica sobre a árvore sintática."""
+        self._reset_analyzer_state()
         if not program:
             return self.errors
 
         # 1. Pré-indexa tipos e imports estáticos e analisa Unidade de Compilação completa
         if isinstance(program, CompilationUnit):
             self._preindex_compilation_unit(program)
+            self._inheritance_analyzer.set_current_unit(program)
+            self._validate_unit_imports(program)
             if program.package is not None:
                 pkg_annos = [
                     m for m in getattr(program.package, "modifiers", [])
@@ -875,29 +1865,85 @@ class SemanticAnalyzer:
 
         # 2. Analisa comandos didáticos de nível superior ou fragmentos
         statements = getattr(program, "statements", [])
-        for stmt in statements:
-            self.analyze_statement(stmt)
+        if statements:
+            self._local_var_scopes = [{}]
+            self._active_pattern_scopes = [{}]
+            self._flow_da = set()
+            self._flow_du = set()
+            self._flow_reachable = True
+            self._flow_tracked = {}
+            self._flow_exit_frames = []
+            self._flow_write_trackers = []
+            self._flow_pending_labels = set()
+            self._exception_analyzer.push_callable_frame("top_level", "escopo superior", [], enforce_unreported=False)
+            try:
+                self._check_stmt_list_with_flow(statements)
+            finally:
+                self._exception_analyzer.pop_callable_frame()
+
+        return self.errors
+
+    def analyze_units(self, units: List[ASTNode]) -> List[SemanticError]:
+        """Executa a análise semântica conjunta sobre múltiplas CompilationUnits (multi-pacote)."""
+        self._reset_analyzer_state()
+        if not units:
+            return self.errors
+
+        # Passada 1: pré-indexa todos os tipos de todas as unidades antes de validar referências cruzadas
+        for unit in units:
+            if isinstance(unit, CompilationUnit):
+                self._preindex_compilation_unit(unit)
+
+        # Passada 2: analisa cada unidade com seu próprio contexto de pacote e imports
+        for unit in units:
+            if isinstance(unit, CompilationUnit):
+                self._inheritance_analyzer.set_current_unit(unit)
+                self._collect_unit_static_imports(unit)
+                self._validate_unit_imports(unit)
+                if unit.package is not None:
+                    pkg_annos = [
+                        m for m in getattr(unit.package, "modifiers", [])
+                        if isinstance(m, Annotation)
+                    ]
+                    if not pkg_annos and getattr(unit.package, "annotations", None):
+                        pkg_annos = list(unit.package.annotations)
+                    self._analyze_annotations(pkg_annos, valid_targets={"PACKAGE"})
+                for type_decl in unit.type_declarations:
+                    self._analyze_type_declaration(type_decl, is_nested=False, is_local=False)
+
+            statements = getattr(unit, "statements", [])
+            if statements:
+                self._local_var_scopes = [{}]
+                self._active_pattern_scopes = [{}]
+                self._flow_da = set()
+                self._flow_du = set()
+                self._flow_reachable = True
+                self._flow_tracked = {}
+                self._flow_exit_frames = []
+                self._flow_write_trackers = []
+                self._flow_pending_labels = set()
+                self._exception_analyzer.push_callable_frame("top_level", "escopo superior", [], enforce_unreported=False)
+                try:
+                    self._check_stmt_list_with_flow(statements)
+                finally:
+                    self._exception_analyzer.pop_callable_frame()
 
         return self.errors
 
     def _preindex_compilation_unit(self, unit: CompilationUnit):
         """Pré-indexa classes, interfaces, enums, records e @interfaces declarados na unidade."""
-        for imp in getattr(unit, "imports", []):
-            if getattr(imp, "is_static", False):
-                if getattr(imp, "is_wildcard", False):
-                    self._has_wildcard_static_import = True
-                elif getattr(imp, "name", None):
-                    self._static_imports.add(imp.name.split(".")[-1])
+        self._collect_unit_static_imports(unit)
+        self._inheritance_analyzer.register_unit_types(unit)
 
         def visit_type(node: ASTNode):
             if isinstance(node, AnnotationInterfaceDeclaration):
-                self._declared_types[node.name] = ("annotation_interface", node)
-                self._annotation_interfaces[node.name] = node
+                self._declared_types.setdefault(node.name, ("annotation_interface", node))
+                self._annotation_interfaces.setdefault(node.name, node)
                 for m in node.members:
                     visit_type(m)
             elif isinstance(node, EnumDeclaration):
-                self._declared_types[node.name] = ("enum", node)
-                self._enums[node.name] = node
+                self._declared_types.setdefault(node.name, ("enum", node))
+                self._enums.setdefault(node.name, node)
                 for m in node.members:
                     visit_type(m)
                 for c in node.constants:
@@ -905,15 +1951,15 @@ class SemanticAnalyzer:
                         for cm in c.body.members:
                             visit_type(cm)
             elif isinstance(node, RecordDeclaration):
-                self._declared_types[node.name] = ("record", node)
+                self._declared_types.setdefault(node.name, ("record", node))
                 for m in node.members:
                     visit_type(m)
             elif isinstance(node, InterfaceDeclaration):
-                self._declared_types[node.name] = ("interface", node)
+                self._declared_types.setdefault(node.name, ("interface", node))
                 for m in node.members:
                     visit_type(m)
             elif isinstance(node, ClassDeclaration):
-                self._declared_types[node.name] = ("class", node)
+                self._declared_types.setdefault(node.name, ("class", node))
                 for m in node.members:
                     visit_type(m)
 
@@ -929,11 +1975,13 @@ class SemanticAnalyzer:
         def visit_local(n: ASTNode):
             if isinstance(n, AnnotationInterfaceDeclaration):
                 target.setdefault(n.name, ("annotation_interface", n))
+                self._inheritance_analyzer.register_local_type(n, "annotation_interface")
                 for m in n.members:
                     visit_local(m)
             elif isinstance(n, EnumDeclaration):
                 target.setdefault(n.name, ("enum", n))
                 self._enums.setdefault(n.name, n)
+                self._inheritance_analyzer.register_local_type(n, "enum")
                 for m in n.members:
                     visit_local(m)
                 for c in n.constants:
@@ -942,14 +1990,17 @@ class SemanticAnalyzer:
                             visit_local(cm)
             elif isinstance(n, RecordDeclaration):
                 target.setdefault(n.name, ("record", n))
+                self._inheritance_analyzer.register_local_type(n, "record")
                 for m in n.members:
                     visit_local(m)
             elif isinstance(n, InterfaceDeclaration):
                 target.setdefault(n.name, ("interface", n))
+                self._inheritance_analyzer.register_local_type(n, "interface")
                 for m in n.members:
                     visit_local(m)
             elif isinstance(n, ClassDeclaration):
                 target.setdefault(n.name, ("class", n))
+                self._inheritance_analyzer.register_local_type(n, "class")
                 for m in n.members:
                     visit_local(m)
 
@@ -958,8 +2009,10 @@ class SemanticAnalyzer:
     def _analyze_type_declaration(self, type_decl: ASTNode, is_nested: bool = False, is_local: bool = False):
         """Despacha a análise semântica para declarações de tipo (class, interface, enum, record, @interface, module)."""
         tname = getattr(type_decl, "name", None)
+        pushed_key = None
         if tname and not isinstance(type_decl, ModuleDeclaration):
             self._enclosing_type_names.append(tname)
+            pushed_key = self._inheritance_analyzer.push_enclosing_type(type_decl)
         saved_is_local = self._current_type_is_local
         self._current_type_is_local = is_local
         if is_local:
@@ -981,6 +2034,7 @@ class SemanticAnalyzer:
         finally:
             self._current_type_is_local = saved_is_local
             if tname and not isinstance(type_decl, ModuleDeclaration):
+                self._inheritance_analyzer.pop_enclosing_type(pushed_key)
                 self._enclosing_type_names.pop()
 
     def _effective_access(self, modifiers: List[str]) -> int:
@@ -1075,6 +2129,7 @@ class SemanticAnalyzer:
         member: FieldDeclaration,
         container_label: str = "classe",
         is_interface_constant: bool = False,
+        collected_inst_throws: Optional[List[Tuple[str, int, str]]] = None,
     ):
         """Analisa declarações de campo ou constantes de interface, registrando símbolos e validando '_' e inicializadores."""
         self._analyze_annotations(
@@ -1106,14 +2161,23 @@ class SemanticAnalyzer:
                         SemanticError(f"Constante de interface '{member.name}' deve possuir inicializador (JLS §9.3).", member.line)
                     )
                 eff_type = getattr(member, "effective_type", member.type_ref.full_name)
-                is_const = is_final and member.initializer is not None and self._is_compile_time_constant_expr(member.initializer)
+                const_res = self._resolve_constant_var_declaration(eff_type, is_final, member.initializer)
+                is_const = const_res is not None
+                decl_extra = {"const_typed": const_res} if is_const else {}
                 if not self.symbols.declare(
                     member.name, eff_type, member.line, category=category,
-                    is_static=is_static, is_final=is_final, is_compile_constant=is_const,
+                    is_static=is_static, is_final=is_final, is_compile_constant=is_const, **decl_extra
                 ):
                     self.errors.append(SemanticError(f"{dup_noun} '{member.name}' declarado novamente na {container_label}.", member.line))
             if member.initializer is not None:
                 init_ctx = self._enter_exec_context("field_initializer", return_type=None, is_static=is_static, share_locals=False)
+                defer_inst = (not is_static) and (collected_inst_throws is not None)
+                exc_frame = self._exception_analyzer.push_callable_frame(
+                    "initializer",
+                    f"inicializador do campo '{member.name}'",
+                    allowed_throws=[],
+                    enforce_unreported=not defer_inst,
+                )
                 try:
                     if eff_type and eff_type != "var":
                         self._check_expression_with_target(member.initializer, eff_type)
@@ -1122,6 +2186,9 @@ class SemanticAnalyzer:
                         self.check_expression(member.initializer)
                     self._check_lambda_capture_boundaries()
                 finally:
+                    popped = self._exception_analyzer.pop_callable_frame()
+                    if defer_inst and popped is not None and collected_inst_throws is not None:
+                        collected_inst_throws.extend(popped.get("thrown", []))
                     self._restore_exec_context(init_ctx)
             return
 
@@ -1143,14 +2210,23 @@ class SemanticAnalyzer:
                 )
 
             eff_type = decl.effective_type
-            is_const = is_final and decl.initializer is not None and self._is_compile_time_constant_expr(decl.initializer)
+            const_res = self._resolve_constant_var_declaration(eff_type, is_final, decl.initializer)
+            is_const = const_res is not None
+            decl_extra = {"const_typed": const_res} if is_const else {}
             if not self.symbols.declare(
                 decl.name, eff_type, decl.line, category=category,
-                is_static=is_static, is_final=is_final, is_compile_constant=is_const,
+                is_static=is_static, is_final=is_final, is_compile_constant=is_const, **decl_extra
             ):
                 self.errors.append(SemanticError(f"{dup_noun} '{decl.name}' declarado novamente na {container_label}.", decl.line))
             if decl.initializer is not None:
                 init_ctx = self._enter_exec_context("field_initializer", return_type=None, is_static=is_static, share_locals=False)
+                defer_inst = (not is_static) and (collected_inst_throws is not None)
+                self._exception_analyzer.push_callable_frame(
+                    "initializer",
+                    f"inicializador do campo '{decl.name}'",
+                    allowed_throws=[],
+                    enforce_unreported=not defer_inst,
+                )
                 try:
                     if eff_type and eff_type != "var":
                         self._check_expression_with_target(decl.initializer, eff_type)
@@ -1159,36 +2235,73 @@ class SemanticAnalyzer:
                         self.check_expression(decl.initializer)
                     self._check_lambda_capture_boundaries()
                 finally:
+                    popped = self._exception_analyzer.pop_callable_frame()
+                    if defer_inst and popped is not None and collected_inst_throws is not None:
+                        collected_inst_throws.extend(popped.get("thrown", []))
                     self._restore_exec_context(init_ctx)
 
-    def _analyze_method_member(self, member: MethodDeclaration):
+    def _analyze_method_member(
+        self,
+        member: MethodDeclaration,
+        owner_type: Optional[str] = None,
+        is_anonymous: bool = False,
+        owner_kind: str = "class",
+        owner_modifiers: Optional[List[str]] = None,
+    ):
         """Registra um método e analisa annotations, type parameters, parâmetros e corpo em escopo isolado."""
         self._analyze_annotations(
             getattr(member, "annotations", []),
             valid_targets={"METHOD"},
             adjacent_type_ref=getattr(member, "return_type", None),
         )
-        self._check_type_parameters_annotations(getattr(member, "type_parameters", []))
-        self._check_type_ref_annotations(getattr(member, "return_type", None))
-        for da in getattr(member, "dims_annotations", []):
-            self._analyze_annotations(da, valid_targets={"TYPE_USE"})
-        for tt in getattr(member, "throws_types", []):
-            self._check_type_ref_annotations(tt)
-        recv = getattr(member, "receiver_parameter", None)
-        if recv is not None:
-            self._analyze_annotations(getattr(recv, "annotations", []), valid_targets={"TYPE_USE"})
-            self._check_type_ref_annotations(getattr(recv, "type_ref", None))
-
         eff_ret_type = member.effective_return_type
-        if getattr(member, "return_type", None) is not None and getattr(member.return_type, "name", None) == "var":
-            self.errors.append(
-                SemanticError("'var' não é permitido como tipo de retorno de método (JLS §8.4 / §14.4).", member.line)
-            )
         is_static = "static" in member.modifiers
         self.symbols.declare(member.name, eff_ret_type, member.line, category="metodo", is_static=is_static)
         self.symbols.enter_scope()
         saved_ctx = self._enter_exec_context("method", return_type=eff_ret_type, is_static=is_static)
+        self._push_type_params(getattr(member, "type_parameters", []), is_type_level=False)
+        pushed_exc_frame = False
         try:
+            self._check_type_parameters_annotations(getattr(member, "type_parameters", []))
+            self._check_type_ref_annotations(getattr(member, "return_type", None))
+            for da in getattr(member, "dims_annotations", []):
+                self._analyze_annotations(da, valid_targets={"TYPE_USE"})
+            for tt in getattr(member, "throws_types", []):
+                self._check_type_ref_annotations(tt)
+            recv = getattr(member, "receiver_parameter", None)
+            if recv is not None:
+                self._analyze_annotations(getattr(recv, "annotations", []), valid_targets={"TYPE_USE"})
+                self._check_type_ref_annotations(getattr(recv, "type_ref", None))
+
+            if getattr(member, "return_type", None) is not None and getattr(member.return_type, "name", None) == "var":
+                self.errors.append(
+                    SemanticError("'var' não é permitido como tipo de retorno de método (JLS §8.4 / §14.4).", member.line)
+                )
+
+            eff_owner = owner_type or self._inheritance_analyzer.current_enclosing_key() or (self._enclosing_type_names[-1] if self._enclosing_type_names else "")
+            allowed_throws = self._exception_analyzer.validate_throws_clause(
+                getattr(member, "throws_types", []), member.line
+            )
+            msig = self._extract_method_sig(member, eff_owner, owner_kind=owner_kind)
+            msig["name"] = member.name
+            self._inheritance_analyzer.validate_method_declaration(
+                eff_owner,
+                member,
+                msig,
+                is_anonymous=is_anonymous,
+                owner_kind=owner_kind,
+                owner_modifiers=owner_modifiers,
+            )
+            self._exception_analyzer.validate_method_override(
+                eff_owner, member, msig, is_anonymous=is_anonymous
+            )
+            self._exception_analyzer.push_callable_frame(
+                "method",
+                f"método '{member.name}'",
+                allowed_throws=allowed_throws,
+                enforce_unreported=True,
+            )
+            pushed_exc_frame = True
             for p in member.parameters:
                 self._analyze_annotations(
                     getattr(p, "annotations", []),
@@ -1219,8 +2332,59 @@ class SemanticAnalyzer:
                 self.analyze_block(member.body)
             self._check_lambda_capture_boundaries()
         finally:
+            if pushed_exc_frame:
+                self._exception_analyzer.pop_callable_frame()
             self._restore_exec_context(saved_ctx)
-        self.symbols.exit_scope()
+            self.symbols.exit_scope()
+
+    def _emit_ctor_invocation_throws(
+        self,
+        owner_name: Optional[str],
+        inv: Optional[ASTNode],
+        line: int,
+        is_enum: bool = False,
+    ):
+        """Propaga exceções verificadas de 'super(...)' explícito/implícito ou 'this(...)' no construtor."""
+        if not owner_name or is_enum:
+            return
+        if isinstance(inv, AlternateConstructorInvocation):
+            target_cls = owner_name
+            args = list(getattr(inv, "arguments", []) or [])
+            desc = "invocação 'this(...)'"
+            inv_line = getattr(inv, "line", line)
+        else:
+            tdecl = self._lookup_type_decl(owner_name)
+            if tdecl is None or tdecl[0] != "class":
+                return
+            ext = getattr(tdecl[1], "extends_type", None)
+            if ext is None:
+                return
+            target_cls = self._normalize_type_str(ext)
+            if not target_cls:
+                return
+            args = list(getattr(inv, "arguments", []) or []) if isinstance(inv, SuperclassConstructorInvocation) else []
+            desc = "invocação 'super(...)'" if inv is not None else "construtor padrão implícito 'super()'"
+            inv_line = getattr(inv, "line", line) if inv is not None else line
+
+        ctors, is_known, _ = self._collect_type_constructors(target_cls)
+        if not is_known:
+            self._exception_analyzer.mark_unresolved_thrower()
+            return
+        if ctors:
+            win_sig, _, _ = self._resolve_overload(ctors, args, inv_line, f"{target_cls}(...)")
+            if win_sig is not None:
+                is_super_ctor = not isinstance(inv, AlternateConstructorInvocation)
+                ctor_owner = win_sig.get("owner_key") or win_sig.get("owner") or target_cls
+                self._inheritance_analyzer.check_member_access(
+                    ctor_owner,
+                    win_sig.get("access", "public"),
+                    False,
+                    "construtor",
+                    self._simple_base_name(target_cls) or target_cls,
+                    inv_line,
+                    via_super=is_super_ctor,
+                )
+                self._exception_analyzer.emit_thrown(win_sig.get("throws", []), inv_line, desc)
 
     def _analyze_constructor_member(
         self,
@@ -1229,8 +2393,10 @@ class SemanticAnalyzer:
         is_enum: bool = False,
         is_compact: bool = False,
         derived_components: Optional[List[RecordComponent]] = None,
+        seed_flow: Optional[Tuple[Set[Any], Set[Any]]] = None,
     ):
         """Analisa construtor de classe, enum ou record, gerenciando early construction context e regras compactas."""
+        self._inheritance_analyzer.validate_constructor_modifiers(member)
         if expected_name is not None and member.name != expected_name:
             self.errors.append(
                 SemanticError(f"Nome do construtor '{member.name}' não corresponde ao tipo declarador '{expected_name}'.", member.line)
@@ -1247,13 +2413,6 @@ class SemanticAnalyzer:
                     )
 
         self._analyze_annotations(getattr(member, "annotations", []), valid_targets={"CONSTRUCTOR"})
-        self._check_type_parameters_annotations(getattr(member, "type_parameters", []))
-        for tt in getattr(member, "throws_types", []):
-            self._check_type_ref_annotations(tt)
-        recv = getattr(member, "receiver_parameter", None)
-        if recv is not None:
-            self._analyze_annotations(getattr(recv, "annotations", []), valid_targets={"TYPE_USE"})
-            self._check_type_ref_annotations(getattr(recv, "type_ref", None))
 
         self.symbols.declare(member.name, member.name, member.line, category="construtor")
         self.symbols.enter_scope()
@@ -1271,7 +2430,38 @@ class SemanticAnalyzer:
             compact_names=derived_names if is_compact else set(),
             is_static=False,
         )
+        self._push_type_params(getattr(member, "type_parameters", []), is_type_level=False)
+        pushed_exc_frame = False
+        ctor_owner = expected_name or (self._enclosing_type_names[-1] if self._enclosing_type_names else member.name)
         try:
+            self._check_type_parameters_annotations(getattr(member, "type_parameters", []))
+            for tt in getattr(member, "throws_types", []):
+                self._check_type_ref_annotations(tt)
+            recv = getattr(member, "receiver_parameter", None)
+            if recv is not None:
+                self._analyze_annotations(getattr(recv, "annotations", []), valid_targets={"TYPE_USE"})
+                self._check_type_ref_annotations(getattr(recv, "type_ref", None))
+
+            allowed_ctor_throws = self._exception_analyzer.validate_throws_clause(
+                getattr(member, "throws_types", []), member.line
+            )
+            self._exception_analyzer.push_callable_frame(
+                "constructor",
+                f"construtor '{member.name}'",
+                allowed_throws=allowed_ctor_throws,
+                enforce_unreported=True,
+            )
+            pushed_exc_frame = True
+            if seed_flow is not None:
+                seed_da, seed_du = seed_flow
+                self._flow_da |= set(seed_da)
+                self._flow_du |= set(seed_du)
+                for fn, fi in self._flow_blank_final_fields.items():
+                    self._flow_tracked[fi["vid"]] = {"name": fn, "is_final": True, "kind": "field", "line": fi["line"]}
+
+            ctor_frame = self._flow_push_exit_frame("callable")
+            ctor_frame["returns"] = []
+
             if is_compact and derived_components is not None:
                 for comp in derived_components:
                     if comp.name != "_":
@@ -1313,6 +2503,7 @@ class SemanticAnalyzer:
             if member.body:
                 if isinstance(member.body, ConstructorBody):
                     inv = member.body.constructor_invocation
+                    self._flow_in_delegating_ctor = isinstance(inv, AlternateConstructorInvocation)
                     if is_enum and isinstance(inv, SuperclassConstructorInvocation):
                         self.errors.append(
                             SemanticError(f"Construtor de enum '{expected_name or member.name}' não pode conter invocação explícita 'super(...)' (JLS §8.9.2).", inv.line)
@@ -1321,8 +2512,7 @@ class SemanticAnalyzer:
                         # 1. Prólogo (Early Construction Context - JLS §8.8.7 / JEP 513)
                         self._in_early_construction_context = True
                         try:
-                            for s in member.body.prologue:
-                                self.analyze_statement(s)
+                            self._check_stmt_list_with_flow(member.body.prologue)
                         finally:
                             self._in_early_construction_context = False
 
@@ -1334,21 +2524,83 @@ class SemanticAnalyzer:
                         finally:
                             self._in_early_construction_context = False
 
+                        self._emit_ctor_invocation_throws(ctor_owner, inv, member.line, is_enum=is_enum)
+
                         # 3. Epílogo (contexto normal com superclasse já inicializada)
-                        for s in member.body.epilogue:
-                            self.analyze_statement(s)
+                        self._check_stmt_list_with_flow(member.body.epilogue)
                     else:
-                        for s in member.body.prologue:
-                            self.analyze_statement(s)
-                        for s in member.body.epilogue:
-                            self.analyze_statement(s)
+                        self._emit_ctor_invocation_throws(ctor_owner, None, member.line, is_enum=is_enum)
+                        self._check_stmt_list_with_flow(member.body.prologue)
+                        self._check_stmt_list_with_flow(member.body.epilogue)
                 elif isinstance(member.body, Block):
+                    self._emit_ctor_invocation_throws(ctor_owner, None, member.line, is_enum=is_enum)
                     self.analyze_block(member.body)
+
+            if self._flow_exit_frames and self._flow_exit_frames[-1] is ctor_frame:
+                self._flow_exit_frames.pop()
+            if not self._flow_in_delegating_ctor and self._flow_blank_final_fields:
+                exit_states = list(ctor_frame.get("returns", []))
+                if self._flow_reachable:
+                    exit_states.append(self._flow_snapshot())
+                joined_exit = self._flow_join_states(*exit_states) if exit_states else self._flow_unreachable()
+                if joined_exit[2]:
+                    for fn, fi in self._flow_blank_final_fields.items():
+                        if not fi["is_static"] and fi["is_final"] and fi["vid"] not in joined_exit[0]:
+                            self.errors.append(
+                                SemanticError(
+                                    f"O campo 'final' '{fn}' pode não ter sido inicializado no construtor '{member.name}' (JLS §8.3.1.2 / §16.9).",
+                                    getattr(member, "line", fi["line"]),
+                                )
+                            )
             self._check_lambda_capture_boundaries()
         finally:
+            if pushed_exc_frame:
+                self._exception_analyzer.pop_callable_frame()
             self._restore_exec_context(saved_ctx)
+            self.symbols.exit_scope()
 
-        self.symbols.exit_scope()
+    def _collect_blank_final_fields(
+        self,
+        members: List[ASTNode],
+        enclosing_name: str,
+    ) -> Tuple[Set[Any], Set[Any], Set[Any], Set[Any]]:
+        """Mapeia campos 'final' do tipo atual para rastreamento DA/DU distinto de variáveis locais (JLS §16.8 / §16.9)."""
+        field_map: Dict[str, Dict[str, Any]] = {}
+        inst_da: Set[Any] = set()
+        inst_du: Set[Any] = set()
+        static_da: Set[Any] = set()
+        static_du: Set[Any] = set()
+        for member in members:
+            if not isinstance(member, FieldDeclaration):
+                continue
+            is_static = "static" in getattr(member, "modifiers", [])
+            is_final = "final" in getattr(member, "modifiers", [])
+            if not is_final:
+                continue
+            decls = member.declarators if hasattr(member, "declarators") and member.declarators else []
+            pairs: List[Tuple[str, bool, int]] = []
+            if not decls and hasattr(member, "name"):
+                pairs.append((member.name, member.initializer is not None, getattr(member, "line", 1)))
+            else:
+                for decl in decls:
+                    pairs.append((decl.name, decl.initializer is not None, getattr(decl, "line", member.line)))
+            for fname, has_init, fline in pairs:
+                if not fname or fname == "_":
+                    continue
+                vid = ("field", enclosing_name, fname)
+                field_map[fname] = {
+                    "vid": vid,
+                    "is_static": is_static,
+                    "is_final": True,
+                    "has_initializer": has_init,
+                    "line": fline,
+                }
+                if is_static:
+                    (static_da if has_init else static_du).add(vid)
+                else:
+                    (inst_da if has_init else inst_du).add(vid)
+        self._flow_blank_final_fields = field_map
+        return inst_da, inst_du, static_da, static_du
 
     def _analyze_class_like_members(
         self,
@@ -1357,40 +2609,178 @@ class SemanticAnalyzer:
         enclosing_name: str,
         allow_constructor: bool = True,
         is_enum: bool = False,
+        anon_inst_throws: Optional[List[Tuple[str, int, str]]] = None,
+        anon_super_type: Optional[str] = None,
+        owner_kind: str = "class",
+        owner_modifiers: Optional[List[str]] = None,
+        enum_const_impls: Optional[List[Tuple[str, Set[Tuple[str, int]]]]] = None,
+        owner_line: int = 1,
     ):
         """Analisa membros comuns de classes, enums e corpos de constantes de enum."""
+        inst_da, inst_du, static_da, static_du = self._collect_blank_final_fields(members, enclosing_name)
+        inst_init_thrown: List[Tuple[str, int, str]] = []
+
+        # Passo A: campos e blocos inicializadores na ordem textual (JLS §12.4.2)
         for member in members:
-            if isinstance(member, EmptyStatement):
+            if isinstance(member, FieldDeclaration):
+                self._analyze_field_declaration(
+                    member,
+                    container_label=container_label,
+                    collected_inst_throws=inst_init_thrown,
+                )
+            elif isinstance(member, (InstanceInitializer, StaticInitializer)):
+                if member.block:
+                    is_stat_init = isinstance(member, StaticInitializer)
+                    saved_ctx = self._enter_exec_context(
+                        "initializer",
+                        return_type=None,
+                        is_static=is_stat_init,
+                    )
+                    self._exception_analyzer.push_callable_frame(
+                        "initializer",
+                        "inicializador estático" if is_stat_init else "inicializador de instância",
+                        allowed_throws=[],
+                        enforce_unreported=is_stat_init,
+                    )
+                    try:
+                        for fn, fi in self._flow_blank_final_fields.items():
+                            self._flow_tracked[fi["vid"]] = {"name": fn, "is_final": True, "kind": "field", "line": fi["line"]}
+                        if is_stat_init:
+                            self._flow_da = set(static_da)
+                            self._flow_du = set(static_du)
+                        else:
+                            self._flow_da = set(inst_da | static_da)
+                            self._flow_du = set(inst_du)
+                        self.analyze_block(member.block)
+                        self._check_lambda_capture_boundaries()
+                        if self._flow_reachable:
+                            if is_stat_init:
+                                static_da = {v for v in self._flow_da if isinstance(v, tuple) and v[0] == "field"} & (static_da | static_du) | (self._flow_da & {fi["vid"] for fi in self._flow_blank_final_fields.values() if fi["is_static"]})
+                                static_du = self._flow_du & {fi["vid"] for fi in self._flow_blank_final_fields.values() if fi["is_static"]}
+                            else:
+                                inst_vids = {fi["vid"] for fi in self._flow_blank_final_fields.values() if not fi["is_static"]}
+                                inst_da = self._flow_da & inst_vids
+                                inst_du = self._flow_du & inst_vids
+                    finally:
+                        popped = self._exception_analyzer.pop_callable_frame()
+                        if (not is_stat_init) and popped is not None:
+                            inst_init_thrown.extend(popped.get("thrown", []))
+                        self._restore_exec_context(saved_ctx)
+
+        if anon_inst_throws is not None:
+            anon_inst_throws.extend(inst_init_thrown)
+        elif inst_init_thrown:
+            non_del_ctors = [
+                m for m in members
+                if isinstance(m, ConstructorDeclaration)
+                and not (
+                    isinstance(getattr(m, "body", None), ConstructorBody)
+                    and isinstance(m.body.constructor_invocation, AlternateConstructorInvocation)
+                )
+            ]
+            for exc_t, exc_ln, exc_desc in inst_init_thrown:
+                if not non_del_ctors:
+                    self.errors.append(
+                        SemanticError(
+                            f"Exceção verificada não reportada '{exc_t}' em {exc_desc}; construtor padrão implícito de '{enclosing_name}' não declara compatibilidade em 'throws' (JLS §8.3.2 / §8.6).",
+                            exc_ln,
+                        )
+                    )
+                else:
+                    for ctor in non_del_ctors:
+                        c_throws = [
+                            self._normalize_type_str(t)
+                            for t in (getattr(ctor, "throws_types", []) or [])
+                            if self._normalize_type_str(t)
+                        ]
+                        if self._exception_analyzer.is_covered_by(exc_t, c_throws) is False:
+                            self.errors.append(
+                                SemanticError(
+                                    f"Exceção verificada não reportada '{exc_t}' em {exc_desc}; construtor '{ctor.name}' (linha {ctor.line}) deve declarar compatibilidade em 'throws' (JLS §8.3.2 / §8.6).",
+                                    exc_ln,
+                                )
+                            )
+                            break
+
+        # Valida campos 'static final' blank não inicializados por nenhum inicializador estático
+        for fn, fi in self._flow_blank_final_fields.items():
+            if fi["is_static"] and not fi["has_initializer"] and fi["vid"] not in static_da:
+                self.errors.append(
+                    SemanticError(
+                        f"O campo 'static final' '{fn}' pode não ter sido inicializado (JLS §8.3.1.2 / §16.8).",
+                        fi["line"],
+                    )
+                )
+
+        # Passo B: construtores, métodos e tipos aninhados
+        ctor_count = 0
+        ctor_members: List[ASTNode] = []
+        seed_flow = (inst_da | static_da, inst_du | static_du)
+        eff_method_owner = anon_super_type if anon_super_type else (self._inheritance_analyzer.current_enclosing_key() or enclosing_name)
+        for member in members:
+            if isinstance(member, (EmptyStatement, FieldDeclaration, InstanceInitializer, StaticInitializer)):
                 continue
-            elif isinstance(member, FieldDeclaration):
-                self._analyze_field_declaration(member, container_label=container_label)
             elif isinstance(member, MethodDeclaration):
-                self._analyze_method_member(member)
+                self._analyze_method_member(
+                    member,
+                    owner_type=eff_method_owner,
+                    is_anonymous=bool(anon_super_type),
+                    owner_kind=owner_kind,
+                    owner_modifiers=owner_modifiers,
+                )
             elif isinstance(member, ConstructorDeclaration):
                 if not allow_constructor:
                     self.errors.append(
                         SemanticError(f"Corpo específico de constante de enum '{enclosing_name}' não pode declarar construtores (JLS §8.9.1).", member.line)
                     )
                 else:
+                    ctor_count += 1
+                    ctor_members.append(member)
                     self._analyze_constructor_member(
                         member,
                         expected_name=enclosing_name if is_enum else None,
                         is_enum=is_enum,
+                        seed_flow=seed_flow,
                     )
-            elif isinstance(member, (InstanceInitializer, StaticInitializer)):
-                if member.block:
-                    saved_ctx = self._enter_exec_context(
-                        "initializer",
-                        return_type=None,
-                        is_static=isinstance(member, StaticInitializer),
-                    )
-                    try:
-                        self.analyze_block(member.block)
-                        self._check_lambda_capture_boundaries()
-                    finally:
-                        self._restore_exec_context(saved_ctx)
             elif isinstance(member, (ClassDeclaration, InterfaceDeclaration, EnumDeclaration, RecordDeclaration, AnnotationInterfaceDeclaration)):
                 self._analyze_type_declaration(member, is_nested=True, is_local=False)
+
+        if ctor_members:
+            self._inheritance_analyzer.validate_constructor_cycles(enclosing_name, ctor_members)
+
+        if container_label != "corpo de constante de enum":
+            self._inheritance_analyzer.validate_type_inherited_methods(
+                eff_method_owner,
+                owner_kind=owner_kind,
+                owner_modifiers=owner_modifiers or [],
+                members=members,
+                line=owner_line,
+                is_anonymous=bool(anon_super_type),
+                enum_const_impls=enum_const_impls,
+            )
+
+        if ctor_count == 0:
+            if (not is_enum) and (not anon_super_type) and allow_constructor:
+                tdecl_cls = self._lookup_type_decl(enclosing_name)
+                cls_line = getattr(tdecl_cls[1], "line", 1) if tdecl_cls else 1
+                self._exception_analyzer.push_callable_frame(
+                    "constructor",
+                    f"construtor padrão implícito de '{enclosing_name}'",
+                    allowed_throws=[],
+                    enforce_unreported=True,
+                )
+                try:
+                    self._emit_ctor_invocation_throws(enclosing_name, None, cls_line, is_enum=False)
+                finally:
+                    self._exception_analyzer.pop_callable_frame()
+            for fn, fi in self._flow_blank_final_fields.items():
+                if not fi["is_static"] and not fi["has_initializer"] and fi["vid"] not in inst_da:
+                    self.errors.append(
+                        SemanticError(
+                            f"O campo 'final' '{fn}' pode não ter sido inicializado (JLS §8.3.1.2 / §16.9).",
+                            fi["line"],
+                        )
+                    )
 
     def _register_local_type_conflict(self, name: str, kind_label: str, line: int, is_local: bool):
         """Verifica duplicidade de declarações de tipos locais e colisão com tipo envolvente (JLS §14.3)."""
@@ -1418,6 +2808,28 @@ class SemanticAnalyzer:
                 return
         self._local_type_scopes[-1][name] = line
 
+    def _enter_type_body_context(
+        self,
+        node: ASTNode,
+        is_nested: bool = False,
+        is_local: bool = False,
+        implicitly_static_when_nested: bool = False,
+    ) -> Dict[str, Any]:
+        """Entra no escopo de corpo de tipo isolando contextos estáticos e empilhando type parameters."""
+        was_in_static = self._in_static_context
+        mods = getattr(node, "modifiers", []) or []
+        is_static_nested = is_nested and (implicitly_static_when_nested or ("static" in mods))
+        self.symbols.enter_scope()
+        saved_ctx = self._enter_exec_context("type_body", return_type=None, is_static=False)
+        if is_static_nested:
+            self._active_type_params = []
+        elif is_local and was_in_static:
+            self._active_type_params = [
+                (m, is_tl) for (m, is_tl) in self._active_type_params if not is_tl
+            ]
+        self._push_type_params(getattr(node, "type_parameters", []), is_type_level=True)
+        return saved_ctx
+
     def analyze_class(self, cls_node: ClassDeclaration, is_nested: bool = False, is_local: bool = False):
         """Registra a classe e seus membros (campos, métodos, construtores e tipos aninhados)."""
         self._register_local_type_conflict(cls_node.name, "Classe local", cls_node.line, is_local)
@@ -1432,27 +2844,32 @@ class SemanticAnalyzer:
         )
         self._analyze_annotations(getattr(cls_node, "annotations", []), valid_targets={"TYPE"})
         self._check_functional_interface_annotation(cls_node, is_interface=False)
-        self._check_type_parameters_annotations(getattr(cls_node, "type_parameters", []))
-        if getattr(cls_node, "extends_type", None) is not None:
-            self._check_type_ref_annotations(cls_node.extends_type)
-        for itype in getattr(cls_node, "implements_types", []):
-            self._check_type_ref_annotations(itype)
-        for ptype in getattr(cls_node, "permits_types", []):
-            self._check_type_ref_annotations(ptype)
 
-        self.symbols.enter_scope()
-        saved_ctx = self._enter_exec_context("type_body", return_type=None)
+        saved_ctx = self._enter_type_body_context(cls_node, is_nested=is_nested, is_local=is_local, implicitly_static_when_nested=False)
         try:
+            self._check_type_parameters_annotations(getattr(cls_node, "type_parameters", []))
+            if getattr(cls_node, "extends_type", None) is not None:
+                self._check_type_ref_annotations(cls_node.extends_type)
+            for itype in getattr(cls_node, "implements_types", []):
+                self._check_type_ref_annotations(itype)
+            for ptype in getattr(cls_node, "permits_types", []):
+                self._check_type_ref_annotations(ptype)
+
+            cur_key = self._inheritance_analyzer.current_enclosing_key() or cls_node.name
+            self._inheritance_analyzer.validate_type_hierarchy(cls_node, cur_key)
             self._analyze_class_like_members(
                 cls_node.members,
                 container_label="classe",
                 enclosing_name=cls_node.name,
                 allow_constructor=True,
                 is_enum=False,
+                owner_kind="class",
+                owner_modifiers=cls_node.modifiers,
+                owner_line=cls_node.line,
             )
         finally:
             self._restore_exec_context(saved_ctx)
-        self.symbols.exit_scope()
+            self.symbols.exit_scope()
 
     def analyze_interface(self, iface_node: InterfaceDeclaration, is_nested: bool = False, is_local: bool = False):
         """Valida declarações e membros de interface segundo JLS §9.1–§9.5."""
@@ -1461,14 +2878,15 @@ class SemanticAnalyzer:
         self._validate_type_modifiers(iface_node.modifiers, "interface", iface_node.name, iface_node.line, is_nested=is_nested, is_local=is_local)
         self._analyze_annotations(getattr(iface_node, "annotations", []), valid_targets={"TYPE"})
         self._check_functional_interface_annotation(iface_node, is_interface=True)
-        self._check_type_parameters_annotations(getattr(iface_node, "type_parameters", []))
-        for etype in getattr(iface_node, "extends_types", []):
-            self._check_type_ref_annotations(etype)
-        for ptype in getattr(iface_node, "permits_types", []):
-            self._check_type_ref_annotations(ptype)
-        self.symbols.enter_scope()
-        saved_ctx = self._enter_exec_context("type_body", return_type=None)
+        saved_ctx = self._enter_type_body_context(iface_node, is_nested=is_nested, is_local=is_local, implicitly_static_when_nested=True)
         try:
+            self._check_type_parameters_annotations(getattr(iface_node, "type_parameters", []))
+            for etype in getattr(iface_node, "extends_types", []):
+                self._check_type_ref_annotations(etype)
+            for ptype in getattr(iface_node, "permits_types", []):
+                self._check_type_ref_annotations(ptype)
+            cur_key = self._inheritance_analyzer.current_enclosing_key() or iface_node.name
+            self._inheritance_analyzer.validate_type_hierarchy(iface_node, cur_key)
             allowed_const_mods = {"public", "static", "final"}
             forbidden_method_mods = {"protected", "final", "synchronized", "native"}
 
@@ -1508,7 +2926,12 @@ class SemanticAnalyzer:
                     if any(m in mset for m in ("default", "static", "private")) and member.body is None:
                         self.errors.append(SemanticError(f"Método '{member.name}' ('default', 'static' ou 'private') em interface deve possuir corpo (JLS §9.4).", member.line))
 
-                    self._analyze_method_member(member)
+                    self._analyze_method_member(
+                        member,
+                        owner_type=cur_key,
+                        owner_kind="interface",
+                        owner_modifiers=iface_node.modifiers,
+                    )
 
                 elif isinstance(member, (ClassDeclaration, InterfaceDeclaration, EnumDeclaration, RecordDeclaration, AnnotationInterfaceDeclaration)):
                     self._analyze_type_declaration(member, is_nested=True, is_local=False)
@@ -1517,10 +2940,17 @@ class SemanticAnalyzer:
                     self.errors.append(
                         SemanticError(f"Interface '{iface_node.name}' não pode declarar construtores ou blocos inicializadores (JLS §9.1.4).", member.line)
                     )
+
+            self._inheritance_analyzer.validate_type_inherited_methods(
+                cur_key,
+                owner_kind="interface",
+                owner_modifiers=iface_node.modifiers,
+                members=iface_node.members,
+                line=iface_node.line,
+            )
         finally:
             self._restore_exec_context(saved_ctx)
-
-        self.symbols.exit_scope()
+            self.symbols.exit_scope()
 
     def analyze_enum(self, enum_node: EnumDeclaration, is_nested: bool = False, is_local: bool = False):
         """Valida declarações de enum, constantes, corpos de constantes, métodos abstratos e membros (JLS §8.9)."""
@@ -1530,11 +2960,12 @@ class SemanticAnalyzer:
         self._validate_type_modifiers(enum_node.modifiers, "enum", enum_node.name, enum_node.line, is_nested=is_nested, is_local=is_local)
         self._analyze_annotations(getattr(enum_node, "annotations", []), valid_targets={"TYPE"})
         self._check_functional_interface_annotation(enum_node, is_interface=False)
-        for itype in getattr(enum_node, "implements_types", []):
-            self._check_type_ref_annotations(itype)
-        self.symbols.enter_scope()
-        saved_ctx = self._enter_exec_context("type_body", return_type=None)
+        saved_ctx = self._enter_type_body_context(enum_node, is_nested=is_nested, is_local=is_local, implicitly_static_when_nested=True)
         try:
+            for itype in getattr(enum_node, "implements_types", []):
+                self._check_type_ref_annotations(itype)
+            cur_key = self._inheritance_analyzer.current_enclosing_key() or enum_node.name
+            self._inheritance_analyzer.validate_type_hierarchy(enum_node, cur_key)
             # Métodos abstratos declarados diretamente no corpo do enum (JLS §8.9.1)
             abstract_methods = [
                 m for m in enum_node.members
@@ -1549,6 +2980,12 @@ class SemanticAnalyzer:
                         )
                     )
 
+            enum_ctors = [
+                self._extract_method_sig(m, enum_node.name, owner_kind="enum")
+                for m in enum_node.members
+                if isinstance(m, ConstructorDeclaration)
+            ]
+            enum_const_impls: List[Tuple[str, Set[Tuple[str, int]]]] = []
             for const in enum_node.constants:
                 self._analyze_annotations(getattr(const, "annotations", []), valid_targets={"FIELD"})
                 if const.name == "_":
@@ -1556,8 +2993,29 @@ class SemanticAnalyzer:
                 elif not self.symbols.declare(const.name, enum_node.name, const.line, category="constante_enum", is_static=True, is_final=True, is_compile_constant=True):
                     self.errors.append(SemanticError(f"Constante de enum '{const.name}' declarada novamente em '{enum_node.name}'.", const.line))
 
-                for arg in const.arguments:
-                    self.check_expression(arg)
+                self._exception_analyzer.push_callable_frame(
+                    "initializer",
+                    f"constante de enum '{const.name}'",
+                    [],
+                    enforce_unreported=True,
+                )
+                try:
+                    for arg in const.arguments:
+                        self.check_expression(arg)
+                    for ecs in enum_ctors:
+                        eparams = ecs.get("params", [])
+                        arity_ok = (
+                            len(eparams) == len(const.arguments)
+                            or (ecs.get("varargs") and len(const.arguments) >= max(0, len(eparams) - 1))
+                        )
+                        if arity_ok:
+                            self._exception_analyzer.emit_thrown(
+                                ecs.get("throws", []),
+                                const.line,
+                                f"construtor de constante de enum '{const.name}'",
+                            )
+                finally:
+                    self._exception_analyzer.pop_callable_frame()
 
                 const_impl_sigs: Set[Tuple[str, int]] = set()
                 if isinstance(const.body, EnumConstantBody):
@@ -1571,8 +3029,13 @@ class SemanticAnalyzer:
                         enclosing_name=const.name,
                         allow_constructor=False,
                         is_enum=False,
+                        anon_super_type=cur_key,
+                        owner_kind="class",
+                        owner_modifiers=[],
+                        owner_line=const.line,
                     )
                     self.symbols.exit_scope()
+                enum_const_impls.append((const.name, const_impl_sigs))
 
                 for am in abstract_methods:
                     if (am.name, len(am.parameters)) not in const_impl_sigs:
@@ -1589,10 +3052,14 @@ class SemanticAnalyzer:
                 enclosing_name=enum_node.name,
                 allow_constructor=True,
                 is_enum=True,
+                owner_kind="enum",
+                owner_modifiers=enum_node.modifiers,
+                enum_const_impls=enum_const_impls,
+                owner_line=enum_node.line,
             )
         finally:
             self._restore_exec_context(saved_ctx)
-        self.symbols.exit_scope()
+            self.symbols.exit_scope()
 
     def analyze_record(self, rec_node: RecordDeclaration, is_nested: bool = False, is_local: bool = False):
         """Valida declarações de records, componentes, assessores explícitos e construtores (JLS §8.10)."""
@@ -1601,12 +3068,14 @@ class SemanticAnalyzer:
         self._validate_type_modifiers(rec_node.modifiers, "record", rec_node.name, rec_node.line, is_nested=is_nested, is_local=is_local)
         self._analyze_annotations(getattr(rec_node, "annotations", []), valid_targets={"TYPE"})
         self._check_functional_interface_annotation(rec_node, is_interface=False)
-        self._check_type_parameters_annotations(getattr(rec_node, "type_parameters", []))
-        for itype in getattr(rec_node, "implements_types", []):
-            self._check_type_ref_annotations(itype)
-        self.symbols.enter_scope()
-        saved_ctx = self._enter_exec_context("type_body", return_type=None)
+        saved_ctx = self._enter_type_body_context(rec_node, is_nested=is_nested, is_local=is_local, implicitly_static_when_nested=True)
         try:
+            self._check_type_parameters_annotations(getattr(rec_node, "type_parameters", []))
+            for itype in getattr(rec_node, "implements_types", []):
+                self._check_type_ref_annotations(itype)
+            cur_key = self._inheritance_analyzer.current_enclosing_key() or rec_node.name
+            self._inheritance_analyzer.validate_type_hierarchy(rec_node, cur_key)
+            rec_ctor_members: List[ASTNode] = []
             seen_components: Set[str] = set()
             comp_by_name: Dict[str, RecordComponent] = {}
             for comp in rec_node.components:
@@ -1710,10 +3179,16 @@ class SemanticAnalyzer:
                                     member.line,
                                 )
                             )
-                    self._analyze_method_member(member)
+                    self._analyze_method_member(
+                        member,
+                        owner_type=cur_key,
+                        owner_kind="record",
+                        owner_modifiers=rec_node.modifiers,
+                    )
 
                 elif isinstance(member, CompactConstructorDeclaration):
                     canonical_ctors += 1
+                    rec_ctor_members.append(member)
                     if canonical_ctors > 1:
                         self.errors.append(
                             SemanticError(f"Record '{rec_node.name}' possui múltiplos construtores canônicos declarados (JLS §8.10.4).", member.line)
@@ -1740,6 +3215,7 @@ class SemanticAnalyzer:
 
                 elif isinstance(member, NormalCanonicalConstructor):
                     canonical_ctors += 1
+                    rec_ctor_members.append(member)
                     if canonical_ctors > 1:
                         self.errors.append(
                             SemanticError(f"Record '{rec_node.name}' possui múltiplos construtores canônicos declarados (JLS §8.10.4).", member.line)
@@ -1771,6 +3247,7 @@ class SemanticAnalyzer:
                     self._analyze_constructor_member(member, expected_name=rec_node.name, is_compact=False)
 
                 elif isinstance(member, NonCanonicalRecordConstructor):
+                    rec_ctor_members.append(member)
                     inv = member.body.constructor_invocation if isinstance(member.body, ConstructorBody) else None
                     if isinstance(inv, SuperclassConstructorInvocation):
                         self.errors.append(
@@ -1787,10 +3264,19 @@ class SemanticAnalyzer:
 
                 elif isinstance(member, (ClassDeclaration, InterfaceDeclaration, EnumDeclaration, RecordDeclaration, AnnotationInterfaceDeclaration)):
                     self._analyze_type_declaration(member, is_nested=True, is_local=False)
+
+            if rec_ctor_members:
+                self._inheritance_analyzer.validate_constructor_cycles(rec_node.name, rec_ctor_members)
+            self._inheritance_analyzer.validate_type_inherited_methods(
+                cur_key,
+                owner_kind="record",
+                owner_modifiers=rec_node.modifiers,
+                members=rec_node.members,
+                line=rec_node.line,
+            )
         finally:
             self._restore_exec_context(saved_ctx)
-
-        self.symbols.exit_scope()
+            self.symbols.exit_scope()
 
     # =========================================================================
     # ANOTAÇÕES E ANNOTATION INTERFACES (ETAPA S5 — JLS §9.6, §9.7)
@@ -2235,8 +3721,364 @@ class SemanticAnalyzer:
             for b in getattr(tp, "bounds", []):
                 self._check_type_ref_annotations(b)
 
-    def _check_type_ref_annotations(self, type_ref: Optional[ASTNode]):
-        """Valida recursivamente type annotations em tipos, segmentos qualificados, dimensões e generics."""
+    def _is_explicitly_imported_from_other_pkg(self, simple_name: str) -> bool:
+        """Indica se simple_name foi importado explicitamente de outro pacote diferente do compat/java.lang."""
+        if not simple_name or "." in simple_name:
+            return False
+        _, imports = self._current_import_context()
+        compat_fqn = self.BUILTIN_COMPAT_FQNS.get(simple_name)
+        jl_fqn = f"java.lang.{simple_name}"
+        for iname, is_wild in imports:
+            if not is_wild and iname and iname.split(".")[-1] == simple_name:
+                if iname not in (compat_fqn, jl_fqn):
+                    return True
+        return False
+
+    def _resolve_expected_type_param_count(self, type_name: Optional[str]) -> Optional[int]:
+        """
+        Retorna a quantidade esperada de parâmetros de tipo (0 ou N) quando o tipo é conhecido,
+        ou None quando o tipo não pode ser resolvido de forma confiável.
+        """
+        if not type_name:
+            return None
+        clean = self._strip_leading_type_annotations(type_name) or type_name
+        stripped = self._strip_generics(clean)
+        if not stripped:
+            return None
+        base, dims = self._split_type_dims(stripped)
+        if not base or base in ("var", "null", "desconhecido"):
+            return None
+        if base in self.PRIMITIVE_TYPES or base == "void":
+            return 0
+        if dims > 0:
+            return None
+
+        if self._lookup_type_param_bounds(base) is not None:
+            return 0
+
+        tdecl = self._lookup_type_decl(base)
+        if tdecl is not None:
+            dkind, tnode = tdecl
+            if dkind in ("enum", "annotation_interface"):
+                return 0
+            return len(getattr(tnode, "type_parameters", []) or [])
+
+        ext = self._resolve_external_type(base)
+        if ext is not None:
+            return len(ext.type_parameters or [])
+
+        simple = base.split(".")[-1]
+        is_unqualified = "." not in base
+        matches_compat = self.BUILTIN_COMPAT_FQNS.get(simple) == base or f"java.lang.{simple}" == base
+        if is_unqualified:
+            if self._is_explicitly_imported_from_other_pkg(simple):
+                return None
+            if simple in self.BUILTIN_TYPE_PARAMS:
+                return len(self.BUILTIN_TYPE_PARAMS[simple])
+            if (
+                simple in self.BUILTIN_CLASS_TYPES
+                or simple in self.BUILTIN_INTERFACE_TYPES
+                or simple in self.BUILTIN_FINAL_TYPES
+                or simple in self.KNOWN_EXCEPTION_PARENTS
+                or simple == "Enum"
+            ):
+                return 0
+        elif base in self.BUILTIN_TYPE_PARAMS or matches_compat:
+            if base in self.BUILTIN_TYPE_PARAMS:
+                return len(self.BUILTIN_TYPE_PARAMS[base])
+            if simple in self.BUILTIN_TYPE_PARAMS:
+                return len(self.BUILTIN_TYPE_PARAMS[simple])
+            if (
+                base in self.BUILTIN_CLASS_TYPES
+                or base in self.BUILTIN_INTERFACE_TYPES
+                or simple in self.BUILTIN_CLASS_TYPES
+                or simple in self.BUILTIN_INTERFACE_TYPES
+                or simple in self.BUILTIN_FINAL_TYPES
+                or simple in self.KNOWN_EXCEPTION_PARENTS
+            ):
+                return 0
+
+        return None
+
+    def _check_type_ref_arity(
+        self,
+        type_ref: Optional[ASTNode],
+        resolved_name_override: Optional[str] = None,
+    ) -> None:
+        """Valida a aridade de argumentos genéricos explícitos por segmento conforme JLS §4.5."""
+        if not isinstance(type_ref, TypeReference):
+            return
+        tname = getattr(type_ref, "name", "")
+        if not tname:
+            return
+        line = getattr(type_ref, "line", 1)
+        seg_targs = getattr(type_ref, "segment_type_arguments", None)
+        parts = tname.split(".")
+
+        if seg_targs and len(seg_targs) == len(parts) and not resolved_name_override:
+            for idx, sargs in enumerate(seg_targs):
+                if sargs is None:
+                    continue
+                seg_name = ".".join(parts[: idx + 1])
+                if len(sargs) == 0:
+                    self.errors.append(
+                        SemanticError(
+                            f"Operador diamond '<>' não é permitido fora da instanciação de objeto com 'new' em '{seg_name}' (JLS §4.5.1 / §15.9).",
+                            line,
+                        )
+                    )
+                    continue
+                expected = self._resolve_expected_type_param_count(seg_name)
+                if expected is not None and len(sargs) != expected:
+                    if expected == 0:
+                        self.errors.append(
+                            SemanticError(
+                                f"Tipo '{seg_name}' não é genérico; não pode receber argumentos de tipo (JLS §4.5).",
+                                line,
+                            )
+                        )
+                    else:
+                        self.errors.append(
+                            SemanticError(
+                                f"Quantidade incorreta de argumentos de tipo para '{seg_name}': esperado {expected}, encontrado {len(sargs)} (JLS §4.5).",
+                                line,
+                            )
+                        )
+            return
+
+        targs = getattr(type_ref, "type_arguments", None) or []
+        if not targs:
+            return
+        lookup_name = resolved_name_override or tname
+        expected = self._resolve_expected_type_param_count(lookup_name)
+        if expected is not None and len(targs) != expected:
+            if expected == 0:
+                self.errors.append(
+                    SemanticError(
+                        f"Tipo '{tname}' não é genérico; não pode receber argumentos de tipo (JLS §4.5).",
+                        line,
+                    )
+                )
+            else:
+                self.errors.append(
+                    SemanticError(
+                        f"Quantidade incorreta de argumentos de tipo para '{tname}': esperado {expected}, encontrado {len(targs)} (JLS §4.5).",
+                        line,
+                    )
+                )
+
+    def _validate_type_args_against_bounds(
+        self,
+        owner_name: str,
+        arg_strs: List[str],
+        line: int,
+        outer_subst: Optional[Dict[str, str]] = None,
+        decls_override: Optional[List[Tuple[str, List[str]]]] = None,
+        error_sink: Optional[List[SemanticError]] = None,
+    ) -> Dict[str, str]:
+        """Valida argumentos genéricos (concretos e wildcards) contra os bounds declarados (JLS §4.5 / §5.1.10)."""
+        if not owner_name or not arg_strs:
+            return {}
+        decls = decls_override if decls_override is not None else self._type_param_decls_for_type(owner_name)
+        if not decls or len(decls) != len(arg_strs):
+            return {}
+        target_errors = self.errors if error_sink is None else error_sink
+
+        subst_map: Dict[str, str] = dict(outer_subst or {})
+        temp_caps: List[str] = []
+        parsed_args: List[Tuple[Optional[str], Optional[str]]] = []
+
+        try:
+            # Passo 1: atribui argumentos concretos e variáveis de captura temporárias (JLS §5.1.10)
+            for (tp_name, _), arg_s in zip(decls, arg_strs):
+                wk, wb = self._parse_wildcard_arg(arg_s)
+                parsed_args.append((wk, wb))
+                if not tp_name or not arg_s:
+                    continue
+                if wk is None:
+                    subst_map[tp_name] = arg_s
+                else:
+                    self._capture_counter += 1
+                    cap_name = f"CAP#{self._capture_counter}"
+                    temp_caps.append(cap_name)
+                    subst_map[tp_name] = cap_name
+                    init_up = [wb] if (wk == "extends" and wb) else ["Object"]
+                    init_low = wb if (wk == "super" and wb) else None
+                    self._capture_vars[cap_name] = {
+                        "name": cap_name,
+                        "upper_bounds": init_up,
+                        "lower_bound": init_low,
+                    }
+
+            # Passo 2: refina limites superiores das capturas considerando os bounds declarados substituídos
+            for (tp_name, raw_bounds), (wk, wb) in zip(decls, parsed_args):
+                if wk is None or not tp_name:
+                    continue
+                cap_name = subst_map.get(tp_name)
+                if not cap_name or cap_name not in self._capture_vars:
+                    continue
+                decl_bs = [
+                    self._substitute_type_vars(rb, subst_map) or rb
+                    for rb in (raw_bounds or [])
+                ] or ["Object"]
+                if wk == "extends":
+                    uppers = self._combine_upper_bounds(wb or "Object", decl_bs)
+                    lower = None
+                elif wk == "super":
+                    uppers = decl_bs
+                    lower = wb or "Object"
+                else:
+                    uppers = decl_bs
+                    lower = None
+                self._capture_vars[cap_name] = {
+                    "name": cap_name,
+                    "upper_bounds": uppers,
+                    "lower_bound": lower,
+                }
+
+            # Passo 3: valida cada argumento contra seus bounds substituídos
+            for (tp_name, raw_bounds), arg_s, (wk, wb) in zip(decls, arg_strs, parsed_args):
+                if not arg_s:
+                    continue
+                if wk is None:
+                    clean_arg = (self._strip_leading_type_annotations(arg_s) or arg_s).strip()
+                    for raw_b in raw_bounds or []:
+                        subst_b = self._substitute_type_vars(raw_b, subst_map) or raw_b
+                        clean_b = (self._strip_leading_type_annotations(subst_b) or subst_b).strip()
+                        if not clean_b:
+                            continue
+                        if clean_b in ("Object", "java.lang.Object") and clean_arg not in self.PRIMITIVE_TYPES and clean_arg != "void":
+                            continue
+                        if self._is_subtype(clean_arg, clean_b) is False:
+                            target_errors.append(
+                                SemanticError(
+                                    f"Argumento de tipo '{clean_arg}' não está dentro do limite '{clean_b}' do parâmetro '{tp_name}' em '{owner_name}' (JLS §4.5).",
+                                    line,
+                                )
+                            )
+                            break
+                    continue
+
+                if wk == "super":
+                    clean_l = (self._strip_leading_type_annotations(wb or "Object") or "Object").strip()
+                    for raw_b in raw_bounds or []:
+                        subst_b = self._substitute_type_vars(raw_b, subst_map) or raw_b
+                        clean_b = (self._strip_leading_type_annotations(subst_b) or subst_b).strip()
+                        if not clean_b or clean_b in ("Object", "java.lang.Object"):
+                            continue
+                        if self._is_subtype(clean_l, clean_b) is False:
+                            target_errors.append(
+                                SemanticError(
+                                    f"Wildcard '? super {clean_l}' incompatível com o limite '{clean_b}' do parâmetro '{tp_name}' em '{owner_name}' (JLS §4.5).",
+                                    line,
+                                )
+                            )
+                            break
+                    continue
+
+                if wk == "extends":
+                    clean_u = (self._strip_leading_type_annotations(wb or "Object") or "Object").strip()
+                    if clean_u in ("Object", "java.lang.Object"):
+                        continue
+                    is_closed_u = self._is_final_or_closed_leaf(clean_u) is True
+                    clean_bounds: List[str] = []
+                    failed_bound = False
+                    for raw_b in raw_bounds or []:
+                        subst_b = self._substitute_type_vars(raw_b, subst_map) or raw_b
+                        clean_b = (self._strip_leading_type_annotations(subst_b) or subst_b).strip()
+                        if not clean_b or clean_b in ("Object", "java.lang.Object"):
+                            continue
+                        clean_bounds.append(clean_b)
+                        if is_closed_u:
+                            self_map = dict(subst_map)
+                            if tp_name:
+                                self_map[tp_name] = clean_u
+                            self_b = (self._substitute_type_vars(raw_b, self_map) or raw_b).strip()
+                            if self._is_subtype(clean_u, self_b) is False:
+                                target_errors.append(
+                                    SemanticError(
+                                        f"Wildcard '? extends {clean_u}' possui interseção impossível com o limite '{clean_b}' do parâmetro '{tp_name}' em '{owner_name}' (JLS §4.5).",
+                                        line,
+                                    )
+                                )
+                                failed_bound = True
+                                break
+                            continue
+                        if self._are_intersection_types_compatible(clean_u, clean_b) is False:
+                            target_errors.append(
+                                SemanticError(
+                                    f"Wildcard '? extends {clean_u}' possui interseção impossível com o limite '{clean_b}' do parâmetro '{tp_name}' em '{owner_name}' (JLS §4.5).",
+                                    line,
+                                )
+                            )
+                            failed_bound = True
+                            break
+                    # Se há múltiplos bounds, verifica também interseção mútua entre eles quando substituídos
+                    if not failed_bound and len(clean_bounds) > 1:
+                        for idx_a in range(len(clean_bounds)):
+                            if failed_bound:
+                                break
+                            for idx_b in range(idx_a + 1, len(clean_bounds)):
+                                if self._are_intersection_types_compatible(clean_bounds[idx_a], clean_bounds[idx_b]) is False:
+                                    target_errors.append(
+                                        SemanticError(
+                                            f"Wildcard '? extends {clean_u}' gera limites incompatíveis '{clean_bounds[idx_a]}' & '{clean_bounds[idx_b]}' para '{tp_name}' em '{owner_name}' (JLS §4.5).",
+                                            line,
+                                        )
+                                    )
+                                    failed_bound = True
+                                    break
+        finally:
+            for cap_name in temp_caps:
+                self._capture_vars.pop(cap_name, None)
+
+        return subst_map
+
+    def _check_type_ref_bounds(
+        self,
+        type_ref: Optional[ASTNode],
+        resolved_name_override: Optional[str] = None,
+        outer_subst: Optional[Dict[str, str]] = None,
+    ) -> None:
+        """Valida os limites (bounds) de argumentos genéricos por segmento ou tipo (JLS §4.5)."""
+        if not isinstance(type_ref, TypeReference):
+            return
+        tname = getattr(type_ref, "name", "")
+        if not tname:
+            return
+        line = getattr(type_ref, "line", 1)
+        seg_targs = getattr(type_ref, "segment_type_arguments", None)
+        parts = tname.split(".")
+
+        if seg_targs and len(seg_targs) == len(parts) and not resolved_name_override:
+            accumulated_subst: Dict[str, str] = dict(outer_subst or {})
+            for idx, sargs in enumerate(seg_targs):
+                if not sargs:
+                    continue
+                seg_name = ".".join(parts[: idx + 1])
+                arg_strs = [self._normalize_type_str(a) or "" for a in sargs]
+                if all(arg_strs):
+                    seg_map = self._validate_type_args_against_bounds(
+                        seg_name, arg_strs, line, outer_subst=accumulated_subst
+                    )
+                    accumulated_subst.update(seg_map)
+            return
+
+        targs = getattr(type_ref, "type_arguments", None) or []
+        if not targs:
+            return
+        lookup_name = resolved_name_override or tname
+        arg_strs = [self._normalize_type_str(a) or "" for a in targs]
+        if all(arg_strs):
+            self._validate_type_args_against_bounds(lookup_name, arg_strs, line, outer_subst=outer_subst)
+
+    def _check_type_ref_annotations(
+        self,
+        type_ref: Optional[ASTNode],
+        skip_type_access: bool = False,
+        skip_arity: bool = False,
+    ):
+        """Valida recursivamente type annotations, acesso e aridade genérica em tipos e segmentos."""
         if type_ref is None:
             return
         if isinstance(type_ref, WildcardType):
@@ -2263,8 +4105,37 @@ class SemanticAnalyzer:
             self._analyze_annotations([ea], valid_targets={"TYPE_USE"})
 
         self._check_type_parameters_annotations(getattr(type_ref, "type_parameters", []))
-        for targ in getattr(type_ref, "type_arguments", []):
+        seg_targs = getattr(type_ref, "segment_type_arguments", None)
+        visited_args: List[ASTNode] = []
+        seen_ids: Set[int] = set()
+        if seg_targs:
+            for sargs in seg_targs:
+                if sargs:
+                    for targ in sargs:
+                        if id(targ) not in seen_ids:
+                            seen_ids.add(id(targ))
+                            visited_args.append(targ)
+        for targ in getattr(type_ref, "type_arguments", []) or []:
+            if id(targ) not in seen_ids:
+                seen_ids.add(id(targ))
+                visited_args.append(targ)
+        for targ in visited_args:
             self._check_type_ref_annotations(targ)
+
+        if not skip_arity:
+            self._check_type_ref_arity(type_ref)
+            self._check_type_ref_bounds(type_ref)
+
+        if not skip_type_access and isinstance(type_ref, TypeReference):
+            raw_tname = self._normalize_type_str(type_ref)
+            if raw_tname and not is_void and raw_tname != "var":
+                t_base, _ = self._split_type_dims(self._strip_generics(raw_tname) or "")
+                if (
+                    t_base
+                    and t_base not in self.PRIMITIVE_TYPES
+                    and self._lookup_type_param_bounds(t_base) is None
+                ):
+                    self._inheritance_analyzer.check_type_access(t_base, getattr(type_ref, "line", 1))
 
     def _analyze_annotations(
         self,
@@ -2460,40 +4331,589 @@ class SemanticAnalyzer:
         if expected_type is not None:
             self._validate_element_value_compatible(val, expected_type, owner_desc, ev.line)
 
-    def _is_compile_time_constant_expr(self, expr: Optional[ASTNode]) -> bool:
-        """Verifica de forma conservadora se uma expressão de inicialização é constante em tempo de compilação."""
-        if expr is None:
+    @staticmethod
+    def _to_java_int(v: int) -> int:
+        """Converte inteiro arbitrário para int Java 32 bits em complemento de dois."""
+        v &= 0xFFFFFFFF
+        return v - 0x100000000 if v >= 0x80000000 else v
+
+    @staticmethod
+    def _to_java_long(v: int) -> int:
+        """Converte inteiro arbitrário para long Java 64 bits em complemento de dois."""
+        v &= 0xFFFFFFFFFFFFFFFF
+        return v - 0x10000000000000000 if v >= 0x8000000000000000 else v
+
+    @staticmethod
+    def _to_java_byte(v: int) -> int:
+        """Converte inteiro arbitrário para byte Java 8 bits com sinal (-128..127)."""
+        v &= 0xFF
+        return v - 0x100 if v >= 0x80 else v
+
+    @staticmethod
+    def _to_java_short(v: int) -> int:
+        """Converte inteiro arbitrário para short Java 16 bits com sinal (-32768..32767)."""
+        v &= 0xFFFF
+        return v - 0x10000 if v >= 0x8000 else v
+
+    @staticmethod
+    def _to_java_char(v: int) -> int:
+        """Converte inteiro arbitrário para char Java 16 bits sem sinal (0..65535)."""
+        return v & 0xFFFF
+
+    @staticmethod
+    def _to_java_float(v: float) -> float:
+        """Arredonda float IEEE 754 para precisão simples de 32 bits conforme Java."""
+        f = float(v)
+        if math.isnan(f):
+            return float("nan")
+        if math.isinf(f):
+            return math.copysign(float("inf"), f)
+        try:
+            return struct.unpack(">f", struct.pack(">f", f))[0]
+        except OverflowError:
+            return math.copysign(float("inf"), f)
+
+    def _is_constant_variable_type(self, type_str: Optional[str]) -> bool:
+        """Verifica se o tipo é primitivo ou String (condição necessária em JLS §4.12.4)."""
+        if not type_str:
             return False
+        t_clean = self._strip_leading_type_annotations(type_str) or type_str
+        return t_clean in self.PRIMITIVE_TYPES or t_clean in ("String", "java.lang.String")
+
+    def _resolve_constant_var_declaration(
+        self, declared_type: Optional[str], is_final: bool, init_expr: Optional[ASTNode]
+    ) -> Optional[Tuple[str, Any]]:
+        """Retorna (tipo, valor) para variável constante JLS §4.12.4 ou None."""
+        if not is_final or init_expr is None or not self._is_constant_variable_type(declared_type):
+            return None
+        res = self._eval_constant_expr(init_expr)
+        if res is None:
+            return None
+        src_t, val = res
+        t_clean = self._strip_leading_type_annotations(declared_type) or declared_type
+        if t_clean == "java.lang.String":
+            t_clean = "String"
+        if t_clean in self.INTEGER_RANGES:
+            if src_t not in ("byte", "short", "char", "int"):
+                return None
+            lo, hi = self.INTEGER_RANGES[t_clean]
+            if not (lo <= val <= hi):
+                return None
+            return (t_clean, int(val))
+        if t_clean == "int":
+            return ("int", self._to_java_int(int(val))) if src_t in ("byte", "short", "char", "int") else None
+        if t_clean == "long":
+            return ("long", self._to_java_long(int(val))) if src_t in ("byte", "short", "char", "int", "long") else None
+        if t_clean == "float":
+            if src_t in ("byte", "short", "char", "int", "long", "float"):
+                return ("float", self._to_java_float(float(val)))
+            return None
+        if t_clean == "double":
+            if src_t in ("byte", "short", "char", "int", "long", "float", "double"):
+                return ("double", float(val))
+            return None
+        if t_clean == "boolean":
+            return ("boolean", bool(val)) if src_t == "boolean" else None
+        if t_clean == "String":
+            return ("String", str(val)) if src_t == "String" else None
+        return None
+
+    @staticmethod
+    def _parse_java_char_literal(val: str) -> Optional[int]:
+        """Converte o texto ou valor de literal char Java no código Unicode (0..65535)."""
+        if val is None:
+            return None
+        if len(val) == 1:
+            return ord(val)
+        inner = val[1:-1] if val.startswith("'") and val.endswith("'") and len(val) >= 3 else val
+        if len(inner) == 1:
+            return ord(inner)
+        escapes = {
+            "\\n": 10, "\\r": 13, "\\t": 9, "\\b": 8, "\\f": 12,
+            "\\'": 39, '\\"': 34, "\\\\": 92, "\\s": 32,
+        }
+        if inner in escapes:
+            return escapes[inner]
+        if inner.startswith("\\u") and len(inner) >= 6:
+            try:
+                return int(inner[2:].lstrip("u"), 16) & 0xFFFF
+            except ValueError:
+                return None
+        if inner.startswith("\\") and len(inner) >= 2 and all(c in "01234567" for c in inner[1:]):
+            v = int(inner[1:], 8)
+            return v if 0 <= v <= 255 else None
+        return None
+
+    @staticmethod
+    def _format_java_string_value(jtype: str, val: Any) -> str:
+        """Formata valor constante primitivo ou String para concatenação de String Java."""
+        if jtype == "String":
+            return str(val)
+        if jtype == "boolean":
+            return "true" if val else "false"
+        if jtype == "char":
+            return chr(int(val))
+        if jtype in ("byte", "short", "int", "long"):
+            return str(int(val))
+        if jtype in ("float", "double"):
+            f = float(val)
+            if math.isnan(f):
+                return "NaN"
+            if math.isinf(f):
+                return "-Infinity" if f < 0 else "Infinity"
+            return str(f)
+        return str(val)
+
+    def _cast_constant_value(self, src_t: str, val: Any, target_t: str) -> Optional[Tuple[str, Any]]:
+        """Executa conversão de cast em expressão constante segundo JLS §5.1 / §5.5 / §15.29."""
+        if target_t == "java.lang.String":
+            target_t = "String"
+        if target_t == "String":
+            return ("String", str(val)) if src_t == "String" else None
+        if target_t == "boolean":
+            return ("boolean", bool(val)) if src_t == "boolean" else None
+        if target_t not in self.NUMERIC_PRIMITIVE_TYPES or src_t not in self.NUMERIC_PRIMITIVE_TYPES:
+            return None
+        if target_t == "float":
+            return ("float", self._to_java_float(float(val)))
+        if target_t == "double":
+            return ("double", float(val))
+        if src_t in ("float", "double"):
+            f = float(val)
+            if math.isnan(f):
+                iv = 0
+            elif target_t == "long":
+                if math.isinf(f):
+                    iv = -(1 << 63) if f < 0 else (1 << 63) - 1
+                else:
+                    tr = math.trunc(f)
+                    iv = max(-(1 << 63), min((1 << 63) - 1, tr))
+            else:
+                if math.isinf(f):
+                    iv = -(1 << 31) if f < 0 else (1 << 31) - 1
+                else:
+                    tr = math.trunc(f)
+                    iv = max(-(1 << 31), min((1 << 31) - 1, tr))
+        else:
+            iv = int(val)
+        if target_t == "byte":
+            return ("byte", self._to_java_byte(iv))
+        if target_t == "short":
+            return ("short", self._to_java_short(iv))
+        if target_t == "char":
+            return ("char", self._to_java_char(iv))
+        if target_t == "int":
+            return ("int", self._to_java_int(iv))
+        if target_t == "long":
+            return ("long", self._to_java_long(iv))
+        return None
+
+    def _promote_constant_binary_type(self, t1: str, t2: str) -> str:
+        """Retorna tipo resultante da promoção numérica binária (JLS §5.6.2)."""
+        if "double" in (t1, t2):
+            return "double"
+        if "float" in (t1, t2):
+            return "float"
+        if "long" in (t1, t2):
+            return "long"
+        return "int"
+
+    def _eval_constant_field_in_type(self, type_name: str, field_name: str) -> Optional[Tuple[str, Any]]:
+        """Busca e avalia campo constante final (ou constante de interface) declarado ou herdado em um tipo."""
+        clean = self._strip_generics(self._strip_leading_type_annotations(type_name) or type_name) or type_name
+        simple = self._simple_base_name(clean) or clean
+        if not simple:
+            return None
+        key = (clean, field_name)
+        if key in self._const_eval_stack:
+            return None
+        self._const_eval_stack.add(key)
+        try:
+            visited: Set[str] = set()
+            queue: List[str] = [clean]
+            while queue:
+                cur = queue.pop(0)
+                cur_base = self._strip_generics(cur) or cur
+                cur_s = self._simple_base_name(cur_base) or ""
+                cur_resolved = self._lookup_internal_type_key(cur_base)
+                cur_ext = self._resolve_external_type(cur_base) if cur_resolved is None else None
+                cur_key = cur_resolved or (cur_ext.fqn if cur_ext is not None else cur_s)
+                if not cur_key or cur_key in visited:
+                    continue
+                visited.add(cur_key)
+                tdecl = self._lookup_type_decl(cur_resolved or cur_s)
+                if tdecl is not None:
+                    tkind, tnode = tdecl
+                    is_ifc = (tkind == "interface")
+                    for member in getattr(tnode, "members", []):
+                        if isinstance(member, FieldDeclaration):
+                            is_fin = True if is_ifc else ("final" in getattr(member, "modifiers", []))
+                            decls = getattr(member, "declarators", None) or []
+                            if decls:
+                                for d in decls:
+                                    if getattr(d, "name", None) == field_name:
+                                        return self._resolve_constant_var_declaration(
+                                            getattr(d, "effective_type", None), is_fin, getattr(d, "initializer", None)
+                                        )
+                            elif getattr(member, "name", None) == field_name:
+                                raw_t = getattr(member, "effective_type", None) or self._normalize_type_str(getattr(member, "type_ref", None))
+                                return self._resolve_constant_var_declaration(raw_t, is_fin, getattr(member, "initializer", None))
+                elif cur_ext is not None:
+                    ef = cur_ext.fields.get(field_name)
+                    if ef is not None and ef.constant_value is not None:
+                        return ef.constant_value
+                if cur_s in self.BUILTIN_CONSTANT_VALUES and field_name in self.BUILTIN_CONSTANT_VALUES[cur_s]:
+                    if cur_ext is None or self._is_partial_external_stdlib(cur_ext):
+                        return self.BUILTIN_CONSTANT_VALUES[cur_s][field_name]
+                supers, _ = self._direct_supertypes(cur)
+                queue.extend(supers)
+            return None
+        finally:
+            self._const_eval_stack.discard(key)
+
+    def _eval_constant_literal(self, node: Literal) -> Optional[Tuple[str, Any]]:
+        """Avalia literal primitivo ou String segundo JLS §3.10 e §15.29."""
+        kind = getattr(node, "kind", "")
+        val = getattr(node, "value", None)
+        if kind == "NULL" or (kind == "" and str(val) == "null"):
+            return None
+        if kind == "BOOLEAN":
+            return ("boolean", str(val).lower() == "true")
+        if kind in ("STRING", "TEXT_BLOCK"):
+            return ("String", str(val))
+        if kind == "CHAR":
+            cp = self._parse_java_char_literal(str(val))
+            return ("char", cp) if cp is not None else None
+        val_s = str(val).strip()
+        is_fp = (
+            kind in ("FLOAT", "DOUBLE")
+            or "." in val_s
+            or ("e" in val_s.lower() and not val_s.startswith(("0x", "0X")))
+            or ("p" in val_s.lower() and val_s.startswith(("0x", "0X")))
+            or (val_s.endswith(("f", "F", "d", "D")) and not val_s.startswith(("0x", "0X")))
+        )
+        if kind in ("NUM", "INT", "LONG") and not is_fp:
+            parsed = self._parse_java_int_literal(val_s)
+            if parsed is None:
+                return None
+            num_val, is_long_lit, base = parsed
+            is_long = (kind == "LONG") or is_long_lit
+            if base == 10:
+                max_val = ((1 << 63) - 1) if is_long else ((1 << 31) - 1)
+            else:
+                max_val = ((1 << 64) - 1) if is_long else ((1 << 32) - 1)
+            if num_val > max_val:
+                return None
+            return ("long", self._to_java_long(num_val)) if is_long else ("int", self._to_java_int(num_val))
+        is_float = (kind == "FLOAT") or val_s.endswith(("f", "F"))
+        raw = val_s[:-1] if val_s.endswith(("f", "F", "d", "D")) else val_s
+        clean = raw.replace("_", "")
+        try:
+            fval = float.fromhex(clean) if clean.startswith(("0x", "0X")) else float(clean)
+        except (ValueError, OverflowError):
+            return None
+        if math.isinf(fval):
+            return None
+        if is_float:
+            jf = self._to_java_float(fval)
+            return None if math.isinf(jf) else ("float", jf)
+        return ("double", fval)
+
+    def _eval_constant_unary(self, expr: UnaryOp) -> Optional[Tuple[str, Any]]:
+        """Avalia expressão unária constante (JLS §15.15 / §15.29)."""
+        op = expr.op
+        if op not in ("+", "-", "~", "!"):
+            return None
+        if op == "-" and isinstance(expr.operand, Literal) and not getattr(expr.operand, "parenthesized", False):
+            lit = expr.operand
+            val_s = str(getattr(lit, "value", "")).strip()
+            kind = getattr(lit, "kind", "")
+            if kind in ("NUM", "INT", "LONG"):
+                parsed = self._parse_java_int_literal(val_s)
+                if parsed is not None:
+                    num_val, is_long_lit, base = parsed
+                    is_long = (kind == "LONG") or is_long_lit
+                    if base == 10 and not is_long and num_val == (1 << 31):
+                        return ("int", -(1 << 31))
+                    if base == 10 and is_long and num_val == (1 << 63):
+                        return ("long", -(1 << 63))
+        inner = self._eval_constant_expr(expr.operand)
+        if inner is None:
+            return None
+        st, sv = inner
+        if op == "!":
+            return ("boolean", not bool(sv)) if st == "boolean" else None
+        if st not in self.NUMERIC_PRIMITIVE_TYPES:
+            return None
+        promoted = "int" if st in ("byte", "short", "char", "int") else st
+        if op == "~":
+            if promoted == "int":
+                return ("int", self._to_java_int(~int(sv)))
+            if promoted == "long":
+                return ("long", self._to_java_long(~int(sv)))
+            return None
+        if op == "+":
+            if promoted == "int":
+                return ("int", self._to_java_int(int(sv)))
+            if promoted == "long":
+                return ("long", self._to_java_long(int(sv)))
+            if promoted == "float":
+                return ("float", self._to_java_float(float(sv)))
+            return ("double", float(sv))
+        if promoted == "int":
+            return ("int", self._to_java_int(-int(sv)))
+        if promoted == "long":
+            return ("long", self._to_java_long(-int(sv)))
+        if promoted == "float":
+            return ("float", self._to_java_float(-float(sv)))
+        return ("double", -float(sv))
+
+    @staticmethod
+    def _java_int_div_mod(lv: int, rv: int, is_mod: bool) -> Optional[int]:
+        """Divisão/módulo inteiro com truncamento para zero conforme JLS §15.17.2/§15.17.3."""
+        if rv == 0:
+            return None
+        if is_mod:
+            r = abs(lv) % abs(rv)
+            return -r if lv < 0 else r
+        q = abs(lv) // abs(rv)
+        return -q if (lv < 0) ^ (rv < 0) else q
+
+    @staticmethod
+    def _ieee_float_div_mod(lv: float, rv: float, is_mod: bool) -> float:
+        """Divisão/módulo IEEE 754 sem levantar ZeroDivisionError em Python."""
+        if is_mod:
+            if math.isnan(lv) or math.isnan(rv) or math.isinf(lv) or rv == 0.0:
+                return float("nan")
+            if math.isinf(rv):
+                return lv
+            return math.fmod(lv, rv)
+        if math.isnan(lv) or math.isnan(rv):
+            return float("nan")
+        if rv == 0.0:
+            if lv == 0.0:
+                return float("nan")
+            sign = math.copysign(1.0, lv) * math.copysign(1.0, rv)
+            return math.copysign(float("inf"), sign)
+        if math.isinf(lv) and math.isinf(rv):
+            return float("nan")
+        return lv / rv
+
+    def _eval_constant_binary(self, expr: BinaryOp) -> Optional[Tuple[str, Any]]:
+        """Avalia operação binária constante respeitando semântica e overflow Java (JLS §15.17–§15.24, §15.29)."""
+        lres = self._eval_constant_expr(expr.left)
+        rres = self._eval_constant_expr(expr.right)
+        if lres is None or rres is None:
+            return None
+        lt, lv = lres
+        rt, rv = rres
+        op = expr.op
+
+        if op == "+" and ("String" in (lt, rt)):
+            return ("String", self._format_java_string_value(lt, lv) + self._format_java_string_value(rt, rv))
+        if op in ("&&", "||"):
+            if lt != "boolean" or rt != "boolean":
+                return None
+            return ("boolean", bool(lv) and bool(rv)) if op == "&&" else ("boolean", bool(lv) or bool(rv))
+        if op in ("==", "!="):
+            if lt == "String" and rt == "String":
+                eq = (lv == rv)
+            elif lt == "boolean" and rt == "boolean":
+                eq = (bool(lv) == bool(rv))
+            elif lt in self.NUMERIC_PRIMITIVE_TYPES and rt in self.NUMERIC_PRIMITIVE_TYPES:
+                pt = self._promote_constant_binary_type(lt, rt)
+                if pt == "double":
+                    eq = float(lv) == float(rv)
+                elif pt == "float":
+                    eq = self._to_java_float(lv) == self._to_java_float(rv)
+                elif pt == "long":
+                    eq = self._to_java_long(int(lv)) == self._to_java_long(int(rv))
+                else:
+                    eq = self._to_java_int(int(lv)) == self._to_java_int(int(rv))
+            else:
+                return None
+            return ("boolean", eq if op == "==" else not eq)
+        if op in ("<", "<=", ">", ">="):
+            if lt not in self.NUMERIC_PRIMITIVE_TYPES or rt not in self.NUMERIC_PRIMITIVE_TYPES:
+                return None
+            pt = self._promote_constant_binary_type(lt, rt)
+            if pt == "double":
+                a, b = float(lv), float(rv)
+            elif pt == "float":
+                a, b = self._to_java_float(lv), self._to_java_float(rv)
+            elif pt == "long":
+                a, b = self._to_java_long(int(lv)), self._to_java_long(int(rv))
+            else:
+                a, b = self._to_java_int(int(lv)), self._to_java_int(int(rv))
+            if op == "<":
+                return ("boolean", a < b)
+            if op == "<=":
+                return ("boolean", a <= b)
+            if op == ">":
+                return ("boolean", a > b)
+            return ("boolean", a >= b)
+        if op in ("&", "|", "^"):
+            if lt == "boolean" and rt == "boolean":
+                a, b = bool(lv), bool(rv)
+                if op == "&":
+                    return ("boolean", a and b)
+                if op == "|":
+                    return ("boolean", a or b)
+                return ("boolean", a != b)
+            if lt in self.INTEGRAL_PRIMITIVES and rt in self.INTEGRAL_PRIMITIVES:
+                pt = self._promote_constant_binary_type(lt, rt)
+                a, b = int(lv), int(rv)
+                raw = (a & b) if op == "&" else ((a | b) if op == "|" else (a ^ b))
+                return ("long", self._to_java_long(raw)) if pt == "long" else ("int", self._to_java_int(raw))
+            return None
+        if op in ("<<", ">>", ">>>"):
+            if lt not in self.INTEGRAL_PRIMITIVES or rt not in self.INTEGRAL_PRIMITIVES:
+                return None
+            pt = "long" if lt == "long" else "int"
+            a, b = int(lv), int(rv)
+            if pt == "long":
+                shift = b & 0x3F
+                la = self._to_java_long(a)
+                if op == "<<":
+                    return ("long", self._to_java_long((la & 0xFFFFFFFFFFFFFFFF) << shift))
+                if op == ">>":
+                    return ("long", self._to_java_long(la >> shift))
+                return ("long", self._to_java_long((la & 0xFFFFFFFFFFFFFFFF) >> shift))
+            shift = b & 0x1F
+            ia = self._to_java_int(a)
+            if op == "<<":
+                return ("int", self._to_java_int((ia & 0xFFFFFFFF) << shift))
+            if op == ">>":
+                return ("int", self._to_java_int(ia >> shift))
+            return ("int", self._to_java_int((ia & 0xFFFFFFFF) >> shift))
+        if op in ("+", "-", "*", "/", "%"):
+            if lt not in self.NUMERIC_PRIMITIVE_TYPES or rt not in self.NUMERIC_PRIMITIVE_TYPES:
+                return None
+            pt = self._promote_constant_binary_type(lt, rt)
+            if pt in ("int", "long"):
+                wrap = self._to_java_long if pt == "long" else self._to_java_int
+                a, b = wrap(int(lv)), wrap(int(rv))
+                if op == "+":
+                    return (pt, wrap(a + b))
+                if op == "-":
+                    return (pt, wrap(a - b))
+                if op == "*":
+                    return (pt, wrap(a * b))
+                q_or_r = self._java_int_div_mod(a, b, is_mod=(op == "%"))
+                return (pt, wrap(q_or_r)) if q_or_r is not None else None
+            conv = self._to_java_float if pt == "float" else float
+            fa, fb = conv(float(lv)), conv(float(rv))
+            try:
+                if op == "+":
+                    res = fa + fb
+                elif op == "-":
+                    res = fa - fb
+                elif op == "*":
+                    res = fa * fb
+                else:
+                    res = self._ieee_float_div_mod(fa, fb, is_mod=(op == "%"))
+            except OverflowError:
+                res = float("inf")
+            return (pt, conv(res))
+        return None
+
+    def _eval_constant_expr(self, expr: Optional[ASTNode]) -> Optional[Tuple[str, Any]]:
+        """
+        Avalia expressão constante em tempo de compilação segundo JLS §15.29.
+        Retorna (tipo_java, valor) ou None quando a expressão depende de execução ou é inválida.
+        """
+        if expr is None:
+            return None
         if isinstance(expr, Literal):
-            return expr.kind != "NULL" and str(expr.value) != "null"
-        if isinstance(expr, ClassLiteral):
-            return True
+            return self._eval_constant_literal(expr)
         if isinstance(expr, UnaryOp):
-            return self._is_compile_time_constant_expr(expr.operand)
+            return self._eval_constant_unary(expr)
         if isinstance(expr, BinaryOp):
-            return self._is_compile_time_constant_expr(expr.left) and self._is_compile_time_constant_expr(expr.right)
-        if isinstance(expr, ConditionalExpression):
-            return (
-                self._is_compile_time_constant_expr(expr.condition)
-                and self._is_compile_time_constant_expr(expr.then_expr)
-                and self._is_compile_time_constant_expr(expr.else_expr)
-            )
+            return self._eval_constant_binary(expr)
         if isinstance(expr, CastExpression):
-            return self._is_compile_time_constant_expr(expr.expression)
+            tdims = getattr(expr.target_type, "array_dimensions", 0)
+            if tdims or getattr(expr, "additional_bounds", None):
+                return None
+            tname = self._normalize_type_str(getattr(expr, "target_type", None)) or getattr(expr.target_type, "name", None)
+            t_clean = self._strip_leading_type_annotations(tname) if tname else None
+            if not t_clean:
+                return None
+            inner = self._eval_constant_expr(expr.expression)
+            if inner is None:
+                return None
+            return self._cast_constant_value(inner[0], inner[1], t_clean)
+        if isinstance(expr, ConditionalExpression):
+            cres = self._eval_constant_expr(expr.condition)
+            tres = self._eval_constant_expr(expr.then_expr)
+            eres = self._eval_constant_expr(expr.else_expr)
+            if cres is None or tres is None or eres is None or cres[0] != "boolean":
+                return None
+            tt, tv = tres
+            et, ev = eres
+            chosen_val = tv if cres[1] else ev
+            if tt == et:
+                return (tt, chosen_val)
+            if tt not in self.NUMERIC_PRIMITIVE_TYPES or et not in self.NUMERIC_PRIMITIVE_TYPES:
+                return None
+            if {tt, et} == {"byte", "short"}:
+                res_t = "short"
+            elif tt in self.INTEGER_RANGES and et == "int" and self.INTEGER_RANGES[tt][0] <= ev <= self.INTEGER_RANGES[tt][1]:
+                res_t = tt
+            elif et in self.INTEGER_RANGES and tt == "int" and self.INTEGER_RANGES[et][0] <= tv <= self.INTEGER_RANGES[et][1]:
+                res_t = et
+            else:
+                res_t = self._promote_constant_binary_type(tt, et)
+            return self._cast_constant_value(tt if cres[1] else et, chosen_val, res_t)
         if isinstance(expr, Identifier):
+            info = self._find_local_var_info(expr.name)
+            if info is not None:
+                return info.get("const_typed") if info.get("is_final") else None
             sym = self.symbols.lookup(expr.name)
             if sym is not None:
-                return bool(sym.get("is_compile_constant", False)) or sym.get("category") in ("constante_enum", "constante_interface")
-            return expr.name.split(".")[0][:1].isupper()
+                if "const_typed" in sym and sym.get("is_compile_constant"):
+                    return sym["const_typed"]
+                if sym.get("category") in ("variavel", "parametro", "componente_record"):
+                    return None
+                if sym.get("category") in ("campo", "constante_interface"):
+                    for enc in reversed(self._enclosing_type_names):
+                        fval = self._eval_constant_field_in_type(enc, expr.name)
+                        if fval is not None:
+                            return fval
+                    return None
+                return None
+            for enc in reversed(self._enclosing_type_names):
+                fval = self._eval_constant_field_in_type(enc, expr.name)
+                if fval is not None:
+                    return fval
+            return None
         if isinstance(expr, MemberAccess):
-            if isinstance(expr.target, Identifier) and expr.target.name in self._enums:
-                return True
-            if isinstance(expr.target, Identifier) and expr.target.name[:1].isupper():
-                return True
-            return False
-        if isinstance(expr, ArrayInitializer):
-            return all(self._is_compile_time_constant_expr(e) for e in expr.elements)
-        return False
+            if isinstance(expr.target, Identifier):
+                tname = expr.target.name
+                if self._find_local_var_info(tname) is not None:
+                    return None
+                sym = self.symbols.lookup(tname)
+                if sym is not None and sym.get("category") in ("variavel", "parametro", "componente_record", "campo"):
+                    return None
+                return self._eval_constant_field_in_type(tname, expr.member_name)
+            chain: List[str] = []
+            cur: Optional[ASTNode] = expr.target
+            while isinstance(cur, MemberAccess):
+                chain.append(cur.member_name)
+                cur = cur.target
+            if isinstance(cur, Identifier) and chain:
+                if self._find_local_var_info(cur.name) is not None:
+                    return None
+                sym = self.symbols.lookup(cur.name)
+                if sym is not None and sym.get("category") in ("variavel", "parametro", "componente_record", "campo"):
+                    return None
+                owner = chain[0]
+                return self._eval_constant_field_in_type(owner, expr.member_name)
+            return None
+        return None
+
+    def _is_compile_time_constant_expr(self, expr: Optional[ASTNode]) -> bool:
+        """Verifica se uma expressão é constante em tempo de compilação segundo JLS §15.29."""
+        return self._eval_constant_expr(expr) is not None
 
     def _check_annotation_constant_expr(self, node: Optional[ASTNode], owner_desc: str, fallback_line: int):
         """Valida que uma expressão dentro de ElementValue não contenha construções não-constantes."""
@@ -2833,7 +5253,7 @@ class SemanticAnalyzer:
                         )
                     )
                     return False
-            self._local_var_scopes[-1][name] = {
+            info = {
                 "type": var_type,
                 "line": line,
                 "is_final": is_final,
@@ -2841,6 +5261,15 @@ class SemanticAnalyzer:
                 "category": category,
                 "has_initializer": has_initializer,
             }
+            self._local_var_scopes[-1][name] = info
+            vid = ("local", id(info))
+            self._flow_tracked[vid] = {"name": name, "is_final": is_final, "kind": "local", "line": line}
+            if has_initializer:
+                self._flow_da.add(vid)
+                self._flow_du.discard(vid)
+            else:
+                self._flow_da.discard(vid)
+                self._flow_du.add(vid)
             self.symbols.declare(
                 name,
                 var_type,
@@ -2877,7 +5306,7 @@ class SemanticAnalyzer:
         return None
 
     def _lookup_var_symbol(self, name: str) -> Optional[Dict[str, Any]]:
-        """Busca variável em escopos de pattern ativos primeiro e depois na tabela de símbolos."""
+        """Busca variável em escopos de pattern ativos, escopos locais, tabela de símbolos e campos herdados."""
         for pscope in reversed(self._active_pattern_scopes):
             if name in pscope:
                 info = pscope[name]
@@ -2889,7 +5318,17 @@ class SemanticAnalyzer:
                     "is_compile_constant": False,
                     "is_pattern_var": True,
                 }
-        return self.symbols.lookup(name)
+        sym = self.symbols.lookup(name)
+        cur_cls_key = self._inheritance_analyzer.current_enclosing_key()
+        if cur_cls_key and self._find_local_var_info(name) is None:
+            fields, _ = self._collect_type_fields(cur_cls_key)
+            if name in fields:
+                finfo = fields[name]
+                if finfo.get("owner_key") == cur_cls_key and sym is not None:
+                    return sym
+                if sym is None or sym.get("category") in (self.TYPE_SYMBOL_CATEGORIES | {"campo", "constante_enum", "constante_interface", "componente_record"}):
+                    return finfo
+        return sym
 
     def _mark_local_var_reassigned(self, name: str):
         if not name:
@@ -2936,8 +5375,21 @@ class SemanticAnalyzer:
 
     def _check_boolean_condition(self, cond: Optional[ASTNode], context_label: str, line: int) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
         """Valida expressão de condição booleana e retorna (true_vars, false_vars) para escopo de patterns (JLS §6.3)."""
+        tv, fv, _, _ = self._check_boolean_condition_with_states(cond, context_label, line)
+        return tv, fv
+
+    def _check_boolean_condition_with_states(
+        self, cond: Optional[ASTNode], context_label: str, line: int
+    ) -> Tuple[
+        Dict[str, Dict[str, Any]],
+        Dict[str, Dict[str, Any]],
+        Tuple[Set[Any], Set[Any], bool],
+        Tuple[Set[Any], Set[Any], bool],
+    ]:
+        """Valida condição booleana retornando (true_vars, false_vars, true_state, false_state) conforme JLS §6.3 e §16."""
         if cond is None:
-            return {}, {}
+            cur = self._flow_snapshot()
+            return {}, {}, cur, cur
         flow = self._check_expression_flow(cond)
         inferred = self.infer_type(cond)
         if inferred is not None and inferred not in ("boolean", "Boolean", "Object", "desconhecido", "var"):
@@ -2947,7 +5399,15 @@ class SemanticAnalyzer:
                     line,
                 )
             )
-        return flow.true_vars, flow.false_vars
+        cur = self._flow_snapshot()
+        true_st = flow.true_state if flow.true_state is not None else cur
+        false_st = flow.false_state if flow.false_state is not None else cur
+        c_val = self._eval_constant_boolean(cond)
+        if c_val is True:
+            false_st = self._flow_unreachable()
+        elif c_val is False:
+            true_st = self._flow_unreachable()
+        return flow.true_vars, flow.false_vars, true_st, false_st
 
     def _collect_all_enum_constant_names(self) -> Set[str]:
         """Coleta nomes de constantes de todos os enums pré-indexados na unidade."""
@@ -2960,6 +5420,18 @@ class SemanticAnalyzer:
 
     def _switch_label_constant_key(self, const_expr: ASTNode) -> Any:
         """Normaliza constante de label 'case' para detecção de duplicidade."""
+        res = self._eval_constant_expr(const_expr)
+        if res is not None:
+            ctype, cval = res
+            if ctype in ("byte", "short", "char", "int"):
+                return ("int", cval)
+            if ctype == "long":
+                return ("long", cval)
+            if ctype == "String":
+                return ("lit", "STRING", str(cval))
+            if ctype == "boolean":
+                return ("lit", "BOOLEAN", "true" if cval else "false")
+            return ("lit", ctype.upper(), str(cval))
         if isinstance(const_expr, Literal):
             kind = getattr(const_expr, "kind", "")
             val = getattr(const_expr, "value", None)
@@ -2979,19 +5451,6 @@ class SemanticAnalyzer:
             return ("id", const_expr.name)
         if isinstance(const_expr, MemberAccess) and isinstance(const_expr.target, Identifier):
             return ("member", const_expr.target.name, const_expr.member_name)
-        if isinstance(const_expr, UnaryOp) and const_expr.op in ("+", "-") and isinstance(const_expr.operand, Literal):
-            val_s = str(const_expr.operand.value)
-            if val_s.lower().endswith("l"):
-                try:
-                    num = int(val_s[:-1].replace("_", ""), 0)
-                    return ("long", -num if const_expr.op == "-" else num)
-                except ValueError:
-                    return None
-            try:
-                num = int(val_s.replace("_", ""), 0)
-                return ("int", -num if const_expr.op == "-" else num)
-            except ValueError:
-                return None
         return None
 
     def _check_switch_constant_expr(self, const_expr: ASTNode, lb_line: int, enum_const_names: Set[str]):
@@ -3153,13 +5612,21 @@ class SemanticAnalyzer:
             return tref.strip() or None
         if isinstance(tref, WildcardType):
             if tref.bound_kind == "extends" and tref.bound_type is not None:
-                return self._normalize_type_str(tref.bound_type) or "Object"
-            return "Object"
+                b = self._normalize_type_str(tref.bound_type) or "Object"
+                return f"? extends {b}"
+            if tref.bound_kind == "super" and tref.bound_type is not None:
+                b = self._normalize_type_str(tref.bound_type) or "Object"
+                return f"? super {b}"
+            return "?"
         if isinstance(tref, TypeReference):
             if getattr(tref, "full_name", None):
                 return tref.full_name
             name = getattr(tref, "name", "")
-            dims = getattr(tref, "dimensions", 0) or 0
+            targs = getattr(tref, "type_arguments", []) or []
+            if name and targs:
+                args_str = ", ".join(self._normalize_type_str(a) or "?" for a in targs)
+                name = f"{name}<{args_str}>"
+            dims = getattr(tref, "dimensions", 0) or getattr(tref, "array_dimensions", 0) or 0
             return f"{name}{'[]' * dims}" if name else None
         if hasattr(tref, "pretty"):
             return tref.pretty()
@@ -3204,6 +5671,11 @@ class SemanticAnalyzer:
                 return lscope[base]
             if simple in lscope:
                 return lscope[simple]
+        resolved_key = self._inheritance_analyzer.resolve_type_key(base)
+        if resolved_key:
+            meta = self._inheritance_analyzer.get_type_meta(resolved_key)
+            if meta is not None:
+                return (meta["kind"], meta["node"])
         if base in self._declared_types:
             return self._declared_types[base]
         if simple in self._declared_types:
@@ -3216,7 +5688,6 @@ class SemanticAnalyzer:
         base, dims = self._split_type_dims(stripped)
         if dims > 0:
             elem_base = base
-            elem_full = f"{elem_base}{'[]' * (dims - 1)}"
             supers = ["Object", "Cloneable", "Serializable"]
             if elem_base not in self.PRIMITIVE_TYPES and elem_base != "Object":
                 p_supers, ext = self._direct_supertypes(elem_base)
@@ -3229,40 +5700,51 @@ class SemanticAnalyzer:
         if simple == "Object":
             return [], False
 
-        tdecl = self._lookup_type_decl(simple)
+        cur_key = self._inheritance_analyzer.resolve_type_key(base) or base
+        tdecl = self._lookup_type_decl(cur_key)
         if tdecl is not None:
             tkind, node = tdecl
             supers: List[str] = []
+
+            def _qualify_sup(raw_s: Optional[str]) -> Optional[str]:
+                if not raw_s:
+                    return None
+                rbase = self._strip_generics(raw_s) or raw_s
+                rk = self._inheritance_analyzer.resolve_type_key(rbase, context_type=cur_key)
+                if rk and "<" in raw_s:
+                    return rk + raw_s[raw_s.find("<"):]
+                return rk or raw_s
+
             if tkind == "class":
                 ext = getattr(node, "extends_type", None)
                 if ext is not None:
-                    ext_s = self._normalize_type_str(ext)
+                    ext_s = _qualify_sup(self._normalize_type_str(ext))
                     if ext_s:
                         supers.append(ext_s)
                 else:
                     supers.append("Object")
                 for impl in getattr(node, "implements_types", []):
-                    impl_s = self._normalize_type_str(impl)
+                    impl_s = _qualify_sup(self._normalize_type_str(impl))
                     if impl_s:
                         supers.append(impl_s)
             elif tkind == "interface":
                 exts = getattr(node, "extends_types", [])
                 for e in exts:
-                    e_s = self._normalize_type_str(e)
+                    e_s = _qualify_sup(self._normalize_type_str(e))
                     if e_s:
                         supers.append(e_s)
                 supers.append("Object")
             elif tkind == "record":
                 supers.append("Record")
                 for impl in getattr(node, "implements_types", []):
-                    impl_s = self._normalize_type_str(impl)
+                    impl_s = _qualify_sup(self._normalize_type_str(impl))
                     if impl_s:
                         supers.append(impl_s)
                 supers.append("Object")
             elif tkind == "enum":
-                supers.append("Enum")
+                supers.append(f"Enum<{cur_key}>")
                 for impl in getattr(node, "implements_types", []):
-                    impl_s = self._normalize_type_str(impl)
+                    impl_s = _qualify_sup(self._normalize_type_str(impl))
                     if impl_s:
                         supers.append(impl_s)
                 supers.append("Object")
@@ -3270,20 +5752,82 @@ class SemanticAnalyzer:
                 supers.extend(["Annotation", "Object"])
             return supers, False
 
+        ext = self._resolve_external_type(type_name)
+        if ext is not None:
+            tvar_map = self._type_var_mapping_for_type(type_name)
+            ext_supers: List[str] = []
+            if ext.super_class:
+                sc = self._format_ext_type(ext.super_class) or ext.super_class
+                sc = self._substitute_type_vars(sc, tvar_map) or sc
+                ext_supers.append(sc)
+            for ifc in ext.interfaces:
+                ic = self._format_ext_type(ifc) or ifc
+                ic = self._substitute_type_vars(ic, tvar_map) or ic
+                if ic not in ext_supers:
+                    ext_supers.append(ic)
+            if ext.kind == "interface" and "Object" not in ext_supers:
+                ext_supers.append("Object")
+            elif ext.kind != "interface" and ext.fqn != "java.lang.Object" and not ext_supers:
+                ext_supers.append("Object")
+            return ext_supers, False
+
         if simple in self.BUILTIN_TYPE_SUPERTYPES:
             return list(self.BUILTIN_TYPE_SUPERTYPES[simple]), False
         if simple in self.KNOWN_EXCEPTION_PARENTS:
             return [self.KNOWN_EXCEPTION_PARENTS[simple], "Object"], False
         return ["Object"], True
 
-    def _is_known_type(self, type_name: Optional[str]) -> bool:
-        """Indica se o tipo está declarado na unidade ou pertence ao núcleo embutido conhecido."""
+    def _is_known_type_ignoring_other_pkgs(self, type_name: Optional[str]) -> bool:
+        """Indica se o tipo está acessível/visível no escopo léxico da unidade atual (sem vazamento entre pacotes)."""
         if not type_name:
             return False
+        if self._is_capture_var(type_name) or self._is_wildcard_arg(type_name):
+            return True
         stripped = self._strip_generics(type_name)
         if not stripped:
             return False
         raw_base, _ = self._split_type_dims(stripped)
+        if self._lookup_type_param_bounds(raw_base) is not None:
+            return True
+        if raw_base in self.PRIMITIVE_TYPES:
+            return True
+        if (
+            raw_base in self.BUILTIN_TYPE_SUPERTYPES
+            or raw_base in self.KNOWN_EXCEPTION_PARENTS
+            or raw_base in self.BUILTIN_METHODS
+            or raw_base in self.BUILTIN_CLASS_TYPES
+            or raw_base in self.BUILTIN_INTERFACE_TYPES
+        ):
+            return True
+        s = self._simple_base_name(type_name)
+        if s and (
+            s in self.PRIMITIVE_TYPES
+            or s in self.BUILTIN_TYPE_SUPERTYPES
+            or s in self.KNOWN_EXCEPTION_PARENTS
+            or s in self.BUILTIN_METHODS
+            or s in self.BUILTIN_CLASS_TYPES
+            or s in self.BUILTIN_INTERFACE_TYPES
+        ):
+            return True
+        for lscope in reversed(self._local_declared_type_scopes):
+            if raw_base in lscope or (s and s in lscope):
+                return True
+        if self._inheritance_analyzer.resolve_type_key(raw_base) is not None:
+            return True
+        return self._resolve_external_type(raw_base) is not None
+
+    def _is_known_type(self, type_name: Optional[str]) -> bool:
+        """Indica se o tipo está declarado na unidade ou pertence ao núcleo embutido conhecido."""
+        if not type_name:
+            return False
+        if self._is_capture_var(type_name) or self._is_wildcard_arg(type_name):
+            return True
+        stripped = self._strip_generics(type_name)
+        if not stripped:
+            return False
+        raw_base, _ = self._split_type_dims(stripped)
+        if self._lookup_type_param_bounds(raw_base) is not None:
+            return True
         if (
             raw_base in self.BUILTIN_TYPE_SUPERTYPES
             or raw_base in self.BUILTIN_METHODS
@@ -3305,7 +5849,9 @@ class SemanticAnalyzer:
             or base in self.BUILTIN_INTERFACE_TYPES
         ):
             return True
-        return self._lookup_type_decl(base) is not None
+        if self._lookup_type_decl(raw_base) is not None or self._lookup_type_decl(base) is not None:
+            return True
+        return self._resolve_external_type(raw_base) is not None
 
     def _is_final_or_closed_leaf(self, type_name: Optional[str]) -> bool:
         """Indica se um tipo não admite subtipos desconhecidos (final, record, enum ou array de final/primitivo)."""
@@ -3319,13 +5865,16 @@ class SemanticAnalyzer:
             return base in self.PRIMITIVE_TYPES or self._is_final_or_closed_leaf(base)
         if base in self.PRIMITIVE_TYPES or base in self.BUILTIN_FINAL_TYPES:
             return True
-        tdecl = self._lookup_type_decl(base)
+        tdecl = self._lookup_type_decl(type_name) or self._lookup_type_decl(base)
         if tdecl is not None:
             tkind, node = tdecl
             if tkind in ("record", "enum"):
                 return True
             if tkind == "class" and "final" in getattr(node, "modifiers", []):
                 return True
+        ext = self._resolve_external_type(type_name)
+        if ext is not None:
+            return ext.is_final or ext.kind in ("record", "enum")
         return False
 
     def _is_class_kind(self, type_name: Optional[str]) -> Optional[bool]:
@@ -3335,18 +5884,477 @@ class SemanticAnalyzer:
         s = self._simple_base_name(type_name)
         if not s or s.endswith("[]"):
             return None
-        tdecl = self._lookup_type_decl(s)
+        tdecl = self._lookup_type_decl(type_name) or self._lookup_type_decl(s)
         if tdecl is not None:
             tkind, _ = tdecl
             return tkind in ("class", "record", "enum")
+        ext = self._resolve_external_type(type_name)
+        if ext is not None:
+            return ext.kind in ("class", "record", "enum")
         if s in self.BUILTIN_CLASS_TYPES or s in self.KNOWN_EXCEPTION_PARENTS:
             return True
         if s in self.BUILTIN_INTERFACE_TYPES:
             return False
         return None
 
+    def _push_type_params(self, type_params: Optional[List[ASTNode]], is_type_level: bool = False):
+        """Empilha parâmetros de tipo declarados com seus respectivos limites superiores."""
+        if not type_params:
+            return
+        mapping: Dict[str, List[str]] = {}
+        for tp in type_params:
+            tp_name = getattr(tp, "name", None)
+            if not tp_name:
+                continue
+            raw_bounds = [
+                self._normalize_type_str(b)
+                for b in (getattr(tp, "bounds", []) or [])
+            ]
+            bounds = [b for b in raw_bounds if b] or ["Object"]
+            mapping[tp_name] = bounds
+        if mapping:
+            self._active_type_params.append((mapping, is_type_level))
+
+    def _lookup_type_param_bounds(self, name: Optional[str]) -> Optional[List[str]]:
+        """Retorna limites superiores declarados se 'name' for parâmetro de tipo ativo no escopo."""
+        if not name:
+            return None
+        s, dims = self._strip_type_dims_full(self._strip_generics(name) or "")
+        if dims > 0 or not s or s in self._capture_vars:
+            return None
+        for mapping, is_tl in reversed(self._active_type_params):
+            if is_tl and self._in_static_context:
+                continue
+            if s in mapping:
+                return list(mapping[s])
+        return None
+
+    def _parse_wildcard_arg(self, arg_str: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+        """Analisa argumento de tipo retornando ('unbounded'|'extends'|'super'|None, limite_ou_tipo)."""
+        if not arg_str:
+            return None, arg_str
+        s = self._strip_leading_type_annotations(arg_str.strip()) or arg_str.strip()
+        if s == "?":
+            return "unbounded", None
+        if s.startswith("?"):
+            rest = s[1:].strip()
+            if rest.startswith("extends "):
+                bound = self._strip_leading_type_annotations(rest[len("extends "):].strip()) or "Object"
+                return "extends", bound
+            if rest.startswith("super "):
+                bound = self._strip_leading_type_annotations(rest[len("super "):].strip()) or "Object"
+                return "super", bound
+        return None, s
+
+    def _is_wildcard_arg(self, arg_str: Optional[str]) -> bool:
+        """Indica se a representação textual é um wildcard ('?', '? extends T', '? super T')."""
+        return self._parse_wildcard_arg(arg_str)[0] is not None
+
+    def _is_capture_var(self, type_str: Optional[str]) -> bool:
+        """Indica se type_str (ou sua base sem []) representa uma variável de captura CAP#k."""
+        if not type_str:
+            return False
+        stripped = self._strip_generics(type_str) or ""
+        base, _ = self._split_type_dims(stripped)
+        return base in self._capture_vars
+
+    def _type_param_decls_for_type(self, simple_base: Optional[str]) -> List[Tuple[str, List[str]]]:
+        """Retorna lista ordenada [(param_name, [bounds...])] declarados para um tipo genérico."""
+        if not simple_base:
+            return []
+        clean = self._strip_leading_type_annotations(simple_base) or simple_base
+        stripped = self._strip_generics(clean)
+        if not stripped:
+            return []
+        base, dims = self._split_type_dims(stripped)
+        if dims > 0 or not base or base in self.PRIMITIVE_TYPES or base in ("void", "var", "null", "desconhecido"):
+            return []
+        if self._lookup_type_param_bounds(base) is not None:
+            return []
+
+        resolved_key = self._inheritance_analyzer.resolve_type_key(base) or base
+        tdecl = self._lookup_type_decl(resolved_key)
+        if tdecl is None and resolved_key != base:
+            tdecl = self._lookup_type_decl(base)
+        if tdecl is not None:
+            dkind, tnode = tdecl
+            if dkind in ("enum", "annotation_interface"):
+                return []
+            decls: List[Tuple[str, List[str]]] = []
+            for tp in (getattr(tnode, "type_parameters", []) or []):
+                tp_name = getattr(tp, "name", None)
+                if not tp_name:
+                    continue
+                raw_bounds = [
+                    self._normalize_type_str(b)
+                    for b in (getattr(tp, "bounds", []) or [])
+                ]
+                decls.append((tp_name, [b for b in raw_bounds if b] or ["Object"]))
+            return decls
+
+        ext = self._resolve_external_type(base)
+        if ext is not None:
+            if not ext.type_parameters:
+                return []
+            decls = []
+            for tp_name, raw_bs in ext.type_parameters:
+                fmt_bs = [self._format_ext_type(b) or b for b in (raw_bs or [])]
+                decls.append((tp_name, [b for b in fmt_bs if b] or ["Object"]))
+            return decls
+
+        simple = base.split(".")[-1]
+        is_unqualified = "." not in base
+        matches_compat = self.BUILTIN_COMPAT_FQNS.get(simple) == base or f"java.lang.{simple}" == base
+        if is_unqualified:
+            if self._is_explicitly_imported_from_other_pkg(simple):
+                return []
+            if simple in self.BUILTIN_TYPE_PARAMS:
+                return [(pname, ["Object"]) for pname in self.BUILTIN_TYPE_PARAMS[simple]]
+        elif base in self.BUILTIN_TYPE_PARAMS:
+            return [(pname, ["Object"]) for pname in self.BUILTIN_TYPE_PARAMS[base]]
+        elif matches_compat and simple in self.BUILTIN_TYPE_PARAMS:
+            return [(pname, ["Object"]) for pname in self.BUILTIN_TYPE_PARAMS[simple]]
+        return []
+
+    def _canonical_type_family_key(self, type_str: Optional[str]) -> Optional[str]:
+        """Chave canônica (FQN externo ou chave interna ou nome simples) da família do tipo para interseções."""
+        if not type_str:
+            return None
+        stripped = self._strip_generics(type_str)
+        if not stripped:
+            return None
+        base, dims = self._split_type_dims(stripped)
+        if not base:
+            return None
+        internal_key = self._inheritance_analyzer.resolve_type_key(base)
+        if internal_key:
+            return f"int:{internal_key}{'[]' * dims}"
+        ext = self._resolve_external_type(base)
+        if ext is not None:
+            return f"ext:{ext.fqn}{'[]' * dims}"
+        simple = self._simple_base_name(base) or base
+        return f"sim:{simple}{'[]' * dims}"
+
+    def _collect_param_supertypes(self, type_str: str) -> Dict[str, List[str]]:
+        """Coleta supertipos parametrizados alcançáveis indexados pela família canônica do tipo."""
+        result: Dict[str, List[str]] = {}
+        queue: List[str] = [type_str]
+        seen: Set[str] = set()
+        while queue:
+            cur = queue.pop(0)
+            if not cur or cur in seen:
+                continue
+            seen.add(cur)
+            _, args, _ = self._extract_generic_args(cur)
+            if args:
+                fam = self._canonical_type_family_key(cur)
+                if fam:
+                    bucket = result.setdefault(fam, [])
+                    if cur not in bucket:
+                        bucket.append(cur)
+            supers, _ = self._direct_supertypes(cur)
+            tvar_map = self._type_var_mapping_for_type(cur)
+            for s in supers:
+                s_sub = self._substitute_type_vars(s, tvar_map) or s
+                if s_sub and s_sub not in seen:
+                    queue.append(s_sub)
+        return result
+
+    def _type_args_intersect_compatible(
+        self,
+        sa: str,
+        sb: str,
+        visited: Set[Tuple[str, str]],
+    ) -> Optional[bool]:
+        """Verifica se existe instanciação comum compatível entre dois argumentos genéricos."""
+        a = (self._strip_leading_type_annotations(sa) or sa).strip()
+        b = (self._strip_leading_type_annotations(sb) or sb).strip()
+        if not a or not b:
+            return None
+        if a == b:
+            return True
+        ka, ba = self._parse_wildcard_arg(a)
+        kb, bb = self._parse_wildcard_arg(b)
+        if ka == "unbounded" or kb == "unbounded":
+            return True
+
+        # Desempacota captura se um lado for CAP#k e o outro não for wildcard
+        if self._is_capture_var(a) and kb is None and not self._is_capture_var(b):
+            cap = self._capture_vars.get(self._split_type_dims(self._strip_generics(a) or a)[0], {})
+            lb = cap.get("lower_bound")
+            if lb and self._is_subtype(lb, b) is False:
+                return False
+            for ub in cap.get("upper_bounds", []) or []:
+                if self._are_intersection_types_compatible(b, ub, visited) is False:
+                    return False
+            return True
+        if self._is_capture_var(b) and ka is None and not self._is_capture_var(a):
+            return self._type_args_intersect_compatible(b, a, visited)
+
+        if ka is None and kb is None:
+            if self._is_capture_var(a) or self._is_capture_var(b):
+                return True
+            if self._lookup_type_param_bounds(a) is not None or self._lookup_type_param_bounds(b) is not None:
+                return self._are_intersection_types_compatible(a, b, visited)
+            a_base, a_args, a_dims = self._extract_generic_args(a)
+            b_base, b_args, b_dims = self._extract_generic_args(b)
+            if a_dims != b_dims:
+                return False
+            if self._canonical_type_family_key(a_base) != self._canonical_type_family_key(b_base):
+                if not self._is_known_type(a) or not self._is_known_type(b):
+                    return None
+                return False
+            if len(a_args) != len(b_args):
+                return False
+            saw_none = False
+            for xa, xb in zip(a_args, b_args):
+                r = self._type_args_intersect_compatible(xa, xb, visited)
+                if r is False:
+                    return False
+                if r is None:
+                    saw_none = True
+            return None if saw_none else True
+
+        if ka == "extends" and kb is None:
+            r = self._is_subtype(b, ba or "Object")
+            return r
+        if kb == "extends" and ka is None:
+            return self._is_subtype(a, bb or "Object")
+        if ka == "super" and kb is None:
+            return self._is_subtype(ba or "Object", b)
+        if kb == "super" and ka is None:
+            return self._is_subtype(bb or "Object", a)
+        if ka == "extends" and kb == "extends":
+            return self._are_intersection_types_compatible(ba or "Object", bb or "Object", visited)
+        if ka == "super" and kb == "extends":
+            return self._is_subtype(ba or "Object", bb or "Object")
+        if ka == "extends" and kb == "super":
+            return self._is_subtype(bb or "Object", ba or "Object")
+        return True  # dois '? super' possuem supertipo comum (ex: Object)
+
+    def _are_intersection_types_compatible(
+        self,
+        t1: Optional[str],
+        t2: Optional[str],
+        visited: Optional[Set[Tuple[str, str]]] = None,
+    ) -> Optional[bool]:
+        """Verifica conforme JLS §4.5/§4.9 se dois tipos de referência admitem interseção não-vazia."""
+        if not t1 or not t2:
+            return None
+        c1 = (self._strip_leading_type_annotations(t1) or t1).strip()
+        c2 = (self._strip_leading_type_annotations(t2) or t2).strip()
+        if not c1 or not c2:
+            return None
+        if c1 == c2 or c1 in ("Object", "java.lang.Object") or c2 in ("Object", "java.lang.Object"):
+            return True
+
+        vset = visited if visited is not None else set()
+        vkey = (c1, c2) if c1 <= c2 else (c2, c1)
+        if vkey in vset:
+            return True
+        vset.add(vkey)
+
+        tp1_bounds = self._lookup_type_param_bounds(c1)
+        if tp1_bounds is not None:
+            saw_none = False
+            for ub in tp1_bounds:
+                r = self._are_intersection_types_compatible(ub, c2, vset)
+                if r is False:
+                    return False
+                if r is None:
+                    saw_none = True
+            return None if saw_none else True
+
+        tp2_bounds = self._lookup_type_param_bounds(c2)
+        if tp2_bounds is not None:
+            saw_none = False
+            for ub in tp2_bounds:
+                r = self._are_intersection_types_compatible(c1, ub, vset)
+                if r is False:
+                    return False
+                if r is None:
+                    saw_none = True
+            return None if saw_none else True
+
+        if self._is_capture_var(c1):
+            cap1 = self._capture_vars.get(self._split_type_dims(self._strip_generics(c1) or c1)[0], {})
+            saw_none = False
+            for ub in cap1.get("upper_bounds", []) or []:
+                r = self._are_intersection_types_compatible(ub, c2, vset)
+                if r is False:
+                    return False
+                if r is None:
+                    saw_none = True
+            return None if saw_none else True
+
+        if self._is_capture_var(c2):
+            return self._are_intersection_types_compatible(c2, c1, vset)
+
+        disj = self._are_types_disjoint(c1, c2)
+        if disj is True:
+            return False
+        if disj is None:
+            return None
+
+        # Mesmo que _are_types_disjoint não seja True (ex: duas interfaces parametrizadas),
+        # verifica conflito de argumentos em supertipos genéricos compartilhados (JLS §8.1.5 / §4.5).
+        psups1 = self._collect_param_supertypes(c1)
+        psups2 = self._collect_param_supertypes(c2)
+        saw_unknown = False
+        for fam, list1 in psups1.items():
+            list2 = psups2.get(fam)
+            if not list2:
+                continue
+            for pt1 in list1:
+                _, a1, _ = self._extract_generic_args(pt1)
+                for pt2 in list2:
+                    _, a2, _ = self._extract_generic_args(pt2)
+                    if len(a1) != len(a2):
+                        continue
+                    for xa, xb in zip(a1, a2):
+                        r = self._type_args_intersect_compatible(xa, xb, vset)
+                        if r is False:
+                            return False
+                        if r is None:
+                            saw_unknown = True
+        return None if saw_unknown else True
+
+    def _combine_upper_bounds(self, explicit_bound: str, decl_bounds: List[str]) -> List[str]:
+        """Combina limite explícito de '? extends T' com os limites declarados do parâmetro de tipo (glb)."""
+        if not decl_bounds or decl_bounds == ["Object"]:
+            return [explicit_bound]
+        result: List[str] = [explicit_bound]
+        for db in decl_bounds:
+            if db == "Object":
+                continue
+            if self._is_subtype(explicit_bound, db) is True:
+                continue
+            if self._is_subtype(db, explicit_bound) is True:
+                result = [x for x in result if x != explicit_bound]
+                if db not in result:
+                    result.append(db)
+            elif db not in result:
+                result.append(db)
+        return result or ["Object"]
+
+    def _capture_convert(self, type_str: Optional[str]) -> Optional[str]:
+        """
+        Aplica conversão de captura (capture conversion — JLS §5.1.10) no nível superior
+        de um tipo parametrizado contendo wildcards, preservando limites superiores,
+        inferiores e limites recursivos F-bounded.
+        """
+        if not type_str:
+            return type_str
+        clean = self._strip_leading_type_annotations(type_str) or type_str
+        s, dims = self._strip_type_dims_full(clean)
+        if dims > 0:
+            return clean
+        base, args, _ = self._extract_generic_args(s)
+        if not base or not args or not any(self._is_wildcard_arg(a) for a in args):
+            return clean
+
+        simple = self._simple_base_name(base) or base
+        decls = self._type_param_decls_for_type(base) or self._type_param_decls_for_type(simple)
+
+        new_args: List[str] = []
+        subst_map: Dict[str, str] = {}
+        wildcard_indices: List[Tuple[int, str, Optional[str], str]] = []
+
+        for idx, raw_arg in enumerate(args):
+            pname = decls[idx][0] if idx < len(decls) else f"_T{idx}"
+            wk, wb = self._parse_wildcard_arg(raw_arg)
+            if wk is None:
+                c_arg = raw_arg.strip()
+                new_args.append(c_arg)
+                subst_map[pname] = c_arg
+            else:
+                self._capture_counter += 1
+                cap_name = f"CAP#{self._capture_counter}"
+                new_args.append(cap_name)
+                subst_map[pname] = cap_name
+                wildcard_indices.append((idx, wk, wb, cap_name))
+
+        for idx, wk, wb, cap_name in wildcard_indices:
+            raw_decl_bounds = decls[idx][1] if idx < len(decls) else ["Object"]
+            decl_bounds = [
+                self._substitute_type_vars(b, subst_map) or b
+                for b in raw_decl_bounds
+            ] or ["Object"]
+            if wk == "unbounded":
+                uppers = decl_bounds
+                lower = None
+            elif wk == "extends":
+                uppers = self._combine_upper_bounds(wb or "Object", decl_bounds)
+                lower = None
+            else:  # super
+                uppers = decl_bounds
+                lower = wb
+            self._capture_vars[cap_name] = {
+                "name": cap_name,
+                "upper_bounds": uppers,
+                "lower_bound": lower,
+            }
+
+        return f"{base}<{', '.join(new_args)}>"
+
+    def _invariant_type_args_equal(self, a_str: str, b_str: str) -> bool:
+        """Verifica igualdade invariante entre dois argumentos de tipo genérico (JLS §4.5.1)."""
+        a_s = (self._strip_leading_type_annotations(a_str) or a_str).strip()
+        b_s = (self._strip_leading_type_annotations(b_str) or b_str).strip()
+        if a_s == b_s:
+            return True
+        ka, ba = self._parse_wildcard_arg(a_s)
+        kb, bb = self._parse_wildcard_arg(b_s)
+        if ka is not None or kb is not None:
+            if ka != kb:
+                return False
+            if ka == "unbounded":
+                return True
+            return self._invariant_type_args_equal(ba or "", bb or "")
+        if self._is_capture_var(a_s) or self._is_capture_var(b_s):
+            return a_s == b_s
+        a_base, a_args, a_dims = self._extract_generic_args(a_s)
+        b_base, b_args, b_dims = self._extract_generic_args(b_s)
+        if a_dims != b_dims:
+            return False
+        if self._simple_base_name(a_base) != self._simple_base_name(b_base):
+            return False
+        if len(a_args) != len(b_args):
+            return False
+        return all(self._invariant_type_args_equal(x, y) for x, y in zip(a_args, b_args))
+
+    def _wildcard_arg_contained_in(self, sub_arg: str, sup_arg: str) -> Optional[bool]:
+        """Verifica relação de contenção de argumentos de tipo sa <= sb segundo JLS §4.5.1."""
+        sa_k, sa_b = self._parse_wildcard_arg(sub_arg)
+        sb_k, sb_b = self._parse_wildcard_arg(sup_arg)
+
+        if sb_k == "unbounded":
+            return True
+
+        if sb_k == "extends":
+            target_ub = sb_b or "Object"
+            if sa_k is None:
+                return self._is_subtype(sub_arg.strip(), target_ub)
+            if sa_k == "extends":
+                return self._is_subtype(sa_b or "Object", target_ub)
+            # '?' e '? super L' possuem limite superior implícito Object
+            return self._is_subtype("Object", target_ub)
+
+        if sb_k == "super":
+            target_lb = sb_b or "Object"
+            if sa_k is None:
+                return self._is_subtype(target_lb, sub_arg.strip())
+            if sa_k == "super":
+                return self._is_subtype(target_lb, sa_b or "Object")
+            return False
+
+        # sb não é wildcard: exige invariância
+        if sa_k is not None:
+            return False
+        return self._invariant_type_args_equal(sub_arg, sup_arg)
+
     def _generic_args_compatible(self, sub_full: str, sup_full: str) -> Optional[bool]:
-        """Verifica compatibilidade básica entre argumentos genéricos quando ambos são parametrizados no mesmo tipo base."""
+        """Verifica compatibilidade entre argumentos genéricos com contenção de wildcards (JLS §4.5.1)."""
         _, sub_args, sub_dims = self._extract_generic_args(sub_full)
         _, sup_args, sup_dims = self._extract_generic_args(sup_full)
         if sub_dims != sup_dims:
@@ -3355,94 +6363,159 @@ class SemanticAnalyzer:
             return True
         if len(sub_args) != len(sup_args):
             return False
+        saw_unknown = False
         for sa, sb in zip(sub_args, sup_args):
-            sa_s = sa.strip()
-            sb_s = sb.strip()
-            if sb_s == "?" or sa_s == sb_s:
-                continue
-            if sb_s.startswith("? extends "):
-                bound = sb_s[len("? extends "):].strip()
-                res = self._is_subtype(sa_s, bound)
-                if res is False:
-                    return False
-                continue
-            if sb_s.startswith("? super "):
-                bound = sb_s[len("? super "):].strip()
-                res = self._is_subtype(bound, sa_s)
-                if res is False:
-                    return False
-                continue
-            sa_simple = self._simple_base_name(sa_s)
-            sb_simple = self._simple_base_name(sb_s)
-            if sa_simple != sb_simple:
+            res = self._wildcard_arg_contained_in(sa, sb)
+            if res is False:
                 return False
-        return True
+            if res is None:
+                saw_unknown = True
+        return None if saw_unknown else True
 
     def _is_subtype(self, sub: Optional[str], sup: Optional[str]) -> Optional[bool]:
         """Retorna True se sub <: sup, False se provadamente não, ou None se envolver hierarquia externa não resolvida."""
         if not sub or not sup:
             return None
-        sub_s = self._simple_base_name(sub)
-        sup_s = self._simple_base_name(sup)
+        sub_clean = (self._strip_leading_type_annotations(sub) or sub).strip()
+        sup_clean = (self._strip_leading_type_annotations(sup) or sup).strip()
+        if sub_clean == sup_clean:
+            return True
+
+        sub_s = self._simple_base_name(sub_clean)
+        sup_s = self._simple_base_name(sup_clean)
         if not sub_s or not sup_s:
             return None
-        if sub_s == "var" or sup_s == "var" or sub_s == "desconhecido" or sup_s == "desconhecido":
+        if sub_s in ("var", "desconhecido") or sup_s in ("var", "desconhecido"):
             return None
         if sub_s == "null":
             return sup_s not in self.PRIMITIVE_TYPES
-        if sub_s in self.PRIMITIVE_TYPES or sup_s in self.PRIMITIVE_TYPES:
-            return sub_s == sup_s
-        if sub_s == sup_s:
-            return self._generic_args_compatible(sub, sup)
-        if sup_s == "Object":
-            return True
 
         sub_base, sub_dims = self._split_type_dims(sub_s)
         sup_base, sup_dims = self._split_type_dims(sup_s)
-        if sub_dims > 0 and sup_dims == 0:
-            return sup_base in ("Object", "Cloneable", "Serializable")
-        if sub_dims > sup_dims and sup_dims > 0:
-            if sup_base in ("Object", "Cloneable", "Serializable"):
-                return True
-            return False
-        if sub_dims < sup_dims:
-            return False
-        if sub_dims > 0 and sup_dims > 0:
+
+        if sub_dims == 0 and sup_dims == 0 and (sub_base in self.PRIMITIVE_TYPES or sup_base in self.PRIMITIVE_TYPES):
+            return sub_base == sup_base
+
+        # Arrays (antes de variáveis de captura para tratar CAP#k[] corretamente)
+        if sub_dims > 0 or sup_dims > 0:
+            if sub_dims > 0 and sup_dims == 0:
+                return sup_base in ("Object", "Cloneable", "Serializable")
+            if sub_dims > sup_dims and sup_dims > 0:
+                return sup_base in ("Object", "Cloneable", "Serializable")
+            if sub_dims < sup_dims:
+                return False
             if sub_base in self.PRIMITIVE_TYPES or sup_base in self.PRIMITIVE_TYPES:
                 return sub_base == sup_base
-            return self._is_subtype(sub_base, sup_base)
+            sub_elem_full = self._strip_leading_type_annotations(sub_clean)[:-2 * sub_dims].strip()
+            sup_elem_full = self._strip_leading_type_annotations(sup_clean)[:-2 * sup_dims].strip()
+            return self._is_subtype(sub_elem_full, sup_elem_full)
 
-        queue: List[str] = [sub]
-        visited: Set[str] = set()
-        saw_external = False
-        while queue:
-            cur = queue.pop(0)
-            cur_simple = self._simple_base_name(cur) or ""
-            if cur_simple in visited:
-                continue
-            visited.add(cur_simple)
-            if cur_simple == sup_s:
-                return self._generic_args_compatible(cur, sup)
-            supers, is_ext = self._direct_supertypes(cur)
-            if is_ext:
-                saw_external = True
-            tvar_map = self._type_var_mapping_for_type(cur)
-            for s in supers:
-                s = self._substitute_type_vars(s, tvar_map) or s
-                s_simple = self._simple_base_name(s) or ""
-                if s_simple == sup_s:
-                    # Verifica compatibilidade genérica caso haja argumentos no supertipo direto
-                    _, cur_gen_args, _ = self._extract_generic_args(s)
-                    _, sup_gen_args, _ = self._extract_generic_args(sup)
-                    if cur_gen_args and sup_gen_args:
-                        return self._generic_args_compatible(s, sup)
+        visit_key = (sub_clean, sup_clean)
+        if visit_key in self._subtype_visiting:
+            return False
+        self._subtype_visiting.add(visit_key)
+        try:
+            # Variável de captura CAP#k no lado esquerdo
+            if self._is_capture_var(sub_base):
+                if sup_base == "Object":
                     return True
-                if s_simple not in visited:
-                    queue.append(s)
+                if self._is_capture_var(sup_base):
+                    if sub_base == sup_base:
+                        return True
+                    sup_cap = self._capture_vars[sup_base]
+                    lb = sup_cap.get("lower_bound")
+                    if lb is not None:
+                        return self._is_subtype(sub_clean, lb)
+                    return False
+                sub_cap = self._capture_vars[sub_base]
+                saw_none = False
+                for ub in sub_cap.get("upper_bounds", ["Object"]):
+                    r = self._is_subtype(ub, sup_clean)
+                    if r is True:
+                        return True
+                    if r is None:
+                        saw_none = True
+                return None if saw_none else False
 
-        if saw_external:
-            return None
-        return False
+            # Variável de captura CAP#k no lado direito
+            if self._is_capture_var(sup_base):
+                sup_cap = self._capture_vars[sup_base]
+                lb = sup_cap.get("lower_bound")
+                if lb is not None:
+                    return self._is_subtype(sub_clean, lb)
+                return False
+
+            # Parâmetro de tipo ativo em escopo com limites declarados
+            sub_tp_bounds = self._lookup_type_param_bounds(sub_base)
+            if sub_tp_bounds is not None:
+                if sub_base == sup_base or sup_base == "Object":
+                    return True
+                saw_none = False
+                for ub in sub_tp_bounds:
+                    r = self._is_subtype(ub, sup_clean)
+                    if r is True:
+                        return True
+                    if r is None:
+                        saw_none = True
+                return None if saw_none else False
+
+            if self._lookup_type_param_bounds(sup_base) is not None:
+                return sub_base == sup_base
+
+            sub_raw_b = self._strip_generics(sub_clean) or sub_clean
+            sup_raw_b = self._strip_generics(sup_clean) or sup_clean
+            same_qualified = ("." in sub_raw_b and "." in sup_raw_b and sub_raw_b != sup_raw_b)
+            if sub_s == sup_s and not same_qualified:
+                return self._generic_args_compatible(sub_clean, sup_clean)
+            if sup_s == "Object":
+                return True
+
+            # Captura de nível superior para subtipos parametrizados com wildcards (JLS §4.10.2)
+            eff_sub = self._capture_convert(sub_clean) or sub_clean
+            queue: List[str] = [eff_sub]
+            visited: Set[str] = set()
+            saw_external = False
+            while queue:
+                cur = queue.pop(0)
+                cur_b = self._strip_generics(cur) or cur
+                cur_ext = self._resolve_external_type(cur_b)
+                cur_simple = self._simple_base_name(cur) or ""
+                cur_vkey = cur_ext.fqn if cur_ext is not None else (cur_b if "." in cur_b else cur_simple)
+                if cur_vkey in visited:
+                    continue
+                visited.add(cur_vkey)
+                cur_matches_sup = (
+                    (cur_b == sup_raw_b) if ("." in cur_b and "." in sup_raw_b) else (cur_simple == sup_s)
+                )
+                if cur_matches_sup:
+                    return self._generic_args_compatible(cur, sup_clean)
+                supers, is_ext = self._direct_supertypes(cur)
+                if is_ext:
+                    saw_external = True
+                tvar_map = self._type_var_mapping_for_type(cur)
+                for s in supers:
+                    s = self._substitute_type_vars(s, tvar_map) or s
+                    s_b = self._strip_generics(s) or s
+                    s_simple = self._simple_base_name(s) or ""
+                    s_matches_sup = (
+                        (s_b == sup_raw_b) if ("." in s_b and "." in sup_raw_b) else (s_simple == sup_s)
+                    )
+                    if s_matches_sup:
+                        _, cur_gen_args, _ = self._extract_generic_args(s)
+                        _, sup_gen_args, _ = self._extract_generic_args(sup_clean)
+                        if cur_gen_args and sup_gen_args:
+                            return self._generic_args_compatible(s, sup_clean)
+                        return True
+                    s_ext = self._resolve_external_type(s_b)
+                    s_vkey = s_ext.fqn if s_ext is not None else (s_b if "." in s_b else s_simple)
+                    if s_vkey not in visited:
+                        queue.append(s)
+
+            if saw_external:
+                return None
+            return False
+        finally:
+            self._subtype_visiting.discard(visit_key)
 
     def _get_sealed_permitted_types(self, type_name: str) -> List[str]:
         """Obtém os subtipos permitidos de um tipo 'sealed' (explícitos via 'permits' ou implícitos na unidade)."""
@@ -3903,75 +6976,16 @@ class SemanticAnalyzer:
         return False
 
     def _eval_constant_boolean(self, expr: Optional[ASTNode]) -> Optional[bool]:
-        """Avalia expressões booleanas constantes simples em tempo de compilação (usado em guards e laços)."""
-        if expr is None:
-            return None
-        if isinstance(expr, Literal) and getattr(expr, "kind", "") == "BOOLEAN":
-            return str(expr.value).lower() == "true"
-        if isinstance(expr, UnaryOp) and expr.op == "!":
-            v = self._eval_constant_boolean(expr.operand)
-            return (not v) if v is not None else None
-        if isinstance(expr, BinaryOp):
-            if expr.op == "&&":
-                lv = self._eval_constant_boolean(expr.left)
-                if lv is False:
-                    return False
-                rv = self._eval_constant_boolean(expr.right)
-                if rv is False:
-                    return False
-                if lv is True and rv is True:
-                    return True
-                return None
-            if expr.op == "||":
-                lv = self._eval_constant_boolean(expr.left)
-                if lv is True:
-                    return True
-                rv = self._eval_constant_boolean(expr.right)
-                if rv is True:
-                    return True
-                if lv is False and rv is False:
-                    return False
-                return None
-            if expr.op in ("==", "!=", "<", "<=", ">", ">="):
-                lv = self._eval_constant_scalar(expr.left)
-                rv = self._eval_constant_scalar(expr.right)
-                if lv is not None and rv is not None and type(lv) is type(rv):
-                    try:
-                        if expr.op == "==":
-                            return lv == rv
-                        if expr.op == "!=":
-                            return lv != rv
-                        if not isinstance(lv, bool):
-                            if expr.op == "<":
-                                return lv < rv
-                            if expr.op == "<=":
-                                return lv <= rv
-                            if expr.op == ">":
-                                return lv > rv
-                            if expr.op == ">=":
-                                return lv >= rv
-                    except TypeError:
-                        return None
+        """Avalia expressões booleanas constantes segundo JLS §15.29 (usado em guards, fluxos e constantes)."""
+        res = self._eval_constant_expr(expr)
+        if res is not None and res[0] == "boolean":
+            return bool(res[1])
         return None
 
     def _eval_constant_scalar(self, expr: Optional[ASTNode]) -> Any:
-        """Avalia literal escalar constante simples (boolean, int, String)."""
-        if isinstance(expr, Literal):
-            k = getattr(expr, "kind", "")
-            if k == "BOOLEAN":
-                return str(expr.value).lower() == "true"
-            if k in ("NUM", "INT"):
-                try:
-                    return int(str(expr.value).replace("_", ""), 0)
-                except ValueError:
-                    return None
-            if k in ("STRING", "TEXT_BLOCK"):
-                return str(expr.value)
-        if isinstance(expr, UnaryOp) and expr.op in ("+", "-"):
-            inner = self._eval_constant_scalar(expr.operand)
-            if isinstance(inner, int) and not isinstance(inner, bool):
-                return -inner if expr.op == "-" else inner
-        return None
+        """Avalia expressão escalar constante em tempo de compilação (JLS §15.29)."""
+        res = self._eval_constant_expr(expr)
+        return res[1] if res is not None else None
 
     def _stmt_completes_normally(self, stmt: Optional[ASTNode]) -> bool:
         """Estimativa conservadora de conclusão normal de instruções segundo JLS §14.22 (para escopo JLS §6.3)."""
@@ -4015,9 +7029,9 @@ class SemanticAnalyzer:
         if isinstance(stmt, TryStatement):
             if stmt.finally_block is not None and not self._stmt_completes_normally(stmt.finally_block):
                 return False
-            if self._stmt_completes_normally(stmt.try_block):
+            if self._stmt_completes_normally(stmt.body):
                 return True
-            return any(self._stmt_completes_normally(c.body) for c in getattr(stmt, "catch_clauses", []))
+            return any(self._stmt_completes_normally(c.body) for c in getattr(stmt, "catches", []))
         if isinstance(stmt, SynchronizedStatement):
             return self._stmt_completes_normally(stmt.body)
         return True
@@ -4335,7 +7349,11 @@ class SemanticAnalyzer:
 
     def _analyze_switch_block(self, switch_node: ASTNode, is_expression: bool = False, expected_type: Optional[str] = None):
         """Valida SwitchStatement e SwitchExpression (patterns, guards, dominância, escopo, yield e exaustividade)."""
+        pending_labels = set(self._flow_pending_labels) if not is_expression else set()
+        if not is_expression:
+            self._flow_pending_labels = set()
         self.check_expression(switch_node.expression)
+        sel_snap = self._flow_snapshot()
         sb = getattr(switch_node, "switch_block", None)
         selector_type = self.infer_type(switch_node.expression)
         selector_base = self._strip_generics(selector_type) if selector_type else None
@@ -4357,6 +7375,7 @@ class SemanticAnalyzer:
             self._switch_depth += 1
         if is_expression:
             self._switch_yield_exprs_stack.append([])
+        sw_frame = self._flow_push_exit_frame("switch_expr" if is_expression else "switch", labels=pending_labels)
 
         enum_const_names = self._collect_all_enum_constant_names()
         seen_default_pos: Optional[Tuple[int, bool]] = None  # (line, is_null_default)
@@ -4551,10 +7570,14 @@ class SemanticAnalyzer:
 
             return label_pvars
 
+        branch_exits: List[Tuple[Set[Any], Set[Any], bool]] = []
+        normal_exits: List[Tuple[Set[Any], Set[Any], bool]] = []
+        is_exhaustive_switch = False
         try:
             if sb is not None:
                 if sb.is_rule_based:
                     for rule in sb.switch_rules:
+                        self._flow_restore(sel_snap)
                         rule_pvars: Dict[str, Dict[str, Any]] = {}
                         for lb in rule.labels:
                             lb_vars = validate_label_and_collect_vars(lb)
@@ -4569,6 +7592,8 @@ class SemanticAnalyzer:
                                 self.analyze_statement(rule.body)
                             elif rule.is_block and isinstance(rule.body, Block):
                                 self.analyze_block(rule.body)
+                                if self._flow_reachable:
+                                    branch_exits.append(self._flow_snapshot())
                                 if is_expression and self._stmt_completes_normally(rule.body):
                                     self.errors.append(
                                         SemanticError(
@@ -4587,19 +7612,32 @@ class SemanticAnalyzer:
                                     )
                                 if is_expression:
                                     self._check_expression_with_target(rule_inner, expected_type)
+                                    if self._flow_reachable:
+                                        sw_frame["yields"].append(self._flow_snapshot())
                                     if self._switch_yield_exprs_stack:
                                         self._switch_yield_exprs_stack[-1].append((rule_inner, getattr(rule, "line", 1)))
                                 else:
                                     self._check_expression_flow(rule_inner)
+                                    if self._flow_reachable:
+                                        branch_exits.append(self._flow_snapshot())
                         finally:
                             self._pop_pattern_scope()
                             self._local_declared_type_scopes.pop()
                             self._local_type_scopes.pop()
+                            self._flow_cleanup_scope(self._local_var_scopes[-1])
                             self._local_var_scopes.pop()
                             self.symbols.exit_scope()
                 else:
                     prev_grp_completes_normally = False
-                    for grp in sb.statement_groups:
+                    fallthrough_snap: Optional[Tuple[Set[Any], Set[Any], bool]] = None
+                    num_groups = len(sb.statement_groups)
+                    for g_idx, grp in enumerate(sb.statement_groups):
+                        if fallthrough_snap is not None and fallthrough_snap[2]:
+                            grp_entry_snap = self._flow_join_states(sel_snap, fallthrough_snap)
+                        else:
+                            grp_entry_snap = sel_snap
+                        self._flow_restore(grp_entry_snap)
+
                         grp_pvars: Dict[str, Dict[str, Any]] = {}
                         has_named_pat_in_grp = False
                         grp_labels = list(getattr(grp, "labels", []) or [])
@@ -4642,6 +7680,13 @@ class SemanticAnalyzer:
                         finally:
                             self._pop_pattern_scope()
 
+                        if self._flow_reachable:
+                            fallthrough_snap = self._flow_snapshot()
+                            if g_idx == num_groups - 1:
+                                normal_exits.append(fallthrough_snap)
+                        else:
+                            fallthrough_snap = None
+
                         if grp.statements:
                             last_completes = True
                             for s in grp.statements:
@@ -4659,20 +7704,36 @@ class SemanticAnalyzer:
                             )
                         )
             else:
-                for case_clause in getattr(switch_node, "cases", []):
+                fallthrough_snap = None
+                legacy_cases = list(getattr(switch_node, "cases", []))
+                def_block = getattr(switch_node, "default_block", None)
+                for c_idx, case_clause in enumerate(legacy_cases):
                     if isinstance(case_clause, SwitchCase):
+                        if fallthrough_snap is not None and fallthrough_snap[2]:
+                            self._flow_restore(self._flow_join_states(sel_snap, fallthrough_snap))
+                        else:
+                            self._flow_restore(sel_snap)
                         if case_clause.value is not None:
                             self._check_switch_constant_expr(case_clause.value, getattr(case_clause, "line", 1), enum_const_names)
-                        for case_stmt in case_clause.statements:
-                            self.analyze_statement(case_stmt)
-                def_block = getattr(switch_node, "default_block", None)
+                        self._check_stmt_list_with_flow(list(case_clause.statements))
+                        if self._flow_reachable:
+                            fallthrough_snap = self._flow_snapshot()
+                            if c_idx == len(legacy_cases) - 1 and def_block is None:
+                                normal_exits.append(fallthrough_snap)
+                        else:
+                            fallthrough_snap = None
                 if def_block is not None:
                     seen_default_pos = (getattr(def_block, "line", 1), False)
+                    if fallthrough_snap is not None and fallthrough_snap[2]:
+                        self._flow_restore(self._flow_join_states(sel_snap, fallthrough_snap))
+                    else:
+                        self._flow_restore(sel_snap)
                     if isinstance(def_block, Block):
-                        for def_stmt in def_block.statements:
-                            self.analyze_statement(def_stmt)
+                        self.analyze_block(def_block)
                     else:
                         self.analyze_statement(def_block)
+                    if self._flow_reachable:
+                        normal_exits.append(self._flow_snapshot())
 
             # Regras de exaustividade (JLS §14.11.1.1 / §14.11.2 / §15.28.1)
             if is_expression and self._switch_yield_exprs_stack:
@@ -4711,6 +7772,7 @@ class SemanticAnalyzer:
                     seen_enum_case_names=seen_enum_case_names,
                     seen_boolean_literals=seen_boolean_literals,
                 )
+                is_exhaustive_switch = bool(is_exhaustive)
                 if not is_exhaustive:
                     if unresolved_exhaust and has_pattern_labels and selector_type and not self._is_known_type(selector_type):
                         self._record_unresolved(
@@ -4737,14 +7799,39 @@ class SemanticAnalyzer:
                                 getattr(switch_node, "line", 1),
                             )
                         )
+            else:
+                has_uncond_pat = any(
+                    self._is_pattern_unconditional(p, selector_type) is True
+                    for p in unconditional_top_patterns
+                )
+                is_exhaustive_switch = (
+                    (seen_default_pos is not None)
+                    or has_uncond_pat
+                    or (selector_base == "boolean" and seen_boolean_literals == {True, False})
+                )
         finally:
+            if self._flow_exit_frames and self._flow_exit_frames[-1] is sw_frame:
+                self._flow_exit_frames.pop()
             if not is_expression:
                 self._switch_depth -= 1
             self._pop_pattern_scope()
             self._local_declared_type_scopes.pop()
             self._local_type_scopes.pop()
-            self._local_var_scopes.pop()
+            if self._local_var_scopes:
+                self._flow_cleanup_scope(self._local_var_scopes[-1])
+                self._local_var_scopes.pop()
             self.symbols.exit_scope()
+
+        if is_expression:
+            if sw_frame["yields"]:
+                self._flow_restore(self._flow_join_states(*sw_frame["yields"]))
+            else:
+                self._flow_restore(self._flow_unreachable())
+        else:
+            all_exits = branch_exits + normal_exits + sw_frame["breaks"]
+            if not is_exhaustive_switch:
+                all_exits.append(sel_snap)
+            self._flow_restore(self._flow_join_states(*all_exits))
 
     def _check_switch_exhaustiveness(
         self,
@@ -4811,7 +7898,7 @@ class SemanticAnalyzer:
             if parent == sup_simple:
                 return True
             cur = parent
-        return False
+        return self._is_subtype(sub_name, super_name) is True
 
     def _analyze_local_variable_declaration(self, stmt: LocalVariableDeclaration, is_resource: bool = False):
         """Analisa declaração de variável local ou recurso, validando 'var', '_', modificadores e múltiplos declaradores."""
@@ -4918,6 +8005,8 @@ class SemanticAnalyzer:
                     )
                     inferred = None
                 eff_type = inferred if inferred else "var"
+                const_res = self._resolve_constant_var_declaration(eff_type, is_final, d_init)
+                is_const = const_res is not None
                 self._register_local_var(
                     d_name,
                     eff_type,
@@ -4925,7 +8014,17 @@ class SemanticAnalyzer:
                     is_final=is_final,
                     has_initializer=(d_init is not None),
                     category="variavel",
+                    is_compile_constant=is_const,
                 )
+                if is_const and self._local_var_scopes:
+                    info = self._local_var_scopes[-1].get(d_name)
+                    if info is not None:
+                        info["const_typed"] = const_res
+                        if const_res[0] in ("byte", "short", "char", "int"):
+                            info["const_value"] = int(const_res[1])
+                    sym = self.symbols.lookup(d_name)
+                    if sym is not None:
+                        sym["const_typed"] = const_res
             return
 
         base_type = getattr(l_tref, "full_name", stmt.type_name) if l_tref is not None else stmt.type_name
@@ -4950,7 +8049,8 @@ class SemanticAnalyzer:
             if d_init is not None:
                 self._check_expression_with_target(d_init, eff_type)
                 self.check_assignment_type(eff_type, d_init, d_name, d_line)
-            is_const = is_final and d_init is not None and self._is_compile_time_constant_expr(d_init)
+            const_res = self._resolve_constant_var_declaration(eff_type, is_final, d_init)
+            is_const = const_res is not None
             self._register_local_var(
                 d_name,
                 eff_type,
@@ -4960,12 +8060,16 @@ class SemanticAnalyzer:
                 category="variavel",
                 is_compile_constant=is_const,
             )
-            # Variável constante (JLS §4.12.4): guarda valor inteiro para estreitamento constante (JLS §5.2)
-            if is_const and eff_type in ("byte", "short", "char", "int") and self._local_var_scopes:
-                cv = self._eval_constant_int_literal(d_init)
+            # Variável constante (JLS §4.12.4): guarda valor constante tipado para propagação e estreitamento (JLS §5.2)
+            if is_const and self._local_var_scopes:
                 info = self._local_var_scopes[-1].get(d_name)
-                if cv is not None and info is not None:
-                    info["const_value"] = cv
+                if info is not None:
+                    info["const_typed"] = const_res
+                    if const_res[0] in ("byte", "short", "char", "int"):
+                        info["const_value"] = int(const_res[1])
+                sym = self.symbols.lookup(d_name)
+                if sym is not None:
+                    sym["const_typed"] = const_res
 
     def _check_stmt_list_with_flow(self, stmts: List[ASTNode]):
         """Analisa sequência de instruções propagando variáveis de pattern introduzidas no bloco (JLS §6.3.2)."""
@@ -4973,6 +8077,78 @@ class SemanticAnalyzer:
             post_vars = self._analyze_statement_with_flow(stmt)
             if post_vars:
                 self._inject_pattern_vars_into_enclosing_block(post_vars)
+
+    def _flow_begin_speculative(self) -> Dict[str, Any]:
+        """Salva estado semântico antes de simulação especulativa (Passo 1) de laço ou re-checagem poly."""
+        frame_lens = [
+            (
+                f,
+                len(f["breaks"]),
+                len(f["continues"]),
+                len(f["yields"]),
+                len(f["returns"]),
+                len(f["pending_breaks"]),
+                len(f["pending_continues"]),
+                len(f["pending_yields"]),
+                len(f["pending_returns"]),
+            )
+            for f in self._flow_exit_frames
+        ]
+        saved = {
+            "err_len": len(self.errors),
+            "unres_len": len(self.unresolved_checks),
+            "cap_len": len(self._pending_lambda_captures),
+            "flags": self._snapshot_local_var_flags(),
+            "suppress": self._flow_suppress_errors,
+            "frame_lens": frame_lens,
+        }
+        self._flow_suppress_errors = True
+        return saved
+
+    def _flow_end_speculative(self, saved: Dict[str, Any]):
+        """Restaura estado semântico descartando diagnósticos e efeitos colaterais de passo especulativo."""
+        del self.errors[saved["err_len"]:]
+        del self.unresolved_checks[saved["unres_len"]:]
+        del self._pending_lambda_captures[saved["cap_len"]:]
+        for f, bl, cl, yl, rl, pbl, pcl, pyl, prl in saved["frame_lens"]:
+            del f["breaks"][bl:]
+            del f["continues"][cl:]
+            del f["yields"][yl:]
+            del f["returns"][rl:]
+            del f["pending_breaks"][pbl:]
+            del f["pending_continues"][pcl:]
+            del f["pending_yields"][pyl:]
+            del f["pending_returns"][prl:]
+        self._restore_local_var_flags(saved["flags"])
+        self._flow_suppress_errors = saved["suppress"]
+
+    def _flow_execute_loop_passes(
+        self,
+        labels: Set[str],
+        entry_snap: Tuple[Set[Any], Set[Any], bool],
+        step_fn,
+    ) -> Any:
+        """Executa análise de laço em 2 passos (back-edge DU + passo final DA/DU) segundo JLS §16.2.9–§16.2.12."""
+        spec = self._flow_begin_speculative()
+        p1_frame = self._flow_push_exit_frame("loop", labels)
+        try:
+            self._flow_restore(entry_snap)
+            back_snap, _, _ = step_fn(p1_frame)
+        finally:
+            if self._flow_exit_frames and self._flow_exit_frames[-1] is p1_frame:
+                self._flow_exit_frames.pop()
+            self._flow_end_speculative(spec)
+
+        header_snap = self._flow_join_states(entry_snap, back_snap)
+        real_frame = self._flow_push_exit_frame("loop", labels)
+        try:
+            self._flow_restore(header_snap)
+            _, post_snap, extra = step_fn(real_frame)
+        finally:
+            if self._flow_exit_frames and self._flow_exit_frames[-1] is real_frame:
+                self._flow_exit_frames.pop()
+        self._flow_restore(post_snap)
+        return extra
 
     def _analyze_statement_with_flow(
         self,
@@ -5000,29 +8176,49 @@ class SemanticAnalyzer:
             while isinstance(target, LabeledStatement):
                 target = target.statement
             is_iterative = isinstance(target, (WhileStatement, DoWhileStatement, ForStatement, EnhancedForStatement))
+            direct_consumes = isinstance(stmt.statement, (LabeledStatement, WhileStatement, DoWhileStatement, ForStatement, EnhancedForStatement, SwitchStatement))
             self._active_labels[stmt.label] = (is_iterative, line)
+            prev_pending = set(self._flow_pending_labels)
+            self._flow_pending_labels.add(stmt.label)
+            lbl_frame = None
+            if not direct_consumes:
+                lbl_frame = self._flow_push_exit_frame("label", self._flow_pending_labels)
+                self._flow_pending_labels = set()
             try:
                 post_vars = self._analyze_statement_with_flow(stmt.statement, enclosing_labels=next_labels)
             finally:
+                if lbl_frame is not None:
+                    if self._flow_exit_frames and self._flow_exit_frames[-1] is lbl_frame:
+                        self._flow_exit_frames.pop()
+                    if lbl_frame["breaks"]:
+                        self._flow_restore(self._flow_join_states(self._flow_snapshot(), *lbl_frame["breaks"]))
+                self._flow_pending_labels = prev_pending
                 self._active_labels.pop(stmt.label, None)
             if self._contains_break_targeting(stmt.statement, target_label=stmt.label):
                 return {}
             return post_vars
 
         if isinstance(stmt, IfStatement):
-            true_vars, false_vars = self._check_boolean_condition(stmt.condition, "if", getattr(stmt, "line", 1))
+            true_vars, false_vars, true_st, false_st = self._check_boolean_condition_with_states(
+                stmt.condition, "if", getattr(stmt, "line", 1)
+            )
+            self._flow_restore(true_st)
             self._push_pattern_scope(true_vars)
             try:
                 self.analyze_statement(stmt.then_branch)
+                then_out = self._flow_snapshot()
             finally:
                 self._pop_pattern_scope()
 
             if stmt.else_branch is not None:
+                self._flow_restore(false_st)
                 self._push_pattern_scope(false_vars)
                 try:
                     self.analyze_statement(stmt.else_branch)
+                    else_out = self._flow_snapshot()
                 finally:
                     self._pop_pattern_scope()
+                self._flow_restore(self._flow_join_states(then_out, else_out))
                 then_norm = self._stmt_completes_normally(stmt.then_branch)
                 else_norm = self._stmt_completes_normally(stmt.else_branch)
                 if not then_norm and else_norm:
@@ -5031,24 +8227,42 @@ class SemanticAnalyzer:
                     return dict(true_vars)
                 return {}
 
+            self._flow_restore(self._flow_join_states(then_out, false_st))
             if not self._stmt_completes_normally(stmt.then_branch):
                 return dict(false_vars)
             return {}
 
         if isinstance(stmt, WhileStatement):
-            true_vars, false_vars = self._check_boolean_condition(stmt.condition, "while", getattr(stmt, "line", 1))
+            labels = set(self._flow_pending_labels)
+            self._flow_pending_labels = set()
+            entry_snap = self._flow_snapshot()
             self._loop_depth += 1
-            self._push_pattern_scope(true_vars)
             try:
-                self.analyze_statement(stmt.body)
+                def while_step(frame: Dict[str, Any]):
+                    tv, fv, tst, fst = self._check_boolean_condition_with_states(
+                        stmt.condition, "while", getattr(stmt, "line", 1)
+                    )
+                    self._flow_restore(tst)
+                    self._push_pattern_scope(tv)
+                    try:
+                        self.analyze_statement(stmt.body)
+                        body_out = self._flow_snapshot()
+                    finally:
+                        self._pop_pattern_scope()
+                    back = self._flow_join_states(body_out, *frame["continues"])
+                    post = self._flow_join_states(fst, *frame["breaks"])
+                    return back, post, fv
+
+                false_vars = self._flow_execute_loop_passes(labels, entry_snap, while_step)
             finally:
-                self._pop_pattern_scope()
                 self._loop_depth -= 1
             if false_vars and not self._contains_break_targeting(stmt.body, target_label=None, extra_labels=enclosing_labels):
                 return dict(false_vars)
             return {}
 
         if isinstance(stmt, ForStatement):
+            labels = set(self._flow_pending_labels)
+            self._flow_pending_labels = set()
             self.symbols.enter_scope()
             push_local = bool(self._local_var_scopes)
             if push_local:
@@ -5059,25 +8273,44 @@ class SemanticAnalyzer:
             try:
                 if stmt.init is not None:
                     self.analyze_statement(stmt.init)
-                true_vars: Dict[str, Dict[str, Any]] = {}
-                if stmt.condition is not None:
-                    true_vars, false_vars = self._check_boolean_condition(stmt.condition, "for", getattr(stmt, "line", 1))
-                self._push_pattern_scope(true_vars)
-                try:
-                    if stmt.update is not None:
-                        if isinstance(stmt.update, StatementExpressionList):
-                            for uexpr in stmt.update.expressions:
-                                self.check_expression(uexpr)
-                        else:
-                            self.check_expression(stmt.update)
-                    if stmt.body is not None:
-                        self.analyze_statement(stmt.body)
-                finally:
-                    self._pop_pattern_scope()
+                after_init = self._flow_snapshot()
+
+                def for_step(frame: Dict[str, Any]):
+                    tv: Dict[str, Dict[str, Any]] = {}
+                    fv: Dict[str, Dict[str, Any]] = {}
+                    if stmt.condition is not None:
+                        tv, fv, tst, fst = self._check_boolean_condition_with_states(
+                            stmt.condition, "for", getattr(stmt, "line", 1)
+                        )
+                    else:
+                        tst = self._flow_snapshot()
+                        fst = self._flow_unreachable()
+                    self._flow_restore(tst)
+                    self._push_pattern_scope(tv)
+                    try:
+                        if stmt.body is not None:
+                            self.analyze_statement(stmt.body)
+                        body_out = self._flow_snapshot()
+                        before_update = self._flow_join_states(body_out, *frame["continues"])
+                        self._flow_restore(before_update)
+                        if stmt.update is not None:
+                            if isinstance(stmt.update, StatementExpressionList):
+                                for uexpr in stmt.update.expressions:
+                                    self.check_expression(uexpr)
+                            else:
+                                self.check_expression(stmt.update)
+                        back = self._flow_snapshot()
+                    finally:
+                        self._pop_pattern_scope()
+                    post = self._flow_join_states(fst, *frame["breaks"])
+                    return back, post, fv
+
+                false_vars = self._flow_execute_loop_passes(labels, after_init, for_step)
             finally:
                 self._loop_depth -= 1
                 self._pop_pattern_scope()
                 if push_local:
+                    self._flow_cleanup_scope(self._local_var_scopes[-1])
                     self._local_var_scopes.pop()
                 self.symbols.exit_scope()
             if false_vars and not self._contains_break_targeting(stmt.body, target_label=None, extra_labels=enclosing_labels):
@@ -5108,6 +8341,7 @@ class SemanticAnalyzer:
             self._local_type_scopes.pop()
             self._pop_pattern_scope()
             if push_local:
+                self._flow_cleanup_scope(self._local_var_scopes[-1])
                 self._local_var_scopes.pop()
             self.symbols.exit_scope()
 
@@ -5188,6 +8422,7 @@ class SemanticAnalyzer:
                         )
                 else:
                     self.check_expression(stmt.expression)
+            self._flow_record_return()
 
         elif isinstance(stmt, YieldStatement):
             line = getattr(stmt, "line", 1)
@@ -5201,6 +8436,7 @@ class SemanticAnalyzer:
                 self._check_expression_with_target(stmt.expression, exp_t)
                 if self._switch_yield_exprs_stack:
                     self._switch_yield_exprs_stack[-1].append((stmt.expression, line))
+            self._flow_record_yield()
 
         elif isinstance(stmt, BreakStatement):
             line = getattr(stmt, "line", 1)
@@ -5216,6 +8452,7 @@ class SemanticAnalyzer:
                 self.errors.append(
                     SemanticError("Instrução 'break' fora de laço ou switch (JLS §14.15).", line)
                 )
+            self._flow_record_break(stmt.label)
 
         elif isinstance(stmt, ContinueStatement):
             line = getattr(stmt, "line", 1)
@@ -5238,19 +8475,35 @@ class SemanticAnalyzer:
                 self.errors.append(
                     SemanticError("Instrução 'continue' fora de laço (JLS §14.16).", line)
                 )
+            self._flow_record_continue(stmt.label)
 
         elif isinstance(stmt, (IfStatement, WhileStatement, ForStatement)):
             self._analyze_statement_with_flow(stmt)
 
         elif isinstance(stmt, DoWhileStatement):
+            labels = set(self._flow_pending_labels)
+            self._flow_pending_labels = set()
+            entry_snap = self._flow_snapshot()
             self._loop_depth += 1
             try:
-                self.analyze_statement(stmt.body)
+                def do_while_step(frame: Dict[str, Any]):
+                    self.analyze_statement(stmt.body)
+                    body_out = self._flow_snapshot()
+                    before_cond = self._flow_join_states(body_out, *frame["continues"])
+                    self._flow_restore(before_cond)
+                    _, _, tst, fst = self._check_boolean_condition_with_states(
+                        stmt.condition, "do-while", getattr(stmt, "line", 1)
+                    )
+                    post = self._flow_join_states(fst, *frame["breaks"])
+                    return tst, post, None
+
+                self._flow_execute_loop_passes(labels, entry_snap, do_while_step)
             finally:
                 self._loop_depth -= 1
-            self._check_boolean_condition(stmt.condition, "do-while", getattr(stmt, "line", 1))
 
         elif isinstance(stmt, EnhancedForStatement):
+            labels = set(self._flow_pending_labels)
+            self._flow_pending_labels = set()
             self.symbols.enter_scope()
             push_local = bool(self._local_var_scopes)
             if push_local:
@@ -5289,11 +8542,23 @@ class SemanticAnalyzer:
                         has_initializer=True,
                         category="variavel",
                     )
+                after_header = self._flow_snapshot()
+
+                def foreach_step(frame: Dict[str, Any]):
+                    if stmt.body is not None:
+                        self.analyze_statement(stmt.body)
+                    body_out = self._flow_snapshot()
+                    back = self._flow_join_states(body_out, *frame["continues"])
+                    # Em for-each (0+ iterações), após o laço combinamos o header atual (já com DU de back-edge) e breaks
+                    post = self._flow_join_states(self._flow_join_states(after_header, back), *frame["breaks"])
+                    return back, post, None
+
                 if stmt.body is not None:
-                    self.analyze_statement(stmt.body)
+                    self._flow_execute_loop_passes(labels, after_header, foreach_step)
             finally:
                 self._loop_depth -= 1
                 if push_local:
+                    self._flow_cleanup_scope(self._local_var_scopes[-1])
                     self._local_var_scopes.pop()
                 self.symbols.exit_scope()
 
@@ -5301,134 +8566,214 @@ class SemanticAnalyzer:
             self._analyze_switch_block(stmt, is_expression=False)
 
         elif isinstance(stmt, TryStatement):
-            res_spec = getattr(stmt, "resource_specification", None)
-            res_nodes = res_spec.resources if res_spec is not None else stmt.resources
-            has_resources = bool(res_nodes)
-            if has_resources:
-                self.symbols.enter_scope()
-                push_res = bool(self._local_var_scopes)
-                if push_res:
-                    self._local_var_scopes.append({})
-                try:
-                    for res in res_nodes:
-                        if isinstance(res, Resource):
-                            if res.is_reference:
-                                self.check_expression(res.variable_access)
-                                if isinstance(res.variable_access, Identifier):
-                                    rname = res.variable_access.name
-                                    linfo = self._find_local_var_info(rname)
-                                    sym = self.symbols.lookup(rname)
-                                    if linfo is not None and not linfo.get("is_final", False) and linfo.get("reassigned", False):
-                                        self.errors.append(
-                                            SemanticError(
-                                                f"Recurso '{rname}' em try-with-resources deve ser 'final' ou efetivamente final (JLS §14.20.3).",
-                                                getattr(res, "line", stmt.line),
+            entry_snap = self._flow_snapshot()
+            has_finally = stmt.finally_block is not None
+            tf_frame = self._flow_push_exit_frame("try_finally") if has_finally else None
+            try_writes: Set[Any] = set()
+            self._flow_write_trackers.append(try_writes)
+            try_frame = self._exception_analyzer.push_try_frame()
+            try:
+                res_spec = getattr(stmt, "resource_specification", None)
+                res_nodes = res_spec.resources if res_spec is not None else stmt.resources
+                has_resources = bool(res_nodes)
+                if has_resources:
+                    self.symbols.enter_scope()
+                    push_res = bool(self._local_var_scopes)
+                    if push_res:
+                        self._local_var_scopes.append({})
+                    try:
+                        res_close_targets: List[Tuple[Optional[str], int]] = []
+                        for res in res_nodes:
+                            res_line = getattr(res, "line", stmt.line)
+                            if isinstance(res, Resource):
+                                if res.is_reference:
+                                    self.check_expression(res.variable_access)
+                                    res_close_targets.append((self.infer_type(res.variable_access), res_line))
+                                    if isinstance(res.variable_access, Identifier):
+                                        rname = res.variable_access.name
+                                        linfo = self._find_local_var_info(rname)
+                                        sym = self.symbols.lookup(rname)
+                                        if linfo is not None and not linfo.get("is_final", False) and linfo.get("reassigned", False):
+                                            self.errors.append(
+                                                SemanticError(
+                                                    f"Recurso '{rname}' em try-with-resources deve ser 'final' ou efetivamente final (JLS §14.20.3).",
+                                                    getattr(res, "line", stmt.line),
+                                                )
                                             )
-                                        )
-                                    elif sym is not None and sym.get("category") == "campo" and not sym.get("is_final", False):
-                                        self.errors.append(
-                                            SemanticError(
-                                                f"Campo '{rname}' referenciado em try-with-resources deve ser 'final' ou efetivamente final (JLS §14.20.3).",
-                                                getattr(res, "line", stmt.line),
+                                        elif sym is not None and sym.get("category") == "campo" and not sym.get("is_final", False):
+                                            self.errors.append(
+                                                SemanticError(
+                                                    f"Campo '{rname}' referenciado em try-with-resources deve ser 'final' ou efetivamente final (JLS §14.20.3).",
+                                                    getattr(res, "line", stmt.line),
+                                                )
                                             )
-                                        )
-                                elif isinstance(res.variable_access, MemberAccess) and isinstance(res.variable_access.target, Identifier) and res.variable_access.target.name == "this":
-                                    sym = self.symbols.lookup(res.variable_access.member_name)
-                                    if sym is not None and sym.get("category") == "campo" and not sym.get("is_final", False):
-                                        self.errors.append(
-                                            SemanticError(
-                                                f"Campo 'this.{res.variable_access.member_name}' em try-with-resources deve ser 'final' (JLS §14.20.3).",
-                                                getattr(res, "line", stmt.line),
+                                    elif isinstance(res.variable_access, MemberAccess) and isinstance(res.variable_access.target, Identifier) and res.variable_access.target.name == "this":
+                                        sym = self.symbols.lookup(res.variable_access.member_name)
+                                        if sym is not None and sym.get("category") == "campo" and not sym.get("is_final", False):
+                                            self.errors.append(
+                                                SemanticError(
+                                                    f"Campo 'this.{res.variable_access.member_name}' em try-with-resources deve ser 'final' (JLS §14.20.3).",
+                                                    getattr(res, "line", stmt.line),
+                                                )
                                             )
-                                        )
-                            elif res.declaration is not None:
-                                self._analyze_local_variable_declaration(res.declaration, is_resource=True)
-                        else:
-                            self._analyze_local_variable_declaration(res, is_resource=True)
+                                elif res.declaration is not None:
+                                    self._analyze_local_variable_declaration(res.declaration, is_resource=True)
+                                    decls = getattr(res.declaration, "declarators", None) or []
+                                    for d in decls:
+                                        dsym = self.symbols.lookup(d.name) if getattr(d, "name", None) else None
+                                        dt = dsym.get("type") if dsym else None
+                                        if not dt and getattr(res.declaration, "type_ref", None) is not None:
+                                            dt = self._normalize_type_str(res.declaration.type_ref)
+                                        res_close_targets.append((dt, getattr(d, "line", res_line)))
+                            else:
+                                self._analyze_local_variable_declaration(res, is_resource=True)
+                                decls = getattr(res, "declarators", None) or []
+                                for d in decls:
+                                    dsym = self.symbols.lookup(d.name) if getattr(d, "name", None) else None
+                                    dt = dsym.get("type") if dsym else None
+                                    if not dt and getattr(res, "type_ref", None) is not None:
+                                        dt = self._normalize_type_str(res.type_ref)
+                                    res_close_targets.append((dt, getattr(d, "line", res_line)))
+                        for res_t, res_ln in res_close_targets:
+                            if not res_t or res_t in ("var", "desconhecido"):
+                                self._exception_analyzer.mark_unresolved_thrower()
+                                continue
+                            close_sigs, is_known_res, is_decl_res = self._collect_type_methods(res_t, "close")
+                            zero_close = [
+                                cs for cs in close_sigs
+                                if not cs.get("static") and len(cs.get("params", [])) == 0
+                            ]
+                            if zero_close:
+                                self._exception_analyzer.emit_thrown(
+                                    zero_close[0].get("throws", []),
+                                    res_ln,
+                                    f"fechamento automático de '{res_t}.close()'",
+                                )
+                            elif not is_known_res and not is_decl_res:
+                                self._exception_analyzer.mark_unresolved_thrower()
+                        if stmt.body is not None:
+                            self.analyze_block(stmt.body)
+                        try_out = self._flow_snapshot()
+                    finally:
+                        if push_res:
+                            self._flow_cleanup_scope(self._local_var_scopes[-1])
+                            self._local_var_scopes.pop()
+                        self.symbols.exit_scope()
+                else:
                     if stmt.body is not None:
                         self.analyze_block(stmt.body)
-                finally:
-                    if push_res:
-                        self._local_var_scopes.pop()
-                    self.symbols.exit_scope()
-            else:
-                if stmt.body is not None:
-                    self.analyze_block(stmt.body)
+                    try_out = self._flow_snapshot()
+            finally:
+                if self._flow_write_trackers and self._flow_write_trackers[-1] is try_writes:
+                    self._flow_write_trackers.pop()
+                self._exception_analyzer.pop_try_frame()
 
+            try_and_catch_writes: Set[Any] = set(try_writes)
+            self._flow_write_trackers.append(try_and_catch_writes)
+            catch_in_snap = (set(entry_snap[0]), set(entry_snap[1]) - try_writes, entry_snap[2])
+            catch_outs: List[Tuple[Set[Any], Set[Any], bool]] = []
             caught_exceptions: List[Tuple[str, int]] = []
-            for catch_c in stmt.catches:
-                self.symbols.enter_scope()
-                push_catch = bool(self._local_var_scopes)
-                if push_catch:
-                    self._local_var_scopes.append({})
-                try:
-                    c_param = catch_c.parameter
-                    c_types = catch_c.catch_types
-                    if c_param is not None:
-                        self._analyze_annotations(
-                            getattr(c_param, "annotations", []),
-                            valid_targets={"PARAMETER"},
-                            adjacent_type_ref=getattr(c_param, "type_ref", None),
-                        )
-                        for cm in getattr(c_param, "modifiers", []):
-                            if cm != "final":
-                                self.errors.append(
-                                    SemanticError(f"Modificador '{cm}' inválido em parâmetro de catch (JLS §14.20).", getattr(c_param, "line", catch_c.line))
-                                )
-                    for ct in c_types:
-                        self._check_type_ref_annotations(ct)
-                        if getattr(ct, "name", None) == "var":
-                            self.errors.append(
-                                SemanticError("'var' não é permitido como tipo de parâmetro de catch (JLS §14.20).", getattr(ct, "line", catch_c.line))
-                            )
-                    if len(c_types) > 1:
-                        for idx_a in range(len(c_types)):
-                            for idx_b in range(idx_a + 1, len(c_types)):
-                                na = c_types[idx_a].full_name
-                                nb = c_types[idx_b].full_name
-                                if na.split(".")[-1] == nb.split(".")[-1] or self._is_exception_subtype(na, nb) or self._is_exception_subtype(nb, na):
-                                    self.errors.append(
-                                        SemanticError(
-                                            f"Alternativas incompatíveis em multicatch: '{na}' e '{nb}' possuem relação de subtipo ou são idênticas (JLS §14.20).",
-                                            getattr(c_types[idx_b], "line", catch_c.line),
-                                        )
-                                    )
-                    for ct in c_types:
-                        ct_name = ct.full_name
-                        ct_line = getattr(ct, "line", catch_c.line)
-                        for prev_ex, prev_line in caught_exceptions:
-                            if ct_name.split(".")[-1] == prev_ex.split(".")[-1] or self._is_exception_subtype(ct_name, prev_ex):
-                                self.errors.append(
-                                    SemanticError(
-                                        f"Cláusula catch inalcançável para '{ct_name}': exceção já capturada anteriormente na linha {prev_line} (JLS §14.20).",
-                                        ct_line,
-                                    )
-                                )
-                                break
-                        caught_exceptions.append((ct_name, ct_line))
-
-                    if c_param is not None and c_param.name != "_":
-                        is_catch_final = ("final" in getattr(c_param, "modifiers", [])) or (len(c_types) > 1)
-                        catch_type_label = " | ".join(t.full_name for t in c_types) if c_types else (
-                            c_param.type_ref.name if getattr(c_param, "type_ref", None) else "Throwable"
-                        )
-                        self._register_local_var(
-                            c_param.name,
-                            catch_type_label,
-                            getattr(c_param, "line", catch_c.line),
-                            is_final=is_catch_final,
-                            has_initializer=True,
-                            category="parametro",
-                        )
-                    if catch_c.body is not None:
-                        self.analyze_block(catch_c.body)
-                finally:
+            try:
+                for catch_c in stmt.catches:
+                    self._flow_restore(catch_in_snap)
+                    self.symbols.enter_scope()
+                    push_catch = bool(self._local_var_scopes)
                     if push_catch:
-                        self._local_var_scopes.pop()
-                    self.symbols.exit_scope()
+                        self._local_var_scopes.append({})
+                    try:
+                        c_param = catch_c.parameter
+                        c_types = catch_c.catch_types
+                        if c_param is not None:
+                            self._analyze_annotations(
+                                getattr(c_param, "annotations", []),
+                                valid_targets={"PARAMETER"},
+                                adjacent_type_ref=getattr(c_param, "type_ref", None),
+                            )
+                            for cm in getattr(c_param, "modifiers", []):
+                                if cm != "final":
+                                    self.errors.append(
+                                        SemanticError(f"Modificador '{cm}' inválido em parâmetro de catch (JLS §14.20).", getattr(c_param, "line", catch_c.line))
+                                    )
+                        for ct in c_types:
+                            self._check_type_ref_annotations(ct)
+                            if getattr(ct, "name", None) == "var":
+                                self.errors.append(
+                                    SemanticError("'var' não é permitido como tipo de parâmetro de catch (JLS §14.20).", getattr(ct, "line", catch_c.line))
+                                )
+                        self._exception_analyzer.validate_catch_and_reachability(
+                            c_types,
+                            catch_c.line,
+                            caught_exceptions,
+                            try_frame,
+                        )
 
-            if stmt.finally_block is not None:
-                self.analyze_block(stmt.finally_block)
+                        if c_param is not None and c_param.name != "_":
+                            is_catch_final = ("final" in getattr(c_param, "modifiers", [])) or (len(c_types) > 1)
+                            catch_type_label = " | ".join(t.full_name for t in c_types) if c_types else (
+                                c_param.type_ref.name if getattr(c_param, "type_ref", None) else "Throwable"
+                            )
+                            self._register_local_var(
+                                c_param.name,
+                                catch_type_label,
+                                getattr(c_param, "line", catch_c.line),
+                                is_final=is_catch_final,
+                                has_initializer=True,
+                                category="parametro",
+                            )
+                            rethrow_types = self._exception_analyzer.compute_precise_rethrow_types(c_types, try_frame)
+                            if rethrow_types is not None:
+                                c_linfo = self._find_local_var_info(c_param.name)
+                                if c_linfo is not None:
+                                    c_linfo["precise_rethrow_types"] = rethrow_types
+                        if catch_c.body is not None:
+                            self.analyze_block(catch_c.body)
+                        catch_outs.append(self._flow_snapshot())
+                    finally:
+                        if push_catch:
+                            self._flow_cleanup_scope(self._local_var_scopes[-1])
+                            self._local_var_scopes.pop()
+                        self.symbols.exit_scope()
+            finally:
+                if self._flow_write_trackers and self._flow_write_trackers[-1] is try_and_catch_writes:
+                    self._flow_write_trackers.pop()
+
+            self._exception_analyzer.propagate_try_uncaught(
+                try_frame,
+                [ex_name for ex_name, _ in caught_exceptions],
+            )
+
+            after_tc = self._flow_join_states(try_out, *catch_outs)
+            if has_finally and tf_frame is not None:
+                if self._flow_exit_frames and self._flow_exit_frames[-1] is tf_frame:
+                    self._flow_exit_frames.pop()
+                finally_writes: Set[Any] = set()
+                self._flow_write_trackers.append(finally_writes)
+                try:
+                    finally_in = (set(entry_snap[0]), set(entry_snap[1]) - try_and_catch_writes, entry_snap[2])
+                    self._flow_restore(finally_in)
+                    self.analyze_block(stmt.finally_block)
+                    finally_out = self._flow_snapshot()
+                finally:
+                    if self._flow_write_trackers and self._flow_write_trackers[-1] is finally_writes:
+                        self._flow_write_trackers.pop()
+
+                finally_completes = finally_out[2]
+                finally_da_added = (finally_out[0] - entry_snap[0]) if finally_completes else set()
+                self._flow_forward_abrupt_through_finally(
+                    tf_frame["pending_breaks"],
+                    tf_frame["pending_continues"],
+                    finally_da_added,
+                    finally_writes,
+                    finally_completes,
+                    pending_yields=tf_frame["pending_yields"],
+                    pending_returns=tf_frame["pending_returns"],
+                )
+                if finally_completes and after_tc[2]:
+                    self._flow_restore((after_tc[0] | finally_da_added, after_tc[1] - finally_writes, True))
+                else:
+                    self._flow_restore(self._flow_unreachable())
+            else:
+                self._flow_restore(after_tc)
 
         elif isinstance(stmt, SynchronizedStatement):
             self.check_expression(stmt.lock)
@@ -5446,14 +8791,27 @@ class SemanticAnalyzer:
         elif isinstance(stmt, ThrowStatement):
             self.check_expression(stmt.expression)
             exc_t = self.infer_type(stmt.expression)
+            line = getattr(stmt, "line", 1)
             if exc_t:
-                if exc_t in self.PRIMITIVE_TYPES or exc_t == "void" or self._is_subtype(exc_t, "Throwable") is False:
+                if self._exception_analyzer.is_valid_throwable(exc_t) is False:
                     self.errors.append(
                         SemanticError(
                             f"Expressão em 'throw' deve ser subtipo de 'Throwable' (encontrado '{exc_t}' — JLS §14.18).",
-                            getattr(stmt, "line", 1),
+                            line,
                         )
                     )
+                else:
+                    emit_types = [exc_t]
+                    if isinstance(stmt.expression, Identifier):
+                        linfo = self._find_local_var_info(stmt.expression.name)
+                        if (
+                            linfo is not None
+                            and not linfo.get("reassigned", False)
+                            and "precise_rethrow_types" in linfo
+                        ):
+                            emit_types = list(linfo["precise_rethrow_types"])
+                    self._exception_analyzer.emit_thrown(emit_types, line, "instrução 'throw'")
+            self._flow_reachable = False
 
         elif isinstance(stmt, AssertStatement):
             self._check_boolean_condition(stmt.condition, "assert", getattr(stmt, "line", 1))
@@ -5542,12 +8900,18 @@ class SemanticAnalyzer:
         """Identifica variáveis de tipo genérico não instanciadas (ex: T, E, R)."""
         if not type_str:
             return False
+        if self._is_capture_var(type_str):
+            return False
         s, dims = self._strip_type_dims_full(self._strip_generics(type_str))
         if not s or "." in s:
             return False
+        if self._lookup_type_param_bounds(s) is not None:
+            return True
         if s in self.PRIMITIVE_TYPES or s in self.BUILTIN_TYPE_SUPERTYPES or s in self.KNOWN_EXCEPTION_PARENTS:
             return False
         if self._lookup_type_decl(s) is not None:
+            return False
+        if self._resolve_external_type(type_str) is not None:
             return False
         return len(s) <= 2 and s[0].isupper()
 
@@ -5610,101 +8974,21 @@ class SemanticAnalyzer:
         return "int"
 
     def _eval_constant_int_literal(self, expr: Optional[ASTNode]) -> Optional[int]:
-        """Avalia expressões constantes inteiras/char simples para checagem de narrowing (JLS §5.2)."""
-        if expr is None:
-            return None
-        if isinstance(expr, Literal):
-            kind = getattr(expr, "kind", "")
-            val = str(getattr(expr, "value", ""))
-            if kind == "CHAR":
-                if val.startswith("'") and val.endswith("'") and len(val) >= 3:
-                    inner = val[1:-1]
-                    if len(inner) == 1:
-                        return ord(inner)
-                    escapes = {"\\n": 10, "\\r": 13, "\\t": 9, "\\b": 8, "\\f": 12, "\\'": 39, '\\"': 34, "\\\\": 92}
-                    if inner in escapes:
-                        return escapes[inner]
-                return None
-            if kind == "LONG":
-                return None
-            if kind in ("NUM", "INT"):
-                if val.endswith(("l", "L", "f", "F", "d", "D")) and not val.startswith(("0x", "0X")):
-                    return None
-                if "." in val or ("e" in val.lower() and not val.startswith(("0x", "0X"))):
-                    return None
-                if val.startswith(("0x", "0X")) and val.endswith(("l", "L")):
-                    return None
-                try:
-                    return int(val.replace("_", ""), 0)
-                except ValueError:
-                    return None
-        if isinstance(expr, Identifier):
-            info = self._find_local_var_info(expr.name)
-            if info is not None and info.get("is_final") and "const_value" in info:
-                return info["const_value"]
-            return None
-        if isinstance(expr, CastExpression):
-            tname = getattr(expr.target_type, "name", None)
-            tdims = getattr(expr.target_type, "array_dimensions", 0)
-            inner_val = self._eval_constant_int_literal(expr.expression)
-            if inner_val is None or tdims or getattr(expr, "additional_bounds", None):
-                return None
-            wrap = {"byte": (8, True), "short": (16, True), "char": (16, False), "int": (32, True)}
-            if tname in wrap:
-                bits, signed = wrap[tname]
-                v = inner_val & ((1 << bits) - 1)
-                if signed and v >= (1 << (bits - 1)):
-                    v -= 1 << bits
-                return v
-            return None
-        if isinstance(expr, UnaryOp):
-            inner_val = self._eval_constant_int_literal(expr.operand)
-            if inner_val is None:
-                return None
-            if expr.op == "+":
-                return inner_val
-            if expr.op == "-":
-                return -inner_val
-            if expr.op == "~":
-                return ~inner_val
-        if isinstance(expr, BinaryOp):
-            lv = self._eval_constant_int_literal(expr.left)
-            rv = self._eval_constant_int_literal(expr.right)
-            if lv is not None and rv is not None:
-                try:
-                    if expr.op == "+":
-                        return lv + rv
-                    if expr.op == "-":
-                        return lv - rv
-                    if expr.op == "*":
-                        return lv * rv
-                    if expr.op == "/" and rv != 0:
-                        return int(lv / rv)
-                    if expr.op == "%" and rv != 0:
-                        return int(lv - rv * int(lv / rv))
-                    if expr.op == "&":
-                        return lv & rv
-                    if expr.op == "|":
-                        return lv | rv
-                    if expr.op == "^":
-                        return lv ^ rv
-                    if expr.op == "<<" and 0 <= rv < 32:
-                        return lv << rv
-                    if expr.op == ">>" and 0 <= rv < 32:
-                        return lv >> rv
-                except ArithmeticError:
-                    return None
+        """Avalia expressões constantes byte/short/char/int para checagem de narrowing (JLS §5.2 / §15.29)."""
+        res = self._eval_constant_expr(expr)
+        if res is not None and res[0] in ("byte", "short", "char", "int"):
+            return int(res[1])
         return None
 
     def _is_constant_narrowing_compatible(self, target_prim: str, expr: Optional[ASTNode]) -> bool:
-        """Verifica se expressão constante int cabe em byte/short/char (JLS §5.2)."""
+        """Verifica se expressão constante de tipo byte/short/char/int cabe em byte/short/char (JLS §5.2)."""
         if target_prim not in self.INTEGER_RANGES or expr is None:
             return False
-        src_t = self.infer_type(expr)
-        if src_t not in ("byte", "short", "char", "int", None):
+        res = self._eval_constant_expr(expr)
+        if res is None:
             return False
-        const_val = self._eval_constant_int_literal(expr)
-        if const_val is None:
+        src_t, const_val = res
+        if src_t not in ("byte", "short", "char", "int"):
             return False
         lo, hi = self.INTEGER_RANGES[target_prim]
         return lo <= const_val <= hi
@@ -5716,18 +9000,24 @@ class SemanticAnalyzer:
         if isinstance(expr, (LambdaExpression, MethodReference)):
             sam, _ = self._resolve_functional_interface(target_type)
             return sam is not None
+        t_clean = self._strip_leading_type_annotations(target_type)
+        wrapper_to_narrow = {"Byte": "byte", "Short": "short", "Character": "char"}
+        t_base = self._simple_base_name(t_clean) or t_clean
         if isinstance(expr, ConditionalExpression):
+            c_res = self._eval_constant_expr(expr)
+            if c_res is not None:
+                if t_clean in self.INTEGER_RANGES:
+                    return self._is_constant_narrowing_compatible(t_clean, expr)
+                if t_base in wrapper_to_narrow:
+                    return self._is_constant_narrowing_compatible(wrapper_to_narrow[t_base], expr)
             return self._is_assignable_expr(target_type, expr.then_expr) and self._is_assignable_expr(target_type, expr.else_expr)
         expr_type = self.infer_type(expr)
         if expr_type is None:
             return True
         if self.is_assignable(target_type, expr_type):
             return True
-        t_clean = self._strip_leading_type_annotations(target_type)
         if t_clean in self.INTEGER_RANGES and self._is_constant_narrowing_compatible(t_clean, expr):
             return True
-        wrapper_to_narrow = {"Byte": "byte", "Short": "short", "Character": "char"}
-        t_base = self._simple_base_name(t_clean) or t_clean
         if t_base in wrapper_to_narrow and self._is_constant_narrowing_compatible(wrapper_to_narrow[t_base], expr):
             return True
         return False
@@ -5805,7 +9095,14 @@ class SemanticAnalyzer:
         """Substitui parâmetros de tipo genérico (T, E, K, V, R) por seus argumentos concretos."""
         if not type_str or not mapping:
             return type_str
-        s, dims = self._strip_type_dims_full(type_str)
+        clean = self._strip_leading_type_annotations(type_str)
+        kind, bound = self._parse_wildcard_arg(clean)
+        if kind is not None:
+            if kind == "unbounded" or not bound:
+                return "?"
+            new_bound = self._substitute_type_vars(bound, mapping) or bound
+            return f"? {kind} {new_bound}"
+        s, dims = self._strip_type_dims_full(clean)
         base, args, _ = self._extract_generic_args(s)
         if not args:
             res = mapping.get(base or s, s)
@@ -5823,17 +9120,7 @@ class SemanticAnalyzer:
         base, args, _ = self._extract_generic_args(type_str)
         if not base or not args:
             return {}
-        simple = self._simple_base_name(base) or base
-        param_names: List[str] = []
-        tdecl = self._lookup_type_decl(simple)
-        if tdecl is not None:
-            _, tnode = tdecl
-            for tp in getattr(tnode, "type_parameters", []) or []:
-                tp_name = getattr(tp, "name", None)
-                if tp_name:
-                    param_names.append(tp_name)
-        elif simple in self.BUILTIN_TYPE_PARAMS:
-            param_names = list(self.BUILTIN_TYPE_PARAMS[simple])
+        param_names = [pname for pname, _ in self._type_param_decls_for_type(base)]
         return {pname: arg for pname, arg in zip(param_names, args)}
 
     def _check_lambda_capture_boundaries(self):
@@ -5857,33 +9144,78 @@ class SemanticAnalyzer:
         """Coleta campos declarados e herdados de um tipo junto com flag de hierarquia fechada."""
         fields: Dict[str, Dict[str, Any]] = {}
         visited: Set[str] = set()
-        queue: List[str] = [type_str]
+        eff_root = self._capture_convert(type_str) or type_str
+        root_base = self._strip_generics(eff_root) or eff_root
+        root_internal = self._lookup_internal_type_key(root_base)
+        root_ext_init = self._resolve_external_type(eff_root) if root_internal is None else None
+        root_key = root_internal or (root_ext_init.fqn if root_ext_init is not None else (self._simple_base_name(eff_root) or ""))
+        root_pkg = self._inheritance_analyzer.get_type_package(root_key)
+        queue: List[str] = [eff_root]
         fully_known = True
 
         while queue:
             cur = queue.pop(0)
+            cur_base = self._strip_generics(cur) or cur
             cur_simple = self._simple_base_name(cur) or ""
-            if not cur_simple or cur_simple in visited or cur_simple.endswith("[]"):
+            cur_internal = self._lookup_internal_type_key(cur_base)
+            cur_ext = self._resolve_external_type(cur_base) if cur_internal is None else None
+            cur_key = cur_internal or (cur_ext.fqn if cur_ext is not None else cur_simple)
+            if not cur_key or cur_key in visited or cur_simple.endswith("[]"):
                 continue
-            visited.add(cur_simple)
+            visited.add(cur_key)
+            if self._is_capture_var(cur_simple):
+                cap = self._capture_vars.get(cur_simple, {})
+                for ub in (cap.get("upper_bounds") or ["Object"]):
+                    queue.append(self._capture_convert(ub) or ub)
+                continue
+            tp_bounds = self._lookup_type_param_bounds(cur_simple)
+            if tp_bounds is not None:
+                for ub in (tp_bounds or ["Object"]):
+                    queue.append(self._capture_convert(ub) or ub)
+                continue
             tvar_map = self._type_var_mapping_for_type(cur)
 
-            if cur_simple in self.BUILTIN_FIELDS:
+            if cur_ext is not None:
+                is_inherited_ext = (cur_key != root_key and cur_simple != self._simple_base_name(eff_root))
+                for fname, ef in cur_ext.fields.items():
+                    if is_inherited_ext and ef.access == "private":
+                        continue
+                    fields.setdefault(fname, self._ext_field_to_dict(ef, cur_ext, tvar_map))
+
+            if cur_simple in self.BUILTIN_FIELDS and (cur_ext is None or self._is_partial_external_stdlib(cur_ext)):
                 for fname, (ftype, is_st, is_fin) in self.BUILTIN_FIELDS[cur_simple].items():
                     fields.setdefault(
                         fname,
-                        {"type": self._substitute_type_vars(ftype, tvar_map), "is_static": is_st, "is_final": is_fin, "category": "campo", "owner": cur_simple},
+                        {
+                            "type": self._substitute_type_vars(ftype, tvar_map),
+                            "is_static": is_st,
+                            "is_final": is_fin,
+                            "category": "campo",
+                            "owner": cur_simple,
+                            "owner_key": cur_simple,
+                            "access": "public",
+                        },
                     )
 
-            tdecl = self._lookup_type_decl(cur_simple)
+            tdecl = self._lookup_type_decl(cur_key)
             if tdecl is not None:
                 tkind, tnode = tdecl
+                cur_pkg = self._inheritance_analyzer.get_type_package(cur_key)
+                is_inherited_owner = (cur_key != root_key)
                 if tkind == "enum":
                     for const in getattr(tnode, "constants", []):
                         if getattr(const, "name", None):
                             fields.setdefault(
                                 const.name,
-                                {"type": cur_simple, "is_static": True, "is_final": True, "category": "constante_enum", "owner": cur_simple},
+                                {
+                                    "type": cur_simple,
+                                    "is_static": True,
+                                    "is_final": True,
+                                    "category": "constante_enum",
+                                    "owner": cur_simple,
+                                    "owner_key": cur_key,
+                                    "access": "public",
+                                },
                             )
                 elif tkind == "record":
                     for comp in getattr(tnode, "components", []):
@@ -5891,24 +9223,66 @@ class SemanticAnalyzer:
                             ctype = self._substitute_type_vars(comp.effective_type, tvar_map)
                             fields.setdefault(
                                 comp.name,
-                                {"type": ctype, "is_static": False, "is_final": True, "category": "componente_record", "owner": cur_simple},
+                                {
+                                    "type": ctype,
+                                    "is_static": False,
+                                    "is_final": True,
+                                    "category": "componente_record",
+                                    "owner": cur_simple,
+                                    "owner_key": cur_key,
+                                    "access": "public",
+                                },
                             )
                 for member in getattr(tnode, "members", []):
                     if isinstance(member, FieldDeclaration):
                         is_ifc_const = (tkind == "interface")
                         is_st = True if is_ifc_const else ("static" in getattr(member, "modifiers", []))
                         is_fin = True if is_ifc_const else ("final" in getattr(member, "modifiers", []))
+                        f_access = self._inheritance_analyzer.effective_access(
+                            getattr(member, "modifiers", []),
+                            owner_kind=tkind,
+                            member_kind="campo",
+                        )
+                        if is_inherited_owner:
+                            if f_access == "private":
+                                continue
+                            if f_access == "package" and cur_pkg != root_pkg:
+                                continue
                         cat = "constante_interface" if is_ifc_const else "campo"
                         decls = getattr(member, "declarators", None) or []
                         if decls:
                             for d in decls:
                                 if getattr(d, "name", None) and d.name != "_":
                                     ftype = self._substitute_type_vars(d.effective_type, tvar_map)
-                                    fields.setdefault(d.name, {"type": ftype, "is_static": is_st, "is_final": is_fin, "category": cat, "owner": cur_simple})
+                                    fields.setdefault(
+                                        d.name,
+                                        {
+                                            "type": ftype,
+                                            "is_static": is_st,
+                                            "is_final": is_fin,
+                                            "category": cat,
+                                            "owner": cur_simple,
+                                            "owner_key": cur_key,
+                                            "access": f_access,
+                                        },
+                                    )
                         elif getattr(member, "name", None) and member.name != "_":
                             raw_t = getattr(member, "effective_type", None) or self._normalize_type_str(getattr(member, "type_ref", None)) or "Object"
                             ftype = self._substitute_type_vars(raw_t, tvar_map)
-                            fields.setdefault(member.name, {"type": ftype, "is_static": is_st, "is_final": is_fin, "category": cat, "owner": cur_simple})
+                            fields.setdefault(
+                                member.name,
+                                {
+                                    "type": ftype,
+                                    "is_static": is_st,
+                                    "is_final": is_fin,
+                                    "category": cat,
+                                    "owner": cur_simple,
+                                    "owner_key": cur_key,
+                                    "access": f_access,
+                                },
+                            )
+            elif cur_ext is not None:
+                pass
             elif cur_simple not in self.BUILTIN_TYPE_SUPERTYPES and cur_simple not in self.KNOWN_EXCEPTION_PARENTS:
                 fully_known = False
 
@@ -5926,6 +9300,7 @@ class SemanticAnalyzer:
         member: MethodDeclaration,
         owner_name: str,
         tvar_map: Optional[Dict[str, str]] = None,
+        owner_kind: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Extrai assinatura normalizada de um nó MethodDeclaration."""
         params: List[str] = []
@@ -5950,47 +9325,108 @@ class SemanticAnalyzer:
         ret_t = getattr(member, "effective_return_type", None) or self._normalize_type_str(getattr(member, "return_type", None)) or "void"
         if tvar_map:
             ret_t = self._substitute_type_vars(ret_t, tvar_map) or ret_t
-        tparams = [getattr(tp, "name", "") for tp in (getattr(member, "type_parameters", []) or []) if getattr(tp, "name", "")]
+        tparams = []
+        tparam_bounds: Dict[str, List[str]] = {}
+        for tp in (getattr(member, "type_parameters", []) or []):
+            tp_name = getattr(tp, "name", "")
+            if not tp_name:
+                continue
+            tparams.append(tp_name)
+            raw_b = [self._normalize_type_str(b) for b in (getattr(tp, "bounds", []) or [])]
+            tparam_bounds[tp_name] = [b for b in raw_b if b] or ["Object"]
+        throws_list: List[str] = []
+        for tt in (getattr(member, "throws_types", []) or []):
+            tn = self._normalize_type_str(tt)
+            if tn:
+                if tvar_map:
+                    tn = self._substitute_type_vars(tn, tvar_map) or tn
+                throws_list.append(tn)
+        mods = list(getattr(member, "modifiers", []) or [])
+        eff_okind = owner_kind
+        if not eff_okind:
+            tdecl = self._lookup_type_decl(owner_name)
+            if tdecl is not None:
+                eff_okind = tdecl[0]
+            elif isinstance(member, InterfaceMethodDeclaration) or "default" in mods:
+                eff_okind = "interface"
+            else:
+                eff_okind = "class"
+        m_kind = "construtor" if isinstance(member, (ConstructorDeclaration, CompactConstructorDeclaration, NormalCanonicalConstructor)) else "metodo"
+        is_iface_abstract = (eff_okind == "interface") and not any(m in mods for m in ("default", "static", "private"))
+        owner_key = self._inheritance_analyzer.resolve_type_key(owner_name) or owner_name
         return {
+            "name": getattr(member, "name", ""),
             "params": params,
             "ret": ret_t,
-            "static": "static" in getattr(member, "modifiers", []),
+            "static": "static" in mods,
             "varargs": is_varargs,
             "tparams": tparams,
-            "owner": owner_name,
-            "is_abstract": "abstract" in getattr(member, "modifiers", []),
+            "tparam_bounds": tparam_bounds,
+            "throws": throws_list,
+            "owner": self._simple_base_name(owner_name) or owner_name,
+            "owner_key": owner_key,
+            "owner_kind": eff_okind,
+            "access": self._inheritance_analyzer.effective_access(mods, owner_kind=eff_okind, member_kind=m_kind),
+            "is_abstract": ("abstract" in mods) or is_iface_abstract,
+            "is_final": "final" in mods,
+            "is_default": "default" in mods,
             "node": member,
         }
 
     def _collect_type_methods(self, type_str: str, method_name: str) -> Tuple[List[Dict[str, Any]], bool, bool]:
         """Coleta assinaturas de método no tipo e em sua hierarquia."""
         methods: List[Dict[str, Any]] = []
-        seen_sigs: Set[Tuple[Tuple[str, ...], bool]] = set()
+        seen_sigs: Set[Tuple[Any, ...]] = set()
+        seen_raw_sigs: Set[Tuple[Any, ...]] = set()
         visited: Set[str] = set()
-        queue: List[str] = [type_str]
-        fully_known = True
+        eff_root = self._capture_convert(type_str) or type_str
+        root_base = self._strip_generics(eff_root) or eff_root
+        root_simple = self._simple_base_name(eff_root) or ""
+        root_key = self._inheritance_analyzer.resolve_type_key(root_base) or root_simple
+        root_ext = self._resolve_external_type(eff_root) if self._lookup_type_decl(root_key) is None else None
         is_declared = False
-
-        root_simple = self._simple_base_name(type_str) or ""
-        if self._lookup_type_decl(root_simple) is not None:
+        root_is_var = self._is_capture_var(root_simple) or (self._lookup_type_param_bounds(root_simple) is not None)
+        if root_ext is not None:
+            root_key = root_ext.fqn
+            is_declared = True
+        queue: List[str] = [eff_root]
+        fully_known = True
+        if self._lookup_type_decl(root_key) is not None:
             is_declared = True
 
         # Arrays herdam apenas métodos de Object (e clone)
-        _, root_dims = self._strip_type_dims_full(type_str)
+        _, root_dims = self._strip_type_dims_full(eff_root)
         if root_dims > 0:
             queue = ["Object"]
 
         while queue:
             cur = queue.pop(0)
+            cur_base = self._strip_generics(cur) or cur
             cur_simple = self._simple_base_name(cur) or ""
-            if not cur_simple or cur_simple in visited:
+            cur_internal = self._lookup_internal_type_key(cur_base)
+            cur_ext = self._resolve_external_type(cur_base) if cur_internal is None else None
+            cur_key = cur_internal or (cur_ext.fqn if cur_ext is not None else cur_simple)
+            if not cur_key or cur_key in visited:
                 continue
-            visited.add(cur_simple)
+            visited.add(cur_key)
+            if self._is_capture_var(cur_simple):
+                cap = self._capture_vars.get(cur_simple, {})
+                for ub in (cap.get("upper_bounds") or ["Object"]):
+                    queue.append(self._capture_convert(ub) or ub)
+                continue
+            tp_bounds = self._lookup_type_param_bounds(cur_simple)
+            if tp_bounds is not None:
+                for ub in (tp_bounds or ["Object"]):
+                    queue.append(self._capture_convert(ub) or ub)
+                continue
             tvar_map = self._type_var_mapping_for_type(cur)
 
-            tdecl = self._lookup_type_decl(cur_simple)
+            tdecl = self._lookup_type_decl(cur_key)
             if tdecl is not None:
+                if root_is_var:
+                    is_declared = True
                 tkind, tnode = tdecl
+                is_inherited_owner = (cur_key != root_key)
                 if tkind == "record":
                     for comp in getattr(tnode, "components", []):
                         if comp.name == method_name:
@@ -5998,46 +9434,120 @@ class SemanticAnalyzer:
                             key = ((), False)
                             if key not in seen_sigs:
                                 seen_sigs.add(key)
-                                methods.append({"params": [], "ret": ret, "static": False, "varargs": False, "tparams": [], "owner": cur_simple})
+                                methods.append({
+                                    "name": method_name,
+                                    "params": [],
+                                    "ret": ret,
+                                    "static": False,
+                                    "varargs": False,
+                                    "tparams": [],
+                                    "throws": [],
+                                    "owner": cur_simple,
+                                    "owner_key": cur_key,
+                                    "owner_kind": "record",
+                                    "access": "public",
+                                    "is_final": False,
+                                    "is_default": False,
+                                })
                 elif tkind == "enum":
                     if method_name == "values":
                         key = ((), False)
                         if key not in seen_sigs:
                             seen_sigs.add(key)
-                            methods.append({"params": [], "ret": f"{cur_simple}[]", "static": True, "varargs": False, "tparams": [], "owner": cur_simple})
+                            methods.append({
+                                "name": "values",
+                                "params": [],
+                                "ret": f"{cur_simple}[]",
+                                "static": True,
+                                "varargs": False,
+                                "tparams": [],
+                                "throws": [],
+                                "owner": cur_simple,
+                                "owner_key": cur_key,
+                                "owner_kind": "enum",
+                                "access": "public",
+                                "is_final": False,
+                                "is_default": False,
+                            })
                     elif method_name == "valueOf":
                         key = (("String",), False)
                         if key not in seen_sigs:
                             seen_sigs.add(key)
-                            methods.append({"params": ["String"], "ret": cur_simple, "static": True, "varargs": False, "tparams": [], "owner": cur_simple})
+                            methods.append({
+                                "name": "valueOf",
+                                "params": ["String"],
+                                "ret": cur_simple,
+                                "static": True,
+                                "varargs": False,
+                                "tparams": [],
+                                "throws": [],
+                                "owner": cur_simple,
+                                "owner_key": cur_key,
+                                "owner_kind": "enum",
+                                "access": "public",
+                                "is_final": False,
+                                "is_default": False,
+                            })
 
                 for member in getattr(tnode, "members", []):
-                    if isinstance(member, MethodDeclaration) and member.name == method_name:
-                        sig = self._extract_method_sig(member, cur_simple, tvar_map)
-                        key = (tuple(sig["params"]), sig["varargs"])
+                    if isinstance(member, (MethodDeclaration, InterfaceMethodDeclaration)) and member.name == method_name:
+                        sig = self._extract_method_sig(member, cur_simple, tvar_map, owner_kind=tkind)
+                        sig["owner_key"] = cur_key
+                        if is_inherited_owner:
+                            if sig.get("access") == "private":
+                                continue
+                            if tkind == "interface" and sig.get("static"):
+                                continue
+                        key = self._sig_dedup_key(sig["params"], sig["varargs"], sig)
                         if key not in seen_sigs:
                             seen_sigs.add(key)
+                            seen_raw_sigs.add(self._sig_dedup_key(sig["params"], sig["varargs"]))
                             methods.append(sig)
-            elif cur_simple in self.BUILTIN_METHODS:
-                for bsig in self.BUILTIN_METHODS[cur_simple].get(method_name, []):
-                    bparams = []
-                    for bp in bsig["params"]:
-                        clean_p = bp[:-3] if bp.endswith("...") else bp
-                        bparams.append(self._substitute_type_vars(clean_p, tvar_map) or clean_p)
-                    bret = self._substitute_type_vars(bsig["ret"], tvar_map) or bsig["ret"]
-                    key = (tuple(bparams), bsig["varargs"])
-                    if key not in seen_sigs:
-                        seen_sigs.add(key)
-                        methods.append({
-                            "params": bparams,
-                            "ret": bret,
-                            "static": bsig["static"],
-                            "varargs": bsig["varargs"],
-                            "tparams": list(bsig.get("tparams", [])),
-                            "owner": cur_simple,
-                        })
-            elif cur_simple not in self.BUILTIN_TYPE_SUPERTYPES and cur_simple not in self.KNOWN_EXCEPTION_PARENTS:
-                fully_known = False
+            else:
+                if cur_ext is not None:
+                    is_inherited_ext = (cur_key != root_key)
+                    for minfo in cur_ext.methods.get(method_name, []):
+                        if is_inherited_ext and minfo.access == "private":
+                            continue
+                        if is_inherited_ext and cur_ext.kind == "interface" and minfo.static:
+                            continue
+                        msig = self._ext_method_to_sig(minfo, cur_ext, tvar_map)
+                        key = self._sig_dedup_key(msig["params"], msig["varargs"], msig)
+                        if key not in seen_sigs:
+                            seen_sigs.add(key)
+                            seen_raw_sigs.add(self._sig_dedup_key(msig["params"], msig["varargs"]))
+                            methods.append(msig)
+                if cur_simple in self.BUILTIN_METHODS and (cur_ext is None or self._is_partial_external_stdlib(cur_ext)):
+                    for bsig in self.BUILTIN_METHODS[cur_simple].get(method_name, []):
+                        bparams = []
+                        for bp in bsig["params"]:
+                            clean_p = bp[:-3] if bp.endswith("...") else bp
+                            bparams.append(self._substitute_type_vars(clean_p, tvar_map) or clean_p)
+                        bret = self._substitute_type_vars(bsig["ret"], tvar_map) or bsig["ret"]
+                        bthrows = [self._substitute_type_vars(bt, tvar_map) or bt for bt in bsig.get("throws", [])]
+                        if (cur_simple != root_simple) and cur_simple in self.BUILTIN_INTERFACE_TYPES and bsig.get("static"):
+                            continue
+                        key = self._sig_dedup_key(bparams, bsig["varargs"])
+                        if key not in seen_raw_sigs and key not in seen_sigs:
+                            seen_raw_sigs.add(key)
+                            seen_sigs.add(key)
+                            methods.append({
+                                "name": method_name,
+                                "params": bparams,
+                                "ret": bret,
+                                "static": bsig["static"],
+                                "varargs": bsig["varargs"],
+                                "tparams": list(bsig.get("tparams", [])),
+                                "throws": bthrows,
+                                "owner": cur_simple,
+                                "owner_key": cur_simple,
+                                "owner_kind": "interface" if cur_simple in self.BUILTIN_INTERFACE_TYPES else "class",
+                                "access": bsig.get("access", "public"),
+                                "is_final": bool(bsig.get("is_final", False)),
+                                "is_default": bool(bsig.get("is_default", False)),
+                            })
+                elif cur_ext is None and cur_simple not in self.BUILTIN_TYPE_SUPERTYPES and cur_simple not in self.KNOWN_EXCEPTION_PARENTS:
+                    fully_known = False
 
             supers, is_ext = self._direct_supertypes(cur)
             if is_ext:
@@ -6050,10 +9560,12 @@ class SemanticAnalyzer:
 
     def _collect_type_constructors(self, type_str: str) -> Tuple[List[Dict[str, Any]], bool, Optional[str]]:
         """Coleta assinaturas de construtor de uma classe/record ou tipo embutido."""
+        base = self._strip_generics(type_str) or type_str
         simple = self._simple_base_name(type_str) or ""
+        resolved_key = self._inheritance_analyzer.resolve_type_key(base) or simple
         tvar_map = self._type_var_mapping_for_type(type_str)
         ctors: List[Dict[str, Any]] = []
-        tdecl = self._lookup_type_decl(simple)
+        tdecl = self._lookup_type_decl(resolved_key)
         if tdecl is not None:
             tkind, tnode = tdecl
             if tkind == "enum":
@@ -6064,38 +9576,152 @@ class SemanticAnalyzer:
             ]
             if declared_ctors:
                 for cm in declared_ctors:
+                    c_acc = self._inheritance_analyzer.effective_access(
+                        getattr(cm, "modifiers", []),
+                        owner_kind=tkind,
+                        member_kind="construtor",
+                    )
                     if isinstance(cm, CompactConstructorDeclaration):
                         cparams = [
                             self._substitute_type_vars(c.effective_type.replace("...", "[]"), tvar_map) or c.effective_type
                             for c in getattr(tnode, "components", [])
                         ]
-                        ctors.append({"params": cparams, "ret": type_str, "static": False, "varargs": False, "tparams": [], "owner": simple})
+                        ctors.append({
+                            "params": cparams,
+                            "ret": type_str,
+                            "static": False,
+                            "varargs": False,
+                            "tparams": [],
+                            "throws": [],
+                            "owner": simple,
+                            "owner_key": resolved_key,
+                            "access": c_acc,
+                        })
                     else:
-                        sig = self._extract_method_sig(cm, simple, tvar_map)
+                        sig = self._extract_method_sig(cm, simple, tvar_map, owner_kind=tkind)
                         sig["ret"] = type_str
+                        sig["owner_key"] = resolved_key
+                        sig["access"] = c_acc
                         ctors.append(sig)
-            elif tkind == "record":
+            has_explicit_canonical = any(
+                isinstance(cm, (CompactConstructorDeclaration, NormalCanonicalConstructor))
+                for cm in declared_ctors
+            )
+            if tkind == "record" and not has_explicit_canonical:
                 cparams = [
                     self._substitute_type_vars(c.effective_type.replace("...", "[]"), tvar_map) or c.effective_type
                     for c in getattr(tnode, "components", [])
                 ]
-                ctors.append({"params": cparams, "ret": type_str, "static": False, "varargs": False, "tparams": [], "owner": simple})
-            elif tkind == "interface":
-                return [], True, "interface"
-            else:
-                # Classe sem construtores explícitos possui construtor padrão sem parâmetros (JLS §8.8.9)
-                ctors.append({"params": [], "ret": type_str, "static": False, "varargs": False, "tparams": [], "owner": simple})
+                rec_def_acc = self._inheritance_analyzer.effective_access(
+                    getattr(tnode, "modifiers", []),
+                    owner_kind="class",
+                    member_kind="construtor",
+                )
+                ctors.append({
+                    "params": cparams,
+                    "ret": type_str,
+                    "static": False,
+                    "varargs": False,
+                    "tparams": [],
+                    "throws": [],
+                    "owner": simple,
+                    "owner_key": resolved_key,
+                    "access": rec_def_acc,
+                })
+            elif not declared_ctors:
+                if tkind == "interface":
+                    return [], True, "interface"
+                elif tkind != "record":
+                    # Classe sem construtores explícitos possui construtor padrão com mesma visibilidade da classe (JLS §8.8.9)
+                    cls_def_acc = self._inheritance_analyzer.effective_access(
+                        getattr(tnode, "modifiers", []),
+                        owner_kind="class",
+                        member_kind="construtor",
+                    )
+                    ctors.append({
+                        "params": [],
+                        "ret": type_str,
+                        "static": False,
+                        "varargs": False,
+                        "tparams": [],
+                        "throws": [],
+                        "owner": simple,
+                        "owner_key": resolved_key,
+                        "access": cls_def_acc,
+                    })
             return ctors, True, tkind
 
+        ext = self._resolve_external_type(base)
+        if ext is not None:
+            if ext.kind == "enum":
+                return [], True, "enum"
+            if ext.kind in ("interface", "annotation_interface"):
+                return [], True, ext.kind
+            seen_ctors: Set[Tuple[Tuple[str, ...], bool]] = set()
+            for mc in ext.constructors:
+                csig = self._ext_method_to_sig(mc, ext, tvar_map)
+                csig["ret"] = type_str
+                ckey = (tuple(csig["params"]), csig["varargs"])
+                if ckey not in seen_ctors:
+                    seen_ctors.add(ckey)
+                    ctors.append(csig)
+            if self._is_partial_external_stdlib(ext) and simple in self.BUILTIN_CONSTRUCTORS:
+                for entry in self.BUILTIN_CONSTRUCTORS[simple]:
+                    if isinstance(entry, dict):
+                        plist = list(entry.get("params", []))
+                        tlist = list(entry.get("throws", []))
+                        is_va = bool(entry.get("varargs", False))
+                        c_acc = entry.get("access", "public")
+                    else:
+                        plist = list(entry)
+                        tlist = []
+                        is_va = False
+                        c_acc = "public"
+                    ckey = (tuple(plist), is_va)
+                    if ckey not in seen_ctors:
+                        seen_ctors.add(ckey)
+                        ctors.append({
+                            "params": plist,
+                            "ret": type_str,
+                            "static": False,
+                            "varargs": is_va,
+                            "tparams": [],
+                            "throws": tlist,
+                            "owner": ext.simple_name,
+                            "owner_key": ext.fqn,
+                            "access": c_acc,
+                        })
+            return ctors, True, ext.kind
+
         if simple in self.BUILTIN_CONSTRUCTORS:
-            for plist in self.BUILTIN_CONSTRUCTORS[simple]:
-                ctors.append({"params": list(plist), "ret": type_str, "static": False, "varargs": False, "tparams": [], "owner": simple})
+            for entry in self.BUILTIN_CONSTRUCTORS[simple]:
+                if isinstance(entry, dict):
+                    plist = list(entry.get("params", []))
+                    tlist = list(entry.get("throws", []))
+                    is_va = bool(entry.get("varargs", False))
+                    c_acc = entry.get("access", "public")
+                else:
+                    plist = list(entry)
+                    tlist = []
+                    is_va = False
+                    c_acc = "public"
+                ctors.append({
+                    "params": plist,
+                    "ret": type_str,
+                    "static": False,
+                    "varargs": is_va,
+                    "tparams": [],
+                    "throws": tlist,
+                    "owner": simple,
+                    "owner_key": simple,
+                    "access": c_acc,
+                })
             return ctors, True, "class"
         if simple in self.BUILTIN_INTERFACE_TYPES:
             return [], True, "interface"
         if simple in self.KNOWN_EXCEPTION_PARENTS or simple in self.BUILTIN_CLASS_TYPES:
-            ctors.append({"params": [], "ret": type_str, "static": False, "varargs": False, "tparams": [], "owner": simple})
-            ctors.append({"params": ["String"], "ret": type_str, "static": False, "varargs": False, "tparams": [], "owner": simple})
+            ctors.append({"params": [], "ret": type_str, "static": False, "varargs": False, "tparams": [], "throws": [], "owner": simple})
+            ctors.append({"params": ["String"], "ret": type_str, "static": False, "varargs": False, "tparams": [], "throws": [], "owner": simple})
             return ctors, True, "class"
         return [], False, None
 
@@ -6142,11 +9768,12 @@ class SemanticAnalyzer:
                 return True
         return False
 
-    def _resolve_functional_interface(self, target_type: Optional[str]) -> Tuple[Optional[Tuple[List[str], str]], bool]:
-        """Resolve a assinatura do método abstrato único (SAM) de uma interface funcional."""
+    def _resolve_functional_interface_full(self, target_type: Optional[str]) -> Tuple[Optional[Tuple[List[str], str, List[str]]], bool]:
+        """Resolve a assinatura completa (parâmetros, retorno, throws) do SAM de uma interface funcional."""
         if not target_type:
             return None, False
         clean = self._strip_leading_type_annotations(target_type)
+        clean = self._capture_convert(clean) or clean
         simple = self._simple_base_name(clean)
         if not simple or simple.endswith("[]") or simple in self.PRIMITIVE_TYPES:
             return None, False
@@ -6160,7 +9787,8 @@ class SemanticAnalyzer:
                 eff_map.setdefault(tp, "Object")
             resolved_params = [self._substitute_type_vars(p, eff_map) or p for p in raw_params]
             resolved_ret = self._substitute_type_vars(raw_ret, eff_map) or raw_ret
-            return (resolved_params, resolved_ret), True
+            builtin_throws = ["Exception"] if simple == "Callable" else []
+            return (resolved_params, resolved_ret, builtin_throws), True
 
         tdecl = self._lookup_type_decl(simple)
         if tdecl is not None:
@@ -6215,10 +9843,67 @@ class SemanticAnalyzer:
                         queue.append(self._substitute_type_vars(self._normalize_type_str(ext), cmap) or "")
             if len(abstract_methods) == 1:
                 sam = abstract_methods[0]
-                return (sam["params"], sam["ret"]), True
+                return (sam["params"], sam["ret"], list(sam.get("throws", []))), True
+            return None, True
+
+        ext = self._resolve_external_type(clean)
+        if ext is not None:
+            if ext.kind != "interface":
+                return None, True
+            eff_map = dict(tvar_map)
+            for tp_name, _ in ext.type_parameters:
+                eff_map.setdefault(tp_name, "Object")
+            abstract_methods: List[Dict[str, Any]] = []
+            concrete_default_keys: Set[Tuple[str, Tuple[str, ...]]] = set()
+            seen_abstract_sigs: Set[Tuple[str, Tuple[str, ...], str]] = set()
+            visited_ext: Set[str] = set()
+            queue_ext: List[str] = [clean]
+            while queue_ext:
+                cur_q = queue_ext.pop(0)
+                cur_b = self._strip_generics(cur_q) or cur_q
+                cext = self._resolve_external_type(cur_b)
+                if cext is None or cext.kind != "interface":
+                    continue
+                if cext.fqn in visited_ext:
+                    continue
+                visited_ext.add(cext.fqn)
+                cmap = self._type_var_mapping_for_type(cur_q)
+                for tp_name, _ in cext.type_parameters:
+                    cmap.setdefault(tp_name, eff_map.get(tp_name, "Object"))
+                for mname, mlist in cext.methods.items():
+                    for minfo in mlist:
+                        if minfo.static or minfo.access == "private":
+                            continue
+                        sig = self._ext_method_to_sig(minfo, cext, cmap)
+                        if minfo.is_default:
+                            concrete_default_keys.add((mname, tuple(sig["params"])))
+                            continue
+                        if self._is_object_public_method_sig(mname, sig):
+                            continue
+                        if minfo.is_abstract:
+                            key = (mname, tuple(sig["params"]))
+                            if key in concrete_default_keys:
+                                continue
+                            full_key = (mname, tuple(sig["params"]), sig["ret"])
+                            if full_key not in seen_abstract_sigs:
+                                seen_abstract_sigs.add(full_key)
+                                abstract_methods.append(sig)
+                for ifc in cext.interfaces:
+                    fmt_i = self._format_ext_type(ifc) or ifc
+                    queue_ext.append(self._substitute_type_vars(fmt_i, cmap) or fmt_i)
+            if len(abstract_methods) == 1:
+                sam = abstract_methods[0]
+                return (sam["params"], sam["ret"], list(sam.get("throws", []))), True
             return None, True
 
         return None, False
+
+    def _resolve_functional_interface(self, target_type: Optional[str]) -> Tuple[Optional[Tuple[List[str], str]], bool]:
+        """Resolve a assinatura do método abstrato único (SAM) de uma interface funcional."""
+        sam_full, is_known = self._resolve_functional_interface_full(target_type)
+        if sam_full is None:
+            return None, is_known
+        return (sam_full[0], sam_full[1]), is_known
 
     def _is_poly_compatible_with_param(self, expr: ASTNode, param_type: str) -> bool:
         """Verifica rapidamente compatibilidade estrutural de poly expression com interface funcional."""
@@ -6282,6 +9967,80 @@ class SemanticAnalyzer:
                     return True
         return False
 
+    def _is_deferred_poly_call_arg(self, node: Optional[ASTNode]) -> bool:
+        """Indica se um argumento de chamada depende do tipo de parâmetro alvo (poly expression)."""
+        if isinstance(node, (LambdaExpression, MethodReference)):
+            return True
+        if isinstance(node, ObjectCreationExpression) and getattr(node, "is_diamond", False):
+            return True
+        if isinstance(node, ConditionalExpression):
+            return (
+                self._is_poly_expression(node)
+                or self._is_deferred_poly_call_arg(node.then_expr)
+                or self._is_deferred_poly_call_arg(node.else_expr)
+            )
+        if isinstance(node, MethodCall) and not getattr(node, "type_arguments", None):
+            recv_type = None
+            if node.target is None:
+                recv_type = self._current_enclosing_type()
+            elif isinstance(node.target, Identifier):
+                sym = self._lookup_var_symbol(node.target.name)
+                if sym is not None and sym.get("category") not in self.TYPE_SYMBOL_CATEGORIES and sym.get("category") is not None:
+                    recv_type = sym.get("type")
+                elif self._is_known_type(node.target.name) or (node.target.name and node.target.name[0].isupper()):
+                    recv_type = node.target.name
+            elif isinstance(node.target, MemberAccess):
+                recv_type = self._infer_member_access_receiver_type(node)
+            if recv_type:
+                methods, _, _ = self._collect_type_methods(recv_type, node.method_name)
+                nargs = len(node.arguments)
+                for ms in methods:
+                    ok_arity = (
+                        (len(ms["params"]) == nargs and not ms.get("varargs"))
+                        or (ms.get("varargs") and nargs >= len(ms["params"]) - 1)
+                    )
+                    if ok_arity and ms.get("tparams"):
+                        return True
+        return False
+
+    def _score_deferred_poly_arg(
+        self,
+        param_type: str,
+        arg_expr: ASTNode,
+        phase: int,
+    ) -> Optional[int]:
+        """Avalia especulativamente argumento poly adiado contra param_type sem efeitos colaterais."""
+        if not param_type or param_type in ("var", "desconhecido"):
+            return 2
+        snap_flow = self._flow_snapshot()
+        snap_sup = self._flow_suppress_errors
+        snap_flags = self._snapshot_local_var_flags()
+        snap_errs = len(self.errors)
+        snap_caps = len(self._pending_lambda_captures)
+        snap_unres = len(self.unresolved_checks)
+        had_cache = id(arg_expr) in self._inferred_types
+        prev_cache = self._inferred_types.get(id(arg_expr))
+        self._flow_suppress_errors = True
+        try:
+            self._check_expression_with_target(arg_expr, param_type)
+            if len(self.errors) > snap_errs:
+                return None
+            spec_t = self._inferred_types.get(id(arg_expr))
+            if not spec_t:
+                return 1
+            return self._score_param_match(param_type, None, spec_t, phase)
+        finally:
+            if had_cache and prev_cache is not None:
+                self._inferred_types[id(arg_expr)] = prev_cache
+            else:
+                self._inferred_types.pop(id(arg_expr), None)
+            del self.errors[snap_errs:]
+            del self._pending_lambda_captures[snap_caps:]
+            del self.unresolved_checks[snap_unres:]
+            self._flow_suppress_errors = snap_sup
+            self._flow_restore(snap_flow)
+            self._restore_local_var_flags(snap_flags)
+
     def _score_param_match(
         self,
         param_type: str,
@@ -6292,6 +10051,8 @@ class SemanticAnalyzer:
         """Pontua compatibilidade entre argumento e parâmetro formal na fase JLS §15.12.2 dada."""
         if isinstance(arg_expr, (LambdaExpression, MethodReference)):
             return 1 if self._is_poly_compatible_with_param(arg_expr, param_type) else None
+        if arg_type is None and isinstance(arg_expr, (MethodCall, ObjectCreationExpression, ConditionalExpression)):
+            return self._score_deferred_poly_arg(param_type, arg_expr, phase)
 
         p_clean = self._strip_leading_type_annotations(param_type) or param_type
         a_clean = (self._strip_leading_type_annotations(arg_type) or arg_type) if arg_type else None
@@ -6411,6 +10172,53 @@ class SemanticAnalyzer:
             return 2
         return None
 
+    def _lift_to_base_type(self, concrete: Optional[str], target_base: str) -> Optional[str]:
+        """Encontra o supertipo parametrizado de concrete cuja base simples corresponde a target_base."""
+        if not concrete or not target_base:
+            return None
+        target_simple = self._simple_base_name(target_base) or target_base
+        queue: List[str] = [self._strip_leading_type_annotations(concrete)]
+        visited: Set[str] = set()
+        while queue:
+            cur = queue.pop(0)
+            cur_simple = self._simple_base_name(cur) or ""
+            if not cur_simple or cur_simple in visited:
+                continue
+            visited.add(cur_simple)
+            if cur_simple == target_simple:
+                return cur
+            tvar_map = self._type_var_mapping_for_type(cur)
+            supers, _ = self._direct_supertypes(cur_simple)
+            for sup in supers:
+                sup_sub = self._substitute_type_vars(sup, tvar_map) if tvar_map else sup
+                if sup_sub:
+                    queue.append(sup_sub)
+        return None
+
+    def _infer_method_type_vars_full(
+        self,
+        sig: Dict[str, Any],
+        arg_types: List[Optional[str]],
+        args: Optional[List[ASTNode]] = None,
+        expected_return: Optional[str] = None,
+        explicit_targs: Optional[List[str]] = None,
+        phase: int = 2,
+    ) -> Tuple[Dict[str, str], List[str]]:
+        """Infere argumentos de tipo usando o solucionador formal de restrições JLS §18."""
+        tparams = list(sig.get("tparams", []) or [])
+        if not tparams:
+            return {}, []
+        arg_nodes = list(args) if args is not None else [None] * len(arg_types)
+        res = self._type_inference.solve_invocation(
+            sig,
+            arg_nodes,
+            arg_types,
+            expected_return=expected_return,
+            explicit_targs=explicit_targs,
+            phase=phase,
+        )
+        return res.mapping, res.errors
+
     def _infer_method_type_vars(
         self,
         sig: Dict[str, Any],
@@ -6419,41 +10227,13 @@ class SemanticAnalyzer:
         explicit_targs: Optional[List[str]] = None,
     ) -> Dict[str, str]:
         """Infere mapa de argumentos de tipo para métodos genéricos e diamond operator."""
-        tparams = list(sig.get("tparams", []) or [])
-        mapping: Dict[str, str] = {}
-        if not tparams:
-            return mapping
-        if explicit_targs:
-            for tp, ta in zip(tparams, explicit_targs):
-                mapping[tp] = ta
-            return mapping
-
-        def bind_pattern(pat: str, concrete: Optional[str]):
-            if not pat or not concrete or concrete == "null":
-                return
-            pat_s, p_dims = self._strip_type_dims_full(pat)
-            con_s, c_dims = self._strip_type_dims_full(concrete)
-            if pat_s in tparams and p_dims == c_dims:
-                if p_dims > 0:
-                    mapping.setdefault(pat_s, con_s)
-                else:
-                    mapping.setdefault(pat_s, self._box_type(concrete) or concrete)
-                return
-            if pat_s in tparams and p_dims == 0:
-                mapping.setdefault(pat_s, self._box_type(concrete) or concrete)
-                return
-            p_base, p_args, _ = self._extract_generic_args(pat_s)
-            c_base, c_args, _ = self._extract_generic_args(con_s)
-            if p_args and c_args and len(p_args) == len(c_args):
-                for pa, ca in zip(p_args, c_args):
-                    bind_pattern(pa, ca)
-
-        for p, a_t in zip(sig["params"], arg_types):
-            bind_pattern(p, a_t)
-        if expected_return and sig.get("ret"):
-            bind_pattern(sig["ret"], expected_return)
-        for tp in tparams:
-            mapping.setdefault(tp, "Object")
+        mapping, _ = self._infer_method_type_vars_full(
+            sig,
+            arg_types,
+            expected_return=expected_return,
+            explicit_targs=explicit_targs,
+            phase=2,
+        )
         return mapping
 
     def _is_sig_more_specific(self, s1: Dict[str, Any], s2: Dict[str, Any]) -> bool:
@@ -6475,6 +10255,16 @@ class SemanticAnalyzer:
                 if self._is_subtype(t1, t2) is True:
                     better_in_at_least_one = True
                     continue
+                if s2.get("tparams"):
+                    # JLS §18.5.4: trata tparams de s1 como tipos rígidos e verifica se t1 <: t2[s2.tparams]
+                    if any(tp in t2 for tp in s2["tparams"]):
+                        s2_probe = {"params": [t2], "ret": "void", "tparams": list(s2["tparams"]), "tparam_bounds": dict(s2.get("tparam_bounds", {}) or {}), "varargs": False}
+                        res_spec = self._type_inference.solve_invocation(s2_probe, [None], [t1], phase=2)
+                        if res_spec.success:
+                            t2_sub = self._substitute_type_vars(t2, res_spec.mapping) or t2
+                            if self._is_subtype(t1, t2_sub) is True:
+                                better_in_at_least_one = True
+                                continue
                 if t2 == "Object" and t1 != "Object":
                     better_in_at_least_one = True
                     continue
@@ -6501,22 +10291,43 @@ class SemanticAnalyzer:
         # Pré-infere tipos de argumentos não-poly para pontuação inicial
         arg_types: List[Optional[str]] = []
         for a in args:
-            if isinstance(a, (LambdaExpression, MethodReference)):
+            if self._is_deferred_poly_call_arg(a):
                 arg_types.append(None)
             else:
                 arg_types.append(self.infer_type(a))
 
         nargs = len(args)
+        inference_failures: List[str] = []
 
         def match_candidate(sig: Dict[str, Any], phase: int) -> Optional[Tuple[int, Dict[str, str]]]:
-            tmap = self._infer_method_type_vars(sig, arg_types, expected_return, explicit_targs)
-            eff_params = [self._substitute_type_vars(p, tmap) or p for p in sig["params"]]
             is_va = sig.get("varargs", False)
+            raw_params = sig["params"]
             if phase < 3:
-                if is_va and len(eff_params) != nargs:
+                if len(raw_params) != nargs:
                     return None
-                if not is_va and len(eff_params) != nargs:
+            else:
+                if not is_va or nargs < len(raw_params) - 1:
                     return None
+            if sig.get("tparams") or explicit_targs:
+                tmap, inf_errs = self._infer_method_type_vars_full(
+                    sig,
+                    arg_types,
+                    args=args,
+                    expected_return=expected_return,
+                    explicit_targs=explicit_targs,
+                    phase=phase,
+                )
+                if inf_errs:
+                    for err_m in inf_errs:
+                        if phase == 1 and ("Fase 1" in err_m):
+                            continue
+                        if err_m not in inference_failures:
+                            inference_failures.append(err_m)
+                    return None
+            else:
+                tmap = {}
+            eff_params = [self._substitute_type_vars(p, tmap) or p for p in raw_params]
+            if phase < 3:
                 total = 0
                 for idx, (pt, a_node, a_t) in enumerate(zip(eff_params, args, arg_types)):
                     if is_va and idx == len(eff_params) - 1:
@@ -6554,6 +10365,13 @@ class SemanticAnalyzer:
                     total += sc + 3
                 return total, tmap
 
+        def finalize_win(win_sig: Dict[str, Any], win_map: Dict[str, str]):
+            eff_ret = self._substitute_type_vars(win_sig["ret"], win_map) or win_sig["ret"]
+            bound = {k: self._substitute_type_vars(p, win_map) or p for k, p in enumerate(win_sig["params"])}
+            resolved_sig = dict(win_sig)
+            resolved_sig["throws"] = [self._substitute_type_vars(t, win_map) or t for t in win_sig.get("throws", [])]
+            return resolved_sig, eff_ret, bound
+
         for phase in (1, 2, 3):
             applicable: List[Tuple[Dict[str, Any], int, Dict[str, str]]] = []
             for sig in candidates:
@@ -6565,8 +10383,7 @@ class SemanticAnalyzer:
 
             if len(applicable) == 1:
                 win_sig, _, win_map = applicable[0]
-                eff_ret = self._substitute_type_vars(win_sig["ret"], win_map) or win_sig["ret"]
-                return win_sig, eff_ret, {k: self._substitute_type_vars(p, win_map) or p for k, p in enumerate(win_sig["params"])}
+                return finalize_win(win_sig, win_map)
 
             # Escolha da sobrecarga maximalmente específica (JLS §15.12.2.5)
             best_candidates: List[Tuple[Dict[str, Any], int, Dict[str, str]]] = []
@@ -6587,6 +10404,8 @@ class SemanticAnalyzer:
                             break
                 if not dominated:
                     best_candidates.append(cand)
+            if not best_candidates:
+                best_candidates = list(applicable)
 
             if len(best_candidates) > 1:
                 min_score = min(c[1] for c in best_candidates)
@@ -6641,22 +10460,28 @@ class SemanticAnalyzer:
                             )
                         )
                     win_sig, _, win_map = best_scored[0]
-                    eff_ret = self._substitute_type_vars(win_sig["ret"], win_map) or win_sig["ret"]
-                    return win_sig, eff_ret, {k: self._substitute_type_vars(p, win_map) or p for k, p in enumerate(win_sig["params"])}
+                    return finalize_win(win_sig, win_map)
                 best_candidates = best_scored
 
             win_sig, _, win_map = best_candidates[0]
-            eff_ret = self._substitute_type_vars(win_sig["ret"], win_map) or win_sig["ret"]
-            return win_sig, eff_ret, {k: self._substitute_type_vars(p, win_map) or p for k, p in enumerate(win_sig["params"])}
+            return finalize_win(win_sig, win_map)
 
         # Nenhuma sobrecarga compatível encontrada
         if candidates and not any(self._is_type_variable(a) for a in arg_types if a):
-            self.errors.append(
-                SemanticError(
-                    f"Nenhuma sobrecarga aplicável encontrada para '{call_desc}' com {nargs} argumento(s) (JLS §15.12.2).",
-                    line,
+            if inference_failures:
+                self.errors.append(
+                    SemanticError(
+                        f"Falha na inferência de tipos em '{call_desc}': {inference_failures[0]} (JLS §18).",
+                        line,
+                    )
                 )
-            )
+            else:
+                self.errors.append(
+                    SemanticError(
+                        f"Nenhuma sobrecarga aplicável encontrada para '{call_desc}' com {nargs} argumento(s) (JLS §15.12.2).",
+                        line,
+                    )
+                )
         return None, None, None
 
     def _record_lambda_capture(self, name: str, line: int) -> None:
@@ -6670,11 +10495,35 @@ class SemanticAnalyzer:
                         self._pending_lambda_captures.append((name, sc[name], line))
                         break
 
-    def _is_modifiable_lvalue(self, target_node: Optional[ASTNode], target_name: Optional[str], line: int, op_desc: str) -> Tuple[bool, Optional[str]]:
+    def _is_modifiable_lvalue(
+        self,
+        target_node: Optional[ASTNode],
+        target_name: Optional[str],
+        line: int,
+        op_desc: str,
+        defer_flow_write: bool = False,
+        defer_member_read: bool = False,
+    ) -> Tuple[bool, Optional[str]]:
         """Verifica se operando/alvo de atribuição ou incremento é uma variável modificável (JLS §15.14 / §15.26)."""
         if target_node is not None and not isinstance(target_node, Identifier):
             if isinstance(target_node, MemberAccess):
-                self._check_expression_flow(target_node)
+                is_simple_this_field = (
+                    defer_member_read
+                    and isinstance(target_node.target, Identifier)
+                    and target_node.target.name == "this"
+                )
+                if is_simple_this_field:
+                    self._check_early_target_ref(
+                        "this",
+                        line,
+                        f"Acesso inválido a membro via 'this' ('this.{target_node.member_name}')",
+                    )
+                    if self._in_static_context:
+                        self.errors.append(
+                            SemanticError("Não é possível usar 'this' em contexto estático.", line)
+                        )
+                else:
+                    self._check_expression_flow(target_node)
                 t_type = self._infer_member_access_receiver_type(target_node)
                 if t_type and t_type.endswith("[]") and target_node.member_name == "length":
                     self.errors.append(
@@ -6685,6 +10534,17 @@ class SemanticAnalyzer:
                     fields, is_known = self._collect_type_fields(t_type)
                     finfo = fields.get(target_node.member_name)
                     if finfo is not None:
+                        if is_simple_this_field:
+                            self._inheritance_analyzer.check_member_access(
+                                finfo.get("owner_key") or t_type,
+                                finfo.get("access", "public"),
+                                bool(finfo.get("is_static", False)),
+                                finfo.get("category", "campo"),
+                                target_node.member_name,
+                                line,
+                                receiver_type=t_type,
+                                via_super=False,
+                            )
                         is_ctor_this_init = (
                             isinstance(target_node.target, Identifier)
                             and target_node.target.name == "this"
@@ -6723,6 +10583,15 @@ class SemanticAnalyzer:
             return True, None
 
         symbol = self._lookup_var_symbol(name)
+        if symbol is not None and symbol.get("owner_key") and not defer_flow_write:
+            self._inheritance_analyzer.check_member_access(
+                symbol["owner_key"],
+                symbol.get("access", "public"),
+                bool(symbol.get("is_static", False)),
+                symbol.get("category", "campo"),
+                name,
+                line,
+            )
         if self._in_early_construction_context and symbol is not None and symbol.get("category") == "campo" and not symbol.get("is_static", False):
             self.errors.append(
                 SemanticError(f"Acesso inválido ao campo de instância '{name}' antes da invocação explícita do construtor (early construction context — JLS §8.8.7 / JEP 513).", line)
@@ -6737,11 +10606,12 @@ class SemanticAnalyzer:
             return False, None
         local_info = self._find_local_var_info(name)
         if local_info is not None:
-            if local_info.get("is_final", False) and local_info.get("has_initializer", True):
-                self.errors.append(SemanticError(f"Não é possível modificar a variável 'final' '{name}'.", line))
-                return False, symbol.get("type")
-            self._record_lambda_capture(name, line)
-            self._mark_local_var_reassigned(name)
+            if not defer_flow_write:
+                if local_info.get("is_final", False) and local_info.get("has_initializer", True):
+                    self.errors.append(SemanticError(f"Não é possível modificar a variável 'final' '{name}'.", line))
+                    return False, symbol.get("type")
+                self._record_lambda_capture(name, line)
+                self._mark_local_var_reassigned(name)
         elif symbol.get("is_final", False) and symbol.get("category") == "campo":
             # Permite atribuição a campo final apenas dentro de construtores ou inicializadores de instância/estático
             if self._callable_kind not in ("constructor", "initializer"):
@@ -6813,6 +10683,20 @@ class SemanticAnalyzer:
             sa_simple = self._simple_base_name(sa_s) or sa_s
             ta_simple = self._simple_base_name(ta_s) or ta_s
             if self._is_type_variable(sa_simple) or self._is_type_variable(ta_simple):
+                continue
+            if self._is_capture_var(sa_s) or self._is_capture_var(ta_s):
+                if self._is_capture_var(sa_s):
+                    cap_u = (self._capture_vars.get(sa_s, {}).get("upper_bounds") or ["Object"])[0]
+                    t_eff = ta_s.split(" ", 2)[-1].strip() if ta_s.startswith("? ") else ta_s
+                    if not self._is_capture_var(t_eff) and t_eff != "?":
+                        if self._is_subtype(t_eff, cap_u) is False and self._are_types_disjoint(t_eff, cap_u) is True:
+                            return False
+                if self._is_capture_var(ta_s):
+                    cap_u = (self._capture_vars.get(ta_s, {}).get("upper_bounds") or ["Object"])[0]
+                    s_eff = sa_s.split(" ", 2)[-1].strip() if sa_s.startswith("? ") else sa_s
+                    if not self._is_capture_var(s_eff) and s_eff != "?":
+                        if self._is_subtype(s_eff, cap_u) is False and self._are_types_disjoint(s_eff, cap_u) is True:
+                            return False
                 continue
             if sa_s.startswith(("? extends ", "? super ")) or ta_s.startswith(("? extends ", "? super ")):
                 s_bound = sa_s.split(" ", 2)[-1].strip() if sa_s.startswith("? ") else sa_s
@@ -6915,20 +10799,21 @@ class SemanticAnalyzer:
     def _check_lambda_with_target(self, node: LambdaExpression, target_type: Optional[str]) -> Optional[str]:
         """Valida expressão lambda contra target_type (ou sem alvo em 'var'), checando parâmetros, retorno e captura efetivamente final."""
         line = getattr(node, "line", 1)
-        sam, is_known = self._resolve_functional_interface(target_type)
+        sam_full, is_known = self._resolve_functional_interface_full(target_type)
         sam_params: Optional[List[str]] = None
         sam_ret: Optional[str] = None
+        sam_throws: List[str] = []
 
         if target_type and target_type not in ("var", "desconhecido"):
-            if sam is None and is_known:
+            if sam_full is None and is_known:
                 self.errors.append(
                     SemanticError(
                         f"Tipo alvo '{target_type}' em expressão lambda não é uma interface funcional válida (JLS §15.27).",
                         line,
                     )
                 )
-            elif sam is not None:
-                sam_params, sam_ret = sam
+            elif sam_full is not None:
+                sam_params, sam_ret, sam_throws = sam_full
                 if len(node.parameters) != len(sam_params):
                     self.errors.append(
                         SemanticError(
@@ -6984,6 +10869,12 @@ class SemanticAnalyzer:
         self._local_declared_type_scopes.append({})
         self._lambda_return_exprs_stack.append([])
         saved_ctx = self._enter_exec_context("lambda", return_type=sam_ret, share_locals=True)
+        self._exception_analyzer.push_callable_frame(
+            "lambda",
+            f"expressão lambda de '{target_type or 'SAM'}'",
+            sam_throws,
+            enforce_unreported=(sam_params is not None and not self._flow_suppress_errors),
+        )
         inferred_ret: Optional[str] = sam_ret
         try:
             for idx, p in enumerate(node.parameters):
@@ -7061,6 +10952,7 @@ class SemanticAnalyzer:
                     self._check_expression_flow(node.body)
                     inferred_ret = self.infer_type(node.body)
         finally:
+            self._exception_analyzer.pop_callable_frame()
             self._restore_exec_context(saved_ctx)
             self._lambda_return_exprs_stack.pop()
             self._lambda_scope_floor_stack.pop()
@@ -7070,7 +10962,7 @@ class SemanticAnalyzer:
             self._local_var_scopes.pop()
             self.symbols.exit_scope()
 
-        if target_type and sam is not None:
+        if target_type and sam_full is not None:
             self._inferred_types[id(node)] = target_type
             return target_type
         return None
@@ -7084,6 +10976,12 @@ class SemanticAnalyzer:
                 line,
                 f"Referência inválida a método via '{node.target.name}' ('{node.target.name}::{node.method_name}')",
             )
+        elif getattr(node, "is_array_creation", False):
+            arr_tref = getattr(node, "array_type", None) or (
+                node.target if isinstance(node.target, TypeReference) else None
+            )
+            if isinstance(arr_tref, TypeReference):
+                self._check_type_ref_annotations(arr_tref)
         elif not getattr(node, "is_array_creation", False):
             if isinstance(node.target, Identifier) and (node.target.name in ("this", "super") or (node.target.name and node.target.name[0].isupper())):
                 pass
@@ -7091,10 +10989,12 @@ class SemanticAnalyzer:
                 self._check_type_ref_annotations(node.target)
             elif node.target is not None:
                 self._check_expression_flow(node.target)
+        for targ_node in getattr(node, "type_arguments", []) or []:
+            self._check_type_ref_annotations(targ_node)
 
-        sam, is_known_sam = self._resolve_functional_interface(target_type)
+        sam_full, is_known_sam = self._resolve_functional_interface_full(target_type)
         if target_type and target_type not in ("var", "desconhecido"):
-            if sam is None and is_known_sam:
+            if sam_full is None and is_known_sam:
                 self.errors.append(
                     SemanticError(
                         f"Tipo alvo '{target_type}' em method reference não é uma interface funcional válida (JLS §15.13).",
@@ -7103,10 +11003,23 @@ class SemanticAnalyzer:
                 )
                 return None
 
-        if sam is None:
+        if sam_full is None:
             return None
 
-        sam_params, sam_ret = sam
+        sam_params, sam_ret, sam_throws = sam_full
+
+        def check_ref_throws(msig: Optional[Dict[str, Any]]) -> None:
+            if msig is None or self._flow_suppress_errors:
+                return
+            for ex in msig.get("throws", []):
+                if self._exception_analyzer.is_checked_exception(ex) is True:
+                    if self._exception_analyzer.is_covered_by(ex, sam_throws) is False:
+                        self.errors.append(
+                            SemanticError(
+                                f"Referência a método/construtor pode lançar exceção verificada '{ex}' incompatível com a cláusula 'throws' de '{target_type}' (JLS §15.13.2).",
+                                line,
+                            )
+                        )
         if getattr(node, "is_array_creation", False):
             # Forma 5: Type[]::new -> espera 1 parâmetro int/integral e retorno compatível com array
             if len(sam_params) != 1 or (not self._is_integral_type(sam_params[0]) and not self._is_type_variable(sam_params[0])):
@@ -7154,20 +11067,20 @@ class SemanticAnalyzer:
                     SemanticError(f"Não é possível referenciar construtor de classe abstrata '{tname}::new' (JLS §15.13.1).", line)
                 )
             elif ctors:
-                matched = False
+                matched_ctor_sig = None
                 for csig in ctors:
                     if len(csig["params"]) == len(sam_params):
                         if all(self._score_param_match(cp, None, sp, 2) is not None for cp, sp in zip(csig["params"], sam_params)):
-                            matched = True
+                            matched_ctor_sig = csig
                             break
-                if not matched and not any(self._is_type_variable(sp) for sp in sam_params):
+                if matched_ctor_sig is None and not any(self._is_type_variable(sp) for sp in sam_params):
                     self.errors.append(
                         SemanticError(
                             f"Nenhum construtor compatível encontrado para '{tname}::new' com assinatura '{target_type}' (JLS §15.13.1).",
                             line,
                         )
                     )
-                elif matched and sam_ret != "void" and not self._is_type_variable(sam_ret):
+                elif matched_ctor_sig is not None and sam_ret != "void" and not self._is_type_variable(sam_ret):
                     if not self.is_assignable(sam_ret, tname):
                         self.errors.append(
                             SemanticError(
@@ -7175,6 +11088,16 @@ class SemanticAnalyzer:
                                 line,
                             )
                         )
+                if matched_ctor_sig is not None:
+                    self._inheritance_analyzer.check_member_access(
+                        matched_ctor_sig.get("owner_key") or matched_ctor_sig.get("owner") or tname,
+                        matched_ctor_sig.get("access", "public"),
+                        False,
+                        "construtor",
+                        self._simple_base_name(tname) or tname,
+                        line,
+                    )
+                check_ref_throws(matched_ctor_sig)
             self._inferred_types[id(node)] = target_type
             return target_type
 
@@ -7220,39 +11143,94 @@ class SemanticAnalyzer:
             self._inferred_types[id(node)] = target_type
             return target_type
 
-        compatible = False
+        explicit_targ_nodes = getattr(node, "type_arguments", None) or []
+        explicit_targs = [self._normalize_type_str(t) or "Object" for t in explicit_targ_nodes] if explicit_targ_nodes else []
+        recv_tvar_map = self._type_var_mapping_for_type(recv_type) if (explicit_targs and recv_type) else {}
+
+        matched_method_sig = None
+        best_bound_errors: List[SemanticError] = []
+        fallback_bound_errors: List[SemanticError] = []
+        saw_targ_arity_mismatch = False
         for msig in methods:
             mparams = msig["params"]
             if msig["static"]:
-                if not recv_is_type:
+                if not recv_is_type or len(mparams) != len(sam_params):
                     continue
-                if len(mparams) == len(sam_params):
-                    if all(self._score_param_match(mp, None, sp, 2) is not None for mp, sp in zip(mparams, sam_params)):
-                        if sam_ret == "void" or self._is_type_variable(sam_ret) or self._is_type_variable(msig["ret"]) or self.is_assignable(sam_ret, msig["ret"]):
-                            compatible = True
-                            break
-            else:
+                sam_arg_slice = sam_params
+            elif not recv_is_type:
                 # Se receptor é uma instância, aridade é igual; se receptor é tipo, primeiro arg do SAM vira receptor (len(mparams) + 1 == len(sam_params))
-                if not recv_is_type and len(mparams) == len(sam_params):
-                    if all(self._score_param_match(mp, None, sp, 2) is not None for mp, sp in zip(mparams, sam_params)):
-                        if sam_ret == "void" or self._is_type_variable(sam_ret) or self._is_type_variable(msig["ret"]) or self.is_assignable(sam_ret, msig["ret"]):
-                            compatible = True
-                            break
-                elif recv_is_type and len(sam_params) == len(mparams) + 1:
-                    recv_arg = sam_params[0]
-                    if self._is_type_variable(recv_arg) or self.is_assignable(recv_type, recv_arg) or self._is_subtype(recv_arg, recv_type) is True:
-                        if all(self._score_param_match(mp, None, sp, 2) is not None for mp, sp in zip(mparams, sam_params[1:])):
-                            if sam_ret == "void" or self._is_type_variable(sam_ret) or self._is_type_variable(msig["ret"]) or self.is_assignable(sam_ret, msig["ret"]):
-                                compatible = True
-                                break
+                if len(mparams) != len(sam_params):
+                    continue
+                sam_arg_slice = sam_params
+            else:
+                if len(sam_params) != len(mparams) + 1:
+                    continue
+                recv_arg = sam_params[0]
+                if not (self._is_type_variable(recv_arg) or self.is_assignable(recv_type, recv_arg) or self._is_subtype(recv_arg, recv_type) is True):
+                    continue
+                sam_arg_slice = sam_params[1:]
 
-        if not compatible and not any(self._is_type_variable(sp) for sp in sam_params):
-            self.errors.append(
-                SemanticError(
-                    f"Referência a método '{recv_type}::{node.method_name}' incompatível com o tipo alvo '{target_type}' (JLS §15.13.1).",
-                    line,
+            eff_mparams = mparams
+            eff_ret = msig["ret"]
+            cand_bound_errors: List[SemanticError] = []
+            if explicit_targs:
+                tparams = msig.get("tparams") or []
+                if tparams:
+                    if len(explicit_targs) != len(tparams):
+                        saw_targ_arity_mismatch = True
+                        continue
+                    method_decls = [
+                        (tp, list((msig.get("tparam_bounds") or {}).get(tp, ["Object"])))
+                        for tp in tparams
+                    ]
+                    explicit_map = self._validate_type_args_against_bounds(
+                        f"{recv_type}::{node.method_name}",
+                        explicit_targs,
+                        line,
+                        outer_subst=None if msig["static"] else recv_tvar_map,
+                        decls_override=method_decls,
+                        error_sink=cand_bound_errors,
+                    )
+                    eff_mparams = [self._substitute_type_vars(mp, explicit_map) or mp for mp in mparams]
+                    eff_ret = self._substitute_type_vars(eff_ret, explicit_map) or eff_ret
+
+            if cand_bound_errors and not fallback_bound_errors:
+                fallback_bound_errors = cand_bound_errors
+
+            if all(self._score_param_match(mp, None, sp, 2) is not None for mp, sp in zip(eff_mparams, sam_arg_slice)):
+                if sam_ret == "void" or self._is_type_variable(sam_ret) or self._is_type_variable(eff_ret) or self.is_assignable(sam_ret, eff_ret):
+                    if cand_bound_errors:
+                        if not best_bound_errors:
+                            best_bound_errors = cand_bound_errors
+                        continue
+                    matched_method_sig = msig
+                    break
+
+        if matched_method_sig is None:
+            if best_bound_errors:
+                self.errors.extend(best_bound_errors)
+            elif fallback_bound_errors:
+                self.errors.extend(fallback_bound_errors)
+            elif saw_targ_arity_mismatch or not any(self._is_type_variable(sp) for sp in sam_params):
+                self.errors.append(
+                    SemanticError(
+                        f"Referência a método '{recv_type}::{node.method_name}' incompatível com o tipo alvo '{target_type}' (JLS §15.13.1).",
+                        line,
+                    )
                 )
+        elif matched_method_sig is not None:
+            mref_via_super = isinstance(node.target, Identifier) and node.target.name == "super"
+            self._inheritance_analyzer.check_member_access(
+                matched_method_sig.get("owner_key") or matched_method_sig.get("owner") or recv_type,
+                matched_method_sig.get("access", "public"),
+                bool(matched_method_sig.get("static", False)),
+                "método",
+                node.method_name,
+                line,
+                receiver_type=None if (recv_is_type or mref_via_super) else recv_type,
+                via_super=mref_via_super,
             )
+        check_ref_throws(matched_method_sig)
         self._inferred_types[id(node)] = target_type
         return target_type
 
@@ -7391,7 +11369,18 @@ class SemanticAnalyzer:
         """Valida tipo e modificabilidade dos operandos em operadores unários (JLS §15.14 / §15.15)."""
         line = getattr(node, "line", 1)
         if node.op in ("++", "--", "post++", "post--"):
-            ok, op_type = self._is_modifiable_lvalue(node.operand, getattr(node.operand, "name", None), line, f"'{node.op}'")
+            ok, op_type = self._is_modifiable_lvalue(
+                node.operand,
+                getattr(node.operand, "name", None),
+                line,
+                f"'{node.op}'",
+                defer_flow_write=True,
+                defer_member_read=False,
+            )
+            if isinstance(node.operand, Identifier) and "." not in node.operand.name:
+                self._flow_apply_local_write(node.operand.name, line, is_compound=True)
+            elif isinstance(node.operand, MemberAccess) and isinstance(node.operand.target, Identifier) and node.operand.target.name == "this":
+                self._flow_apply_local_write(node.operand.member_name, line, is_compound=True, is_this_qualified=True)
             if ok and op_type and self._unboxed_numeric(op_type) is None and op_type not in ("Object", "var", "desconhecido") and not self._is_type_variable(op_type):
                 self.errors.append(
                     SemanticError(
@@ -7608,16 +11597,39 @@ class SemanticAnalyzer:
                         getattr(node, "line", 1),
                     )
                 )
+            cur_snap = self._flow_snapshot()
+            ct = fc.true_state if fc.true_state is not None else cur_snap
+            cf = fc.false_state if fc.false_state is not None else cur_snap
+            c_val = self._eval_constant_boolean(node.condition)
+            if c_val is True:
+                cf = self._flow_unreachable()
+            elif c_val is False:
+                ct = self._flow_unreachable()
+
+            self._flow_restore(ct)
             self._push_pattern_scope(fc.true_vars)
             try:
                 ft = self._check_expression_with_target(node.then_expr, target_type)
+                then_post = self._flow_snapshot()
             finally:
                 self._pop_pattern_scope()
+
+            self._flow_restore(cf)
             self._push_pattern_scope(fc.false_vars)
             try:
                 fe = self._check_expression_with_target(node.else_expr, target_type)
+                else_post = self._flow_snapshot()
             finally:
                 self._pop_pattern_scope()
+
+            ft_true = ft.true_state if ft.true_state is not None else then_post
+            ft_false = ft.false_state if ft.false_state is not None else then_post
+            fe_true = fe.true_state if fe.true_state is not None else else_post
+            fe_false = fe.false_state if fe.false_state is not None else else_post
+            out_true_st = self._flow_join_states(ft_true, fe_true)
+            out_false_st = self._flow_join_states(ft_false, fe_false)
+            self._flow_restore(self._flow_join_states(then_post, else_post))
+
             if target_type and target_type not in ("var", "desconhecido"):
                 self._inferred_types[id(node)] = target_type
             left_true = {**fc.true_vars, **ft.true_vars}
@@ -7626,7 +11638,7 @@ class SemanticAnalyzer:
             left_false = {**fc.true_vars, **ft.false_vars}
             right_false = {**fc.false_vars, **fe.false_vars}
             out_false = {k: v for k, v in left_false.items() if k in right_false}
-            return self._FlowResult(out_true, out_false)
+            return self._FlowResult(out_true, out_false, out_true_st, out_false_st)
         if isinstance(node, SwitchExpression):
             saved_ctx = self._enter_exec_context(
                 "switch_expression",
@@ -7651,24 +11663,68 @@ class SemanticAnalyzer:
         """Valida criação de objetos, construtores, diamond <>, classe anônima e abstrata/interface."""
         line = getattr(node, "line", 1)
         tref = getattr(node, "type_ref", None)
-        self._check_type_ref_annotations(tref)
-        if getattr(node, "target", None) is not None:
-            self._check_expression_flow(node.target)
-
         base_name = getattr(tref, "name", None) or getattr(node, "class_name", "")
         full_name = self._normalize_type_str(tref) or base_name
+        has_qual_target = getattr(node, "target", None) is not None
+        self._check_type_ref_annotations(tref, skip_type_access=has_qual_target, skip_arity=has_qual_target)
+        qual_lookup_name = base_name
+        outer_subst: Optional[Dict[str, str]] = None
+        if has_qual_target:
+            self._check_expression_flow(node.target)
+            outer_t = self.infer_type(node.target)
+            if outer_t:
+                outer_subst = self._type_var_mapping_for_type(outer_t) or None
+                outer_base = self._strip_generics(outer_t) or outer_t
+                outer_key = self._inheritance_analyzer.resolve_type_key(outer_base) or outer_base
+                candidate_inner = f"{outer_key}.{base_name}"
+                resolved_inner = self._inheritance_analyzer.resolve_type_key(candidate_inner)
+                qual_lookup_name = resolved_inner or candidate_inner
+            self._inheritance_analyzer.check_type_access(qual_lookup_name, line)
+            self._check_type_ref_arity(tref, resolved_name_override=qual_lookup_name)
+            self._check_type_ref_bounds(tref, resolved_name_override=qual_lookup_name, outer_subst=outer_subst)
         is_diamond = bool(getattr(node, "is_diamond", False))
         anon_body = getattr(node, "anonymous_body", None)
 
-        effective_created_type = full_name
-        if is_diamond and target_type and target_type not in ("var", "desconhecido"):
-            _, target_args, _ = self._extract_generic_args(target_type)
+        effective_created_type = qual_lookup_name if (has_qual_target and qual_lookup_name != base_name) else full_name
+        diamond_decls = self._type_param_decls_for_type(qual_lookup_name) if is_diamond else []
+        diamond_expected_target = (
+            target_type
+            if (is_diamond and target_type and target_type not in ("var", "desconhecido"))
+            else None
+        )
+        if is_diamond and diamond_expected_target and not diamond_decls:
+            _, target_args, _ = self._extract_generic_args(diamond_expected_target)
             if target_args:
+                concrete_dargs: List[str] = []
+                for ta in target_args:
+                    wkind, wbound = self._parse_wildcard_arg(ta)
+                    if wkind == "unbounded":
+                        concrete_dargs.append("Object")
+                    elif wkind in ("extends", "super") and wbound:
+                        concrete_dargs.append(wbound)
+                    else:
+                        concrete_dargs.append(ta)
                 simple_base = self._simple_base_name(base_name) or base_name
-                effective_created_type = f"{simple_base}<{', '.join(target_args)}>"
+                effective_created_type = f"{simple_base}<{', '.join(concrete_dargs)}>"
 
-        ctors, is_known_c, tkind = self._collect_type_constructors(effective_created_type)
-        tdecl = self._lookup_type_decl(base_name)
+        ctors_lookup_type = qual_lookup_name if (is_diamond and diamond_decls) else effective_created_type
+        ctors, is_known_c, tkind = self._collect_type_constructors(ctors_lookup_type)
+        if is_diamond and diamond_decls and ctors:
+            class_tparams = [pname for pname, _ in diamond_decls]
+            class_bounds = {pname: list(bs) for pname, bs in diamond_decls}
+            simple_base = self._simple_base_name(base_name) or base_name
+            diamond_ret = f"{simple_base}<{', '.join(class_tparams)}>"
+            diamond_ctors: List[Dict[str, Any]] = []
+            for c in ctors:
+                dc = dict(c)
+                dc["tparams"] = class_tparams + list(c.get("tparams", []) or [])
+                merged_bounds = dict(class_bounds)
+                merged_bounds.update(c.get("tparam_bounds", {}) or {})
+                dc["tparam_bounds"] = merged_bounds
+                dc["ret"] = diamond_ret
+                diamond_ctors.append(dc)
+            ctors = diamond_ctors
+        tdecl = self._lookup_type_decl(qual_lookup_name)
         if tdecl is not None:
             dkind, dnode = tdecl
             mods = getattr(dnode, "modifiers", [])
@@ -7692,22 +11748,76 @@ class SemanticAnalyzer:
             self.errors.append(
                 SemanticError(f"Não é possível instanciar interface '{base_name}' diretamente sem corpo de classe anônima (JLS §15.9).", line)
             )
-        elif anon_body is not None and self._simple_base_name(base_name) in self.BUILTIN_FINAL_TYPES:
+        elif anon_body is None and tkind == "annotation_interface":
             self.errors.append(
-                SemanticError(f"Não é possível estender classe final '{base_name}' em classe anônima (JLS §15.9.5).", line)
+                SemanticError(f"Não é possível instanciar interface de anotação '{base_name}' diretamente (JLS §15.9).", line)
             )
+        else:
+            ext_created = self._resolve_external_type(qual_lookup_name)
+            if ext_created is not None:
+                if ext_created.kind == "enum":
+                    self.errors.append(
+                        SemanticError(f"Tipo enum '{base_name}' não pode ser instanciado com 'new' (JLS §8.9).", line)
+                    )
+                elif ext_created.kind == "class" and ext_created.is_abstract and anon_body is None:
+                    self.errors.append(
+                        SemanticError(f"Não é possível instanciar classe abstrata '{base_name}' sem corpo de classe anônima (JLS §15.9.1).", line)
+                    )
+                elif anon_body is not None and (ext_created.is_final or ext_created.kind in ("record", "enum")):
+                    self.errors.append(
+                        SemanticError(f"Não é possível criar classe anônima estendendo tipo fechado/final '{base_name}' (JLS §15.9.5).", line)
+                    )
+            elif anon_body is not None and self._simple_base_name(base_name) in self.BUILTIN_FINAL_TYPES:
+                self.errors.append(
+                    SemanticError(f"Não é possível estender classe final '{base_name}' em classe anônima (JLS §15.9.5).", line)
+                )
 
         # Se há lambdas nos argumentos, checa usando parâmetros do construtor quando houver candidato compatível
+        win_ctor_sig = None
         if ctors:
-            win_sig, _, bound_params = self._resolve_overload(ctors, list(node.arguments), line, f"new {base_name}(...)", expected_return=effective_created_type)
+            expected_ctor_ret = diamond_expected_target if (is_diamond and diamond_decls) else effective_created_type
+            win_ctor_sig, inf_ctor_ret, bound_params = self._resolve_overload(
+                ctors,
+                list(node.arguments),
+                line,
+                f"new {base_name}(...)",
+                expected_return=expected_ctor_ret,
+            )
+            if is_diamond and diamond_decls and inf_ctor_ret and "<" in inf_ctor_ret:
+                effective_created_type = inf_ctor_ret
+                _, inf_dargs, _ = self._extract_generic_args(inf_ctor_ret)
+                if inf_dargs:
+                    self._validate_type_args_against_bounds(qual_lookup_name, inf_dargs, line)
             for idx, arg in enumerate(node.arguments):
                 pt = bound_params.get(idx) if bound_params else None
                 self._check_expression_with_target(arg, pt)
         else:
+            if not is_known_c:
+                self._record_unresolved(f"Construtor do tipo externo '{effective_created_type}' não consta nas assinaturas embutidas/externas.")
+                self._exception_analyzer.mark_unresolved_thrower()
             for arg in node.arguments:
                 self._check_expression_flow(arg)
 
+        if win_ctor_sig is not None:
+            ctor_owner = win_ctor_sig.get("owner_key") or win_ctor_sig.get("owner") or base_name
+            self._inheritance_analyzer.check_member_access(
+                ctor_owner,
+                win_ctor_sig.get("access", "public"),
+                False,
+                "construtor",
+                self._simple_base_name(base_name) or base_name,
+                line,
+                is_anon_ctor=(anon_body is not None),
+            )
+            self._exception_analyzer.emit_thrown(
+                win_ctor_sig.get("throws", []),
+                line,
+                f"construtor 'new {base_name}(...)'",
+            )
+
         if anon_body is not None:
+            anon_inst_throws: List[Tuple[str, int, str]] = []
+            anon_super_key = self._inheritance_analyzer.resolve_type_key(base_name) or base_name
             self.symbols.enter_scope()
             saved_ctx = self._enter_exec_context("type_body", return_type=None, share_locals=True)
             try:
@@ -7717,10 +11827,17 @@ class SemanticAnalyzer:
                     enclosing_name=f"<anonymous {base_name}>",
                     allow_constructor=False,
                     is_enum=False,
+                    anon_inst_throws=anon_inst_throws,
+                    anon_super_type=anon_super_key,
+                    owner_kind="class",
+                    owner_modifiers=[],
+                    owner_line=line,
                 )
             finally:
                 self._restore_exec_context(saved_ctx)
                 self.symbols.exit_scope()
+            for a_exc_t, a_exc_ln, a_exc_desc in anon_inst_throws:
+                self._exception_analyzer.emit_thrown([a_exc_t], a_exc_ln, a_exc_desc)
 
         self._inferred_types[id(node)] = effective_created_type
         return self._FlowResult()
@@ -7729,27 +11846,56 @@ class SemanticAnalyzer:
         """Valida invocação de método com resolução estática/instância, sobrecarga em 3 fases e target typing."""
         line = getattr(node, "line", 1)
         mname = node.method_name
-        explicit_targs = [self._normalize_type_str(t) or "Object" for t in (getattr(node, "type_arguments", []) or [])]
+        raw_targ_nodes = getattr(node, "type_arguments", []) or []
+        for targ_node in raw_targ_nodes:
+            self._check_type_ref_annotations(targ_node)
+        explicit_targs = [self._normalize_type_str(t) or "Object" for t in raw_targ_nodes]
 
         recv_type: Optional[str] = None
         recv_is_type = False
         is_unqualified = node.target is None
+        via_super = False
+        via_iface_super = False
 
         if node.target is not None:
             qname = self._extract_qualified_name(node.target)
-            if qname and (
+            if isinstance(node.target, MemberAccess) and node.target.member_name == "super":
+                via_super = True
+                self._check_early_target_ref(
+                    "super",
+                    line,
+                    f"Invocação inválida de método via 'super' ('{mname}(...)')",
+                )
+                if self._in_static_context:
+                    self.errors.append(
+                        SemanticError(f"Não é possível usar 'super' em contexto estático ao invocar '{mname}(...)' (JLS §15.12.3).", line)
+                    )
+                qual_name = self._extract_qualified_name(node.target.target)
+                if qual_name:
+                    self._inheritance_analyzer.check_type_access(qual_name, line)
+                    resolved_q = self._inheritance_analyzer.resolve_type_key(qual_name) or qual_name
+                    qdecl = self._lookup_type_decl(resolved_q)
+                    if qdecl is not None and qdecl[0] == "interface":
+                        via_iface_super = True
+                        self._inheritance_analyzer.validate_interface_super_call(resolved_q, mname, line)
+                        recv_type = resolved_q
+                    else:
+                        supers, _ = self._direct_supertypes(resolved_q)
+                        recv_type = supers[0] if supers else "Object"
+            elif qname and (
                 self._is_known_type(qname)
                 or (qname.split(".")[-1][0].isupper() and self._lookup_var_symbol(qname.split(".")[0]) is None)
             ):
                 recv_type = qname
                 recv_is_type = True
+                self._inheritance_analyzer.check_type_access(qname, line)
             elif isinstance(node.target, Identifier) and node.target.name in ("this", "super"):
                 self._check_early_target_ref(
                     node.target.name,
                     line,
                     f"Invocação inválida de método via '{node.target.name}' ('{node.target.name}.{mname}(...)')",
                 )
-                cur = self._current_enclosing_type()
+                cur = self._inheritance_analyzer.current_enclosing_key() or self._current_enclosing_type()
                 if node.target.name == "this":
                     if self._in_static_context:
                         self.errors.append(
@@ -7757,6 +11903,7 @@ class SemanticAnalyzer:
                         )
                     recv_type = cur
                 else:
+                    via_super = True
                     if self._in_static_context:
                         self.errors.append(
                             SemanticError(f"Não é possível usar 'super' em contexto estático ao invocar '{mname}(...)' (JLS §15.8.3).", line)
@@ -7772,6 +11919,7 @@ class SemanticAnalyzer:
                 elif self._is_known_type(node.target.name):
                     recv_type = node.target.name
                     recv_is_type = True
+                    self._inheritance_analyzer.check_type_access(recv_type, line)
                 elif node.target.name[0].isupper():
                     # Tipo externo importado / java.lang não pré-cadastrado
                     recv_type = node.target.name
@@ -7792,11 +11940,14 @@ class SemanticAnalyzer:
                             line,
                         )
                     )
-            recv_type = self._current_enclosing_type()
+            recv_type = self._inheritance_analyzer.current_enclosing_key() or self._current_enclosing_type()
 
         # Primeiro avalia argumentos não-poly para ter tipos durante a seleção de sobrecarga
-        for arg in node.arguments:
-            if not isinstance(arg, (LambdaExpression, MethodReference)):
+        deferred_indices: Set[int] = set()
+        for idx, arg in enumerate(node.arguments):
+            if self._is_deferred_poly_call_arg(arg):
+                deferred_indices.add(idx)
+            else:
                 self._check_expression_flow(arg)
 
         if not recv_type:
@@ -7804,6 +11955,7 @@ class SemanticAnalyzer:
                 if isinstance(arg, (LambdaExpression, MethodReference)):
                     self._check_expression_flow(arg)
             self._record_unresolved(f"Invocação '{mname}(...)' sobre tipo ou receptor externo não resolvido.")
+            self._exception_analyzer.mark_unresolved_thrower()
             return self._FlowResult()
 
         recv_simple = self._simple_base_name(recv_type) or recv_type
@@ -7831,6 +11983,8 @@ class SemanticAnalyzer:
             )
             return self._FlowResult()
 
+        if not recv_is_type:
+            recv_type = self._capture_convert(recv_type) or recv_type
         methods, is_known_m, is_declared = self._collect_type_methods(recv_type, mname)
         if not methods:
             for arg in node.arguments:
@@ -7838,6 +11992,7 @@ class SemanticAnalyzer:
                     self._check_expression_flow(arg)
             if is_unqualified and (mname in self._static_imports or self._has_wildcard_static_import):
                 self._record_unresolved(f"Invocação '{mname}(...)' originada de import estático externo.")
+                self._exception_analyzer.mark_unresolved_thrower()
                 return self._FlowResult()
             if is_declared and is_known_m:
                 self.errors.append(
@@ -7848,6 +12003,7 @@ class SemanticAnalyzer:
                 )
             else:
                 self._record_unresolved(f"Método '{mname}' no tipo '{recv_type}' não consta nas assinaturas embutidas/externas.")
+                self._exception_analyzer.mark_unresolved_thrower()
             return self._FlowResult()
 
         if recv_is_type:
@@ -7855,6 +12011,7 @@ class SemanticAnalyzer:
             if not static_only:
                 if not is_declared and not is_known_m:
                     self._record_unresolved(f"Método estático '{mname}' no tipo externo '{recv_type}' não resolvido.")
+                    self._exception_analyzer.mark_unresolved_thrower()
                     return self._FlowResult()
                 self.errors.append(
                     SemanticError(
@@ -7884,9 +12041,47 @@ class SemanticAnalyzer:
             explicit_targs=explicit_targs,
         )
         for idx, arg in enumerate(node.arguments):
-            if isinstance(arg, (LambdaExpression, MethodReference, ConditionalExpression, SwitchExpression)):
+            if idx in deferred_indices:
                 pt = bound_params.get(idx) if bound_params else None
                 self._check_expression_with_target(arg, pt)
+            elif isinstance(arg, (ConditionalExpression, SwitchExpression)):
+                pt = bound_params.get(idx) if bound_params else None
+                saved_flow = self._flow_snapshot()
+                saved_sup = self._flow_suppress_errors
+                saved_flags = self._snapshot_local_var_flags()
+                self._flow_suppress_errors = True
+                try:
+                    self._check_expression_with_target(arg, pt)
+                finally:
+                    self._flow_suppress_errors = saved_sup
+                    self._flow_restore(saved_flow)
+                    self._restore_local_var_flags(saved_flags)
+        if win_sig is not None:
+            if via_super and win_sig.get("is_abstract", False) and not win_sig.get("is_default", False) and not via_iface_super:
+                self.errors.append(
+                    SemanticError(f"Não é possível invocar diretamente o método abstrato '{mname}(...)' via 'super' (JLS §15.12.3).", line)
+                )
+            eff_recv_for_access = None if (
+                recv_is_type
+                or via_super
+                or is_unqualified
+                or (isinstance(node.target, Identifier) and node.target.name == "this")
+            ) else recv_type
+            self._inheritance_analyzer.check_member_access(
+                win_sig.get("owner_key") or win_sig.get("owner") or recv_type,
+                win_sig.get("access", "public"),
+                bool(win_sig.get("static", False)),
+                "método",
+                mname,
+                line,
+                receiver_type=eff_recv_for_access,
+                via_super=via_super,
+            )
+            self._exception_analyzer.emit_thrown(
+                win_sig.get("throws", []),
+                line,
+                f"chamada '{recv_type}.{mname}(...)'",
+            )
         if eff_ret:
             self._inferred_types[id(node)] = eff_ret
         return self._FlowResult()
@@ -7907,7 +12102,7 @@ class SemanticAnalyzer:
                 return True
         return False
 
-    def _check_assignment(self, node: Assignment):
+    def _check_assignment(self, node: Assignment) -> "_FlowResult":
         """Valida uma atribuição (instrução ou expressão), alvo modificável, operadores compostos e target typing."""
         line = getattr(node, "line", 1)
         op = getattr(node, "operator", "=")
@@ -7927,35 +12122,66 @@ class SemanticAnalyzer:
                 )
             )
             self.check_expression(node.expression)
-            return
+            return self._FlowResult()
 
         if node.target is not None and not isinstance(node.target, Identifier):
-            ok, target_type = self._is_modifiable_lvalue(node.target, node.name, line, f"atribuição '{op}'")
-            if op == "=" and target_type:
-                self._check_expression_with_target(node.expression, target_type)
+            is_simple = (op == "=")
+            if not is_simple and isinstance(node.target, MemberAccess) and isinstance(node.target.target, Identifier) and node.target.target.name == "this":
+                self._flow_check_read(node.target.member_name, line, is_this_qualified=True)
+            ok, target_type = self._is_modifiable_lvalue(
+                node.target,
+                node.name,
+                line,
+                f"atribuição '{op}'",
+                defer_flow_write=True,
+                defer_member_read=is_simple,
+            )
+            if is_simple and target_type:
+                rhs_flow = self._check_expression_with_target(node.expression, target_type)
             else:
-                self.check_expression(node.expression)
+                rhs_flow = self._check_expression_flow(node.expression)
+            if isinstance(node.target, MemberAccess) and isinstance(node.target.target, Identifier) and node.target.target.name == "this":
+                self._flow_apply_local_write(
+                    node.target.member_name,
+                    line,
+                    is_compound=not is_simple,
+                    is_this_qualified=True,
+                )
             if ok and target_type:
                 label = node.name or (node.target.pretty() if hasattr(node.target, "pretty") else "alvo")
                 self.check_assignment_type(target_type, node.expression, label, line, operator=op)
-            return
+            return rhs_flow
 
         if node.name and (node.name.startswith(("this.", "super.")) or node.name in ("this", "super")):
             self._check_early_target_ref(node.name, line)
-            self.check_expression(node.expression)
-            return
+            if node.name.startswith("this.") and op != "=":
+                self._flow_check_read(node.name[5:], line, is_this_qualified=True)
+            rhs_flow = self._check_expression_flow(node.expression)
+            if node.name.startswith("this."):
+                self._flow_apply_local_write(node.name[5:], line, is_compound=(op != "="), is_this_qualified=True)
+            return rhs_flow
 
         if node.name and "." in node.name:
             if node.target is not None:
                 self.check_expression(node.target)
-            self.check_expression(node.expression)
-            return
+            return self._check_expression_flow(node.expression)
 
-        ok, target_type = self._is_modifiable_lvalue(node.target, node.name, line, f"atribuição '{op}'")
+        target_ident = node.target.name if isinstance(node.target, Identifier) else node.name
+        if op != "=" and target_ident:
+            self._flow_check_read(target_ident, line, is_this_qualified=False)
+        ok, target_type = self._is_modifiable_lvalue(
+            node.target,
+            node.name,
+            line,
+            f"atribuição '{op}'",
+            defer_flow_write=True,
+        )
         if op == "=" and target_type:
-            self._check_expression_with_target(node.expression, target_type)
+            rhs_flow = self._check_expression_with_target(node.expression, target_type)
         else:
-            self.check_expression(node.expression)
+            rhs_flow = self._check_expression_flow(node.expression)
+        if target_ident:
+            self._flow_apply_local_write(target_ident, line, is_compound=(op != "="), is_this_qualified=False)
         if target_type:
             self.check_assignment_type(
                 target_type,
@@ -7964,18 +12190,37 @@ class SemanticAnalyzer:
                 line,
                 operator=op,
             )
+        if rhs_flow.true_state is not None or rhs_flow.false_state is not None:
+            linfo = self._find_local_var_info(target_ident) if target_ident else None
+            if linfo is not None:
+                vid = ("local", id(linfo))
+                def _with_assigned(st):
+                    if st is None or not st[2]:
+                        return st
+                    return (st[0] | {vid}, st[1] - {vid}, True)
+                return self._FlowResult(
+                    rhs_flow.true_vars,
+                    rhs_flow.false_vars,
+                    _with_assigned(rhs_flow.true_state),
+                    _with_assigned(rhs_flow.false_state),
+                )
+        return self._FlowResult()
 
     class _FlowResult:
-        """Armazena conjuntos de variáveis de pattern introduzidas quando booleano verdadeiro vs falso (JLS §6.3.1)."""
-        __slots__ = ("true_vars", "false_vars")
+        """Armazena conjuntos de variáveis de pattern e estados DA/DU para ramos booleano verdadeiro vs falso (JLS §6.3.1 / §16)."""
+        __slots__ = ("true_vars", "false_vars", "true_state", "false_state")
 
         def __init__(
             self,
             true_vars: Optional[Dict[str, Dict[str, Any]]] = None,
             false_vars: Optional[Dict[str, Dict[str, Any]]] = None,
+            true_state: Optional[Tuple[Set[Any], Set[Any], bool]] = None,
+            false_state: Optional[Tuple[Set[Any], Set[Any], bool]] = None,
         ):
             self.true_vars: Dict[str, Dict[str, Any]] = true_vars if true_vars is not None else {}
             self.false_vars: Dict[str, Dict[str, Any]] = false_vars if false_vars is not None else {}
+            self.true_state = true_state
+            self.false_state = false_state
 
     def check_expression(self, node: Optional[ASTNode]):
         """Verifica expressões, prevenindo falsos positivos para símbolos externos e métodos."""
@@ -7991,6 +12236,11 @@ class SemanticAnalyzer:
 
         if isinstance(node, Literal):
             self._validate_numeric_literal(node, negated=False)
+            if getattr(node, "kind", "") == "BOOLEAN":
+                cur = self._flow_snapshot()
+                if str(node.value).lower() == "true":
+                    return self._FlowResult(true_state=cur, false_state=self._flow_unreachable())
+                return self._FlowResult(true_state=self._flow_unreachable(), false_state=cur)
             return empty
 
         if isinstance(node, Identifier):
@@ -8026,10 +12276,22 @@ class SemanticAnalyzer:
                         SemanticError(f"Não é possível referenciar o campo não-estático '{node.name}' a partir de um contexto estático (JLS §8.3.1.1).", line)
                     )
 
+            if symbol is not None and symbol.get("owner_key"):
+                self._inheritance_analyzer.check_member_access(
+                    symbol["owner_key"],
+                    symbol.get("access", "public"),
+                    bool(symbol.get("is_static", False)),
+                    symbol.get("category", "campo"),
+                    node.name,
+                    line,
+                )
+
             if symbol is None or symbol.get("category") not in (self.TYPE_SYMBOL_CATEGORIES | {"variavel", "parametro", "campo", "constante_enum", "constante_interface", "componente_record"}):
                 self.errors.append(
                     SemanticError(f"Variável '{node.name}' não foi declarada.", line)
                 )
+            else:
+                self._flow_check_read(node.name, line, is_this_qualified=False)
             return empty
 
         if isinstance(node, ObjectCreationExpression):
@@ -8041,14 +12303,13 @@ class SemanticAnalyzer:
         if isinstance(node, MemberAccess):
             line = getattr(node, "line", 1)
             qname = self._extract_qualified_name(node)
-            if qname and (
-                self._is_known_type(qname)
-                or (qname.split(".")[-1][0].isupper() and self._lookup_var_symbol(qname.split(".")[0]) is None)
-            ):
+            if qname and self._is_known_type(qname):
+                self._inheritance_analyzer.check_type_access(qname, line)
                 return empty
 
             recv_is_type = False
             recv_type: Optional[str] = None
+            via_super_access = isinstance(node.target, Identifier) and node.target.name == "super"
             qtarget = self._extract_qualified_name(node.target)
             if qtarget and (
                 self._is_known_type(qtarget)
@@ -8056,6 +12317,7 @@ class SemanticAnalyzer:
             ):
                 recv_is_type = True
                 recv_type = qtarget
+                self._inheritance_analyzer.check_type_access(qtarget, line)
             elif isinstance(node.target, Identifier) and node.target.name in ("this", "super"):
                 self._check_early_target_ref(
                     node.target.name,
@@ -8066,6 +12328,8 @@ class SemanticAnalyzer:
                     self.errors.append(
                         SemanticError(f"Não é possível usar '{node.target.name}' em contexto estático.", line)
                     )
+                if node.target.name == "this":
+                    self._flow_check_read(node.member_name, line, is_this_qualified=True)
                 recv_type = self._infer_member_access_receiver_type(node)
             elif isinstance(node.target, Identifier):
                 sym = self._lookup_var_symbol(node.target.name)
@@ -8117,6 +12381,16 @@ class SemanticAnalyzer:
                 fields, is_known_f = self._collect_type_fields(recv_type)
                 finfo = fields.get(node.member_name)
                 if finfo is not None:
+                    self._inheritance_analyzer.check_member_access(
+                        finfo.get("owner_key") or recv_type,
+                        finfo.get("access", "public"),
+                        bool(finfo.get("is_static", False)),
+                        finfo.get("category", "campo"),
+                        node.member_name,
+                        line,
+                        receiver_type=None if (recv_is_type or via_super_access or (isinstance(node.target, Identifier) and node.target.name == "this")) else recv_type,
+                        via_super=via_super_access,
+                    )
                     if recv_is_type and not finfo.get("is_static", False):
                         self.errors.append(
                             SemanticError(
@@ -8248,8 +12522,7 @@ class SemanticAnalyzer:
             return self._check_expression_with_target(node, target_type=None)
 
         if isinstance(node, Assignment):
-            self._check_assignment(node)
-            return empty
+            return self._check_assignment(node)
 
         if isinstance(node, UnaryOp):
             if node.op == "!":
@@ -8259,34 +12532,73 @@ class SemanticAnalyzer:
                     self.errors.append(
                         SemanticError(f"Operador lógico '!' requer operando 'boolean' (encontrado '{op_t}' — JLS §15.15.6).", getattr(node, "line", 1))
                     )
-                return self._FlowResult(true_vars=dict(sub.false_vars), false_vars=dict(sub.true_vars))
+                cur = self._flow_snapshot()
+                st_true = sub.false_state if sub.false_state is not None else cur
+                st_false = sub.true_state if sub.true_state is not None else cur
+                self._flow_restore(self._flow_join_states(st_true, st_false))
+                return self._FlowResult(
+                    true_vars=dict(sub.false_vars),
+                    false_vars=dict(sub.true_vars),
+                    true_state=st_true,
+                    false_state=st_false,
+                )
             self._validate_unary_op(node)
             return empty
 
         if isinstance(node, BinaryOp):
             if node.op == "&&":
                 fl = self._check_expression_flow(node.left)
+                cur_l = self._flow_snapshot()
+                lt = fl.true_state if fl.true_state is not None else cur_l
+                lf = fl.false_state if fl.false_state is not None else cur_l
+                self._flow_restore(lt)
                 self._push_pattern_scope(fl.true_vars)
                 try:
                     fr = self._check_expression_flow(node.right)
                 finally:
                     self._pop_pattern_scope()
+                cur_r = self._flow_snapshot()
+                rt = fr.true_state if fr.true_state is not None else cur_r
+                rf = fr.false_state if fr.false_state is not None else cur_r
+                out_true_st = rt
+                out_false_st = self._flow_join_states(lf, rf)
+                self._flow_restore(self._flow_join_states(out_true_st, out_false_st))
                 self._validate_binary_op(node)
                 merged_true = dict(fl.true_vars)
                 merged_true.update(fr.true_vars)
-                return self._FlowResult(true_vars=merged_true, false_vars={})
+                return self._FlowResult(
+                    true_vars=merged_true,
+                    false_vars={},
+                    true_state=out_true_st,
+                    false_state=out_false_st,
+                )
 
             if node.op == "||":
                 fl = self._check_expression_flow(node.left)
+                cur_l = self._flow_snapshot()
+                lt = fl.true_state if fl.true_state is not None else cur_l
+                lf = fl.false_state if fl.false_state is not None else cur_l
+                self._flow_restore(lf)
                 self._push_pattern_scope(fl.false_vars)
                 try:
                     fr = self._check_expression_flow(node.right)
                 finally:
                     self._pop_pattern_scope()
+                cur_r = self._flow_snapshot()
+                rt = fr.true_state if fr.true_state is not None else cur_r
+                rf = fr.false_state if fr.false_state is not None else cur_r
+                out_true_st = self._flow_join_states(lt, rt)
+                out_false_st = rf
+                self._flow_restore(self._flow_join_states(out_true_st, out_false_st))
                 self._validate_binary_op(node)
                 merged_false = dict(fl.false_vars)
                 merged_false.update(fr.false_vars)
-                return self._FlowResult(true_vars={}, false_vars=merged_false)
+                return self._FlowResult(
+                    true_vars={},
+                    false_vars=merged_false,
+                    true_state=out_true_st,
+                    false_state=out_false_st,
+                )
 
             self._check_expression_flow(node.left)
             self._check_expression_flow(node.right)
@@ -8315,7 +12627,9 @@ class SemanticAnalyzer:
             return s_clean == "void"
         if t_clean in ("Object", "desconhecido", "var") or s_clean in ("desconhecido", "var"):
             return True
-        if self._is_type_variable(t_simple) or self._is_type_variable(s_simple):
+        t_active_tp = self._lookup_type_param_bounds(t_simple) is not None
+        s_active_tp = self._lookup_type_param_bounds(s_simple) is not None
+        if (self._is_type_variable(t_simple) and not t_active_tp) or (self._is_type_variable(s_simple) and not s_active_tp):
             return True
         if s_simple == "null":
             return t_simple not in self.PRIMITIVE_TYPES

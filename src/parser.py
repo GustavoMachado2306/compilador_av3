@@ -2265,6 +2265,7 @@ class Parser:
 
         tok = self.peek()
         segment_annotations: List[List[ASTNode]] = []
+        segment_type_arguments: List[Optional[List[ASTNode]]] = []
         type_arguments = []
 
         if tok.type in PRIMITIVE_TYPE_TOKENS:
@@ -2274,12 +2275,16 @@ class Parser:
             first_tok = self.advance()
             type_name = first_tok.lexeme
             segment_annotations = [list(leading_annotations)]
+            segment_type_arguments = [None]
             while self.check(TokenType.DOT) and self.peek_offset(1).type == TokenType.IDENTIFIER:
                 self.advance()
                 type_name = f"{type_name}.{self.advance().lexeme}"
                 segment_annotations.append([])
+                segment_type_arguments.append(None)
             if self.check(TokenType.LESS):
-                type_arguments = self.parse_type_arguments()
+                last_args = self.parse_type_arguments()
+                segment_type_arguments[-1] = last_args
+                type_arguments = last_args
             while self.check(TokenType.DOT) and (
                 (self.peek_offset(1).type == TokenType.AT and not self._is_annotation_interface_declaration_ahead(1))
                 or self.peek_offset(1).type == TokenType.IDENTIFIER
@@ -2294,7 +2299,12 @@ class Parser:
                 type_name = f"{type_name}.{seg_tok.lexeme}"
                 segment_annotations.append(seg_annos)
                 if self.check(TokenType.LESS):
-                    type_arguments = self.parse_type_arguments()
+                    seg_args = self.parse_type_arguments()
+                    segment_type_arguments.append(seg_args)
+                    type_arguments = seg_args
+                else:
+                    segment_type_arguments.append(None)
+                    type_arguments = []
         else:
             raise SyntacticError(
                 message=f"Tipo inválido: '{tok.lexeme}'",
@@ -2332,6 +2342,7 @@ class Parser:
             annotations=leading_annotations,
             dims_annotations=dims_annotations,
             segment_annotations=segment_annotations,
+            segment_type_arguments=segment_type_arguments,
         )
 
     def parse_formal_parameters(self) -> Tuple[Optional[ReceiverParameter], List[Parameter]]:
