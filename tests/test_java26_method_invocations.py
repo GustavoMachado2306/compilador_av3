@@ -241,6 +241,58 @@ class TestJava26MethodInvocationsS8(unittest.TestCase):
         res = analyze_source(ambig_src)
         self.assertFalse(res.success)
 
+    def test_14_user_acceptance_criteria_teste_figuras_and_arrays(self):
+        src = """
+        import java.util.*;
+        import java.util.stream.*;
+
+        public class Teste {
+            sealed interface Figura permits Retangulo, Triangulo { }
+            record Retangulo(double base, double altura) implements Figura { }
+            record Triangulo(double base, double altura) implements Figura { }
+
+            public static void main(String[] args) {
+                List<Figura> figuras = new ArrayList<>();
+                figuras.add(new Retangulo(4.0, 3.0));   // não deve dar ambiguidade
+                figuras.add(new Triangulo(6.0, 2.5));   // não deve dar ambiguidade
+
+                double[] pts = new double[]{0.0, 0.5, 1.0};
+                System.out.println(Arrays.toString(pts)); // não deve dar erro de contexto estático
+            }
+        }
+        """
+        res = analyze_source(src)
+        self.assertTrue(res.success, msg=res.semantic_errors)
+        self.assertEqual(len(res.semantic_errors), 0)
+
+    def test_15_qualified_java_util_arrays_and_list(self):
+        src = """
+        public class Teste {
+            public static void main(String[] args) {
+                java.util.List<String> list = new java.util.ArrayList<>();
+                list.add("hello");
+                double[] pts = new double[]{0.0, 0.5, 1.0};
+                System.out.println(java.util.Arrays.toString(pts));
+            }
+        }
+        """
+        res = analyze_source(src)
+        self.assertTrue(res.success, msg=res.semantic_errors)
+        self.assertEqual(len(res.semantic_errors), 0)
+
+    def test_16_generic_array_arrays_tostring(self):
+        src = """
+        import java.util.*;
+        public class GenericDemo<T> {
+            void run(T[] items) {
+                System.out.println(Arrays.toString(items));
+            }
+        }
+        """
+        res = analyze_source(src)
+        self.assertTrue(res.success, msg=res.semantic_errors)
+        self.assertEqual(len(res.semantic_errors), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

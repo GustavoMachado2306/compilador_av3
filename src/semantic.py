@@ -140,8 +140,11 @@ class SemanticAnalyzer:
         "Void": ["Object"],
         "Iterable": ["Object"],
         "Collection": ["Iterable<E>", "Object"],
+        "java.util.Collection": ["Iterable<E>", "Object"],
         "List": ["Collection<E>", "Iterable<E>", "Object"],
+        "java.util.List": ["Collection<E>", "Iterable<E>", "Object"],
         "ArrayList": ["List<E>", "Collection<E>", "Iterable<E>", "Serializable", "Cloneable", "Object"],
+        "java.util.ArrayList": ["List<E>", "Collection<E>", "Iterable<E>", "Serializable", "Cloneable", "Object"],
         "LinkedList": ["List<E>", "Collection<E>", "Iterable<E>", "Serializable", "Cloneable", "Object"],
         "Set": ["Collection<E>", "Iterable<E>", "Object"],
         "HashSet": ["Set<E>", "Collection<E>", "Iterable<E>", "Serializable", "Cloneable", "Object"],
@@ -179,6 +182,7 @@ class SemanticAnalyzer:
         "Math": ["Object"],
         "Collections": ["Object"],
         "Arrays": ["Object"],
+        "java.util.Arrays": ["Object"],
         "Objects": ["Object"],
         "Throwable": ["Serializable", "Object"],
     }
@@ -194,7 +198,7 @@ class SemanticAnalyzer:
         "Function", "BiFunction", "Consumer", "BiConsumer", "Supplier", "Predicate",
         "BiPredicate", "UnaryOperator", "BinaryOperator", "IntFunction", "ToIntFunction",
         "IntUnaryOperator", "IntBinaryOperator", "IntPredicate", "IntConsumer", "IntSupplier",
-        "Stream",
+        "Stream", "java.util.List", "java.util.Collection",
     })
     BUILTIN_CLASS_TYPES = frozenset({
         "Object", "String", "StringBuilder", "StringBuffer", "Number",
@@ -203,6 +207,7 @@ class SemanticAnalyzer:
         "Optional", "Record", "Enum", "Throwable", "Exception",
         "RuntimeException", "Error", "PrintStream", "InputStream",
         "System", "Math", "Collections", "Arrays", "Objects",
+        "java.util.Arrays", "java.util.ArrayList",
     })
     PRIMITIVE_TO_WRAPPER = {
         "byte": "Byte",
@@ -230,11 +235,14 @@ class SemanticAnalyzer:
     }
     BUILTIN_TYPE_PARAMS = {
         "List": ["E"],
+        "java.util.List": ["E"],
         "ArrayList": ["E"],
+        "java.util.ArrayList": ["E"],
         "LinkedList": ["E"],
         "Set": ["E"],
         "HashSet": ["E"],
         "Collection": ["E"],
+        "java.util.Collection": ["E"],
         "Iterable": ["T"],
         "Optional": ["T"],
         "Stream": ["T"],
@@ -462,6 +470,14 @@ class SemanticAnalyzer:
             "stream": [{"params": [], "ret": "Stream<E>", "static": False, "varargs": False, "tparams": []}],
         },
         "List": {
+            "size": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+            "isEmpty": [{"params": [], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "contains": [{"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "iterator": [{"params": [], "ret": "Iterator<E>", "static": False, "varargs": False, "tparams": []}],
+            "toArray": [
+                {"params": [], "ret": "Object[]", "static": False, "varargs": False, "tparams": []},
+                {"params": ["T[]"], "ret": "T[]", "static": False, "varargs": False, "tparams": ["T"]},
+            ],
             "get": [{"params": ["int"], "ret": "E", "static": False, "varargs": False, "tparams": []}],
             "set": [{"params": ["int", "E"], "ret": "E", "static": False, "varargs": False, "tparams": []}],
             "add": [
@@ -472,12 +488,32 @@ class SemanticAnalyzer:
                 {"params": ["int"], "ret": "E", "static": False, "varargs": False, "tparams": []},
                 {"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": []},
             ],
+            "containsAll": [{"params": ["Collection"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "addAll": [
+                {"params": ["Collection"], "ret": "boolean", "static": False, "varargs": False, "tparams": []},
+                {"params": ["int", "Collection"], "ret": "boolean", "static": False, "varargs": False, "tparams": []},
+            ],
+            "removeAll": [{"params": ["Collection"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "retainAll": [{"params": ["Collection"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "clear": [{"params": [], "ret": "void", "static": False, "varargs": False, "tparams": []}],
+            "equals": [{"params": ["Object"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
+            "hashCode": [{"params": [], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+            "indexOf": [{"params": ["Object"], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+            "lastIndexOf": [{"params": ["Object"], "ret": "int", "static": False, "varargs": False, "tparams": []}],
+            "listIterator": [
+                {"params": [], "ret": "ListIterator<E>", "static": False, "varargs": False, "tparams": []},
+                {"params": ["int"], "ret": "ListIterator<E>", "static": False, "varargs": False, "tparams": []},
+            ],
+            "subList": [{"params": ["int", "int"], "ret": "List<E>", "static": False, "varargs": False, "tparams": []}],
+            "sort": [{"params": ["Comparator"], "ret": "void", "static": False, "varargs": False, "tparams": []}],
+            "stream": [{"params": [], "ret": "Stream<E>", "static": False, "varargs": False, "tparams": []}],
             "of": [
                 {"params": [], "ret": "List<E>", "static": True, "varargs": False, "tparams": ["E"]},
                 {"params": ["E"], "ret": "List<E>", "static": True, "varargs": False, "tparams": ["E"]},
                 {"params": ["E", "E"], "ret": "List<E>", "static": True, "varargs": False, "tparams": ["E"]},
                 {"params": ["E..."], "ret": "List<E>", "static": True, "varargs": True, "tparams": ["E"]},
             ],
+            "copyOf": [{"params": ["Collection"], "ret": "List<E>", "static": True, "varargs": False, "tparams": ["E"]}],
         },
         "Set": {
             "of": [
@@ -510,7 +546,68 @@ class SemanticAnalyzer:
         },
         "Arrays": {
             "asList": [{"params": ["T..."], "ret": "List<T>", "static": True, "varargs": True, "tparams": ["T"]}],
-            "sort": [{"params": ["int[]"], "ret": "void", "static": True, "varargs": False, "tparams": []}],
+            "sort": [
+                {"params": ["int[]"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+                {"params": ["long[]"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+                {"params": ["double[]"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+                {"params": ["float[]"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+                {"params": ["char[]"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+                {"params": ["byte[]"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+                {"params": ["short[]"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+                {"params": ["Object[]"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+            ],
+            "binarySearch": [
+                {"params": ["int[]", "int"], "ret": "int", "static": True, "varargs": False, "tparams": []},
+                {"params": ["long[]", "long"], "ret": "int", "static": True, "varargs": False, "tparams": []},
+                {"params": ["double[]", "double"], "ret": "int", "static": True, "varargs": False, "tparams": []},
+                {"params": ["float[]", "float"], "ret": "int", "static": True, "varargs": False, "tparams": []},
+                {"params": ["char[]", "char"], "ret": "int", "static": True, "varargs": False, "tparams": []},
+                {"params": ["byte[]", "byte"], "ret": "int", "static": True, "varargs": False, "tparams": []},
+                {"params": ["short[]", "short"], "ret": "int", "static": True, "varargs": False, "tparams": []},
+                {"params": ["Object[]", "Object"], "ret": "int", "static": True, "varargs": False, "tparams": []},
+            ],
+            "equals": [
+                {"params": ["boolean[]", "boolean[]"], "ret": "boolean", "static": True, "varargs": False, "tparams": []},
+                {"params": ["byte[]", "byte[]"], "ret": "boolean", "static": True, "varargs": False, "tparams": []},
+                {"params": ["char[]", "char[]"], "ret": "boolean", "static": True, "varargs": False, "tparams": []},
+                {"params": ["short[]", "short[]"], "ret": "boolean", "static": True, "varargs": False, "tparams": []},
+                {"params": ["int[]", "int[]"], "ret": "boolean", "static": True, "varargs": False, "tparams": []},
+                {"params": ["long[]", "long[]"], "ret": "boolean", "static": True, "varargs": False, "tparams": []},
+                {"params": ["float[]", "float[]"], "ret": "boolean", "static": True, "varargs": False, "tparams": []},
+                {"params": ["double[]", "double[]"], "ret": "boolean", "static": True, "varargs": False, "tparams": []},
+                {"params": ["Object[]", "Object[]"], "ret": "boolean", "static": True, "varargs": False, "tparams": []},
+            ],
+            "fill": [
+                {"params": ["int[]", "int"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+                {"params": ["long[]", "long"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+                {"params": ["double[]", "double"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+                {"params": ["float[]", "float"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+                {"params": ["char[]", "char"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+                {"params": ["byte[]", "byte"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+                {"params": ["short[]", "short"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+                {"params": ["boolean[]", "boolean"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+                {"params": ["Object[]", "Object"], "ret": "void", "static": True, "varargs": False, "tparams": []},
+            ],
+            "copyOf": [
+                {"params": ["T[]", "int"], "ret": "T[]", "static": True, "varargs": False, "tparams": ["T"]},
+                {"params": ["boolean[]", "int"], "ret": "boolean[]", "static": True, "varargs": False, "tparams": []},
+                {"params": ["byte[]", "int"], "ret": "byte[]", "static": True, "varargs": False, "tparams": []},
+                {"params": ["char[]", "int"], "ret": "char[]", "static": True, "varargs": False, "tparams": []},
+                {"params": ["short[]", "int"], "ret": "short[]", "static": True, "varargs": False, "tparams": []},
+                {"params": ["int[]", "int"], "ret": "int[]", "static": True, "varargs": False, "tparams": []},
+                {"params": ["long[]", "int"], "ret": "long[]", "static": True, "varargs": False, "tparams": []},
+                {"params": ["float[]", "int"], "ret": "float[]", "static": True, "varargs": False, "tparams": []},
+                {"params": ["double[]", "int"], "ret": "double[]", "static": True, "varargs": False, "tparams": []},
+            ],
+            "stream": [
+                {"params": ["T[]"], "ret": "Stream<T>", "static": True, "varargs": False, "tparams": ["T"]},
+                {"params": ["int[]"], "ret": "IntStream", "static": True, "varargs": False, "tparams": []},
+                {"params": ["long[]"], "ret": "LongStream", "static": True, "varargs": False, "tparams": []},
+                {"params": ["double[]"], "ret": "DoubleStream", "static": True, "varargs": False, "tparams": []},
+            ],
+            "deepToString": [
+                {"params": ["Object[]"], "ret": "String", "static": True, "varargs": False, "tparams": []},
+            ],
             "toString": [
                 {"params": ["boolean[]"], "ret": "String", "static": True, "varargs": False, "tparams": []},
                 {"params": ["byte[]"], "ret": "String", "static": True, "varargs": False, "tparams": []},
@@ -573,15 +670,25 @@ class SemanticAnalyzer:
             "test": [{"params": ["int"], "ret": "boolean", "static": False, "varargs": False, "tparams": []}],
         },
     }
+    BUILTIN_METHODS["java.util.List"] = BUILTIN_METHODS["List"]
+    BUILTIN_METHODS["ArrayList"] = BUILTIN_METHODS["List"]
+    BUILTIN_METHODS["java.util.ArrayList"] = BUILTIN_METHODS["List"]
+    BUILTIN_METHODS["java.util.Collection"] = BUILTIN_METHODS["Collection"]
+    BUILTIN_METHODS["java.util.Arrays"] = BUILTIN_METHODS["Arrays"]
+
     BUILTIN_CONSTRUCTORS = {
         "Object": [[]],
         "String": [[], ["String"], ["char[]"]],
         "StringBuilder": [[], ["int"], ["String"]],
         "StringBuffer": [[], ["int"], ["String"]],
         "ArrayList": [[], ["int"], ["Collection"]],
+        "java.util.ArrayList": [[], ["int"], ["Collection"]],
         "LinkedList": [[], ["Collection"]],
+        "java.util.LinkedList": [[], ["Collection"]],
         "HashSet": [[], ["int"], ["Collection"]],
+        "java.util.HashSet": [[], ["int"], ["Collection"]],
         "HashMap": [[], ["int"], ["Map"]],
+        "java.util.HashMap": [[], ["int"], ["Map"]],
         "Exception": [[], ["String"]],
         "RuntimeException": [[], ["String"]],
         "IllegalArgumentException": [[], ["String"]],
@@ -3058,6 +3165,18 @@ class SemanticAnalyzer:
             return tref.pretty()
         return str(tref)
 
+    def _extract_qualified_name(self, node: Optional[ASTNode]) -> Optional[str]:
+        """Extrai nome qualificado encadeado (ex: java.util.Arrays, System.out) se composto apenas de identificadores/acessos a membros."""
+        if node is None:
+            return None
+        if isinstance(node, Identifier):
+            return node.name
+        if isinstance(node, MemberAccess):
+            prefix = self._extract_qualified_name(node.target)
+            if prefix:
+                return f"{prefix}.{node.member_name}"
+        return None
+
     def _simple_base_name(self, type_str: Optional[str]) -> Optional[str]:
         """Extrai o nome simples sem generics e sem qualificador de pacote."""
         if not type_str:
@@ -3161,13 +3280,30 @@ class SemanticAnalyzer:
         """Indica se o tipo está declarado na unidade ou pertence ao núcleo embutido conhecido."""
         if not type_name:
             return False
+        stripped = self._strip_generics(type_name)
+        if not stripped:
+            return False
+        raw_base, _ = self._split_type_dims(stripped)
+        if (
+            raw_base in self.BUILTIN_TYPE_SUPERTYPES
+            or raw_base in self.BUILTIN_METHODS
+            or raw_base in self.BUILTIN_CLASS_TYPES
+            or raw_base in self.BUILTIN_INTERFACE_TYPES
+        ):
+            return True
         s = self._simple_base_name(type_name)
         if not s:
             return False
         base, dims = self._split_type_dims(s)
         if base in self.PRIMITIVE_TYPES:
             return True
-        if base in self.BUILTIN_TYPE_SUPERTYPES or base in self.KNOWN_EXCEPTION_PARENTS:
+        if (
+            base in self.BUILTIN_TYPE_SUPERTYPES
+            or base in self.KNOWN_EXCEPTION_PARENTS
+            or base in self.BUILTIN_METHODS
+            or base in self.BUILTIN_CLASS_TYPES
+            or base in self.BUILTIN_INTERFACE_TYPES
+        ):
             return True
         return self._lookup_type_decl(base) is not None
 
@@ -6098,6 +6234,54 @@ class SemanticAnalyzer:
             return self._is_poly_compatible_with_param(expr.then_expr, param_type) and self._is_poly_compatible_with_param(expr.else_expr, param_type)
         return True
 
+    def _is_definitely_incompatible(self, param_type: str, arg_node: Optional[ASTNode], arg_type: Optional[str]) -> bool:
+        """Verifica se um argumento é comprovadamente incompatível com um tipo de parâmetro formal."""
+        if not param_type or param_type in ("var", "desconhecido"):
+            return False
+        p_clean = self._strip_leading_type_annotations(param_type) or param_type
+        p_base, p_dims = self._strip_type_dims_full(p_clean)
+        p_is_prim = (p_dims == 0) and (p_base in self.PRIMITIVE_TYPES)
+
+        if p_is_prim:
+            if isinstance(arg_node, (ObjectCreationExpression, ArrayCreationExpression, ArrayInitializer, LambdaExpression)):
+                return True
+            if arg_type:
+                a_clean = self._strip_leading_type_annotations(arg_type) or arg_type
+                a_base, a_dims = self._strip_type_dims_full(a_clean)
+                if a_dims > 0:
+                    return True
+                if a_base not in self.PRIMITIVE_TYPES and a_base not in self.WRAPPER_TO_PRIMITIVE:
+                    return True
+            return False
+
+        if p_dims > 0:
+            if isinstance(arg_node, Literal):
+                kind = getattr(arg_node, "kind", "")
+                if kind in ("NUM", "INT", "LONG", "DOUBLE", "FLOAT", "CHAR", "BOOLEAN", "STRING"):
+                    if kind != "STRING" or p_dims > 1 or p_base != "String":
+                        return True
+            if arg_type:
+                a_clean = self._strip_leading_type_annotations(arg_type) or arg_type
+                a_base, a_dims = self._strip_type_dims_full(a_clean)
+                if a_dims == 0 and a_clean != "null":
+                    return True
+                if a_dims > 0:
+                    p_prim = p_base in self.PRIMITIVE_TYPES
+                    a_prim = a_base in self.PRIMITIVE_TYPES
+                    if p_prim != a_prim:
+                        return True
+                    if p_prim and a_prim and p_base != a_base:
+                        return True
+            return False
+
+        if arg_type:
+            a_clean = self._strip_leading_type_annotations(arg_type) or arg_type
+            a_base, a_dims = self._strip_type_dims_full(a_clean)
+            if a_dims > 0:
+                if p_base not in ("Object", "Cloneable", "Serializable") and not self._is_type_variable(p_base):
+                    return True
+        return False
+
     def _score_param_match(
         self,
         param_type: str,
@@ -6108,11 +6292,69 @@ class SemanticAnalyzer:
         """Pontua compatibilidade entre argumento e parâmetro formal na fase JLS §15.12.2 dada."""
         if isinstance(arg_expr, (LambdaExpression, MethodReference)):
             return 1 if self._is_poly_compatible_with_param(arg_expr, param_type) else None
+
+        p_clean = self._strip_leading_type_annotations(param_type) or param_type
+        a_clean = (self._strip_leading_type_annotations(arg_type) or arg_type) if arg_type else None
+        p_base, p_dims = self._strip_type_dims_full(p_clean)
+        p_is_prim = (p_dims == 0) and (p_base in self.PRIMITIVE_TYPES)
+
+        # Se o parâmetro é primitivo escalar, expressões de referência nunca casam
+        if p_is_prim:
+            if isinstance(arg_expr, (ObjectCreationExpression, ArrayCreationExpression, ArrayInitializer)):
+                return None
+            if arg_type:
+                a_base, a_dims = self._strip_type_dims_full(a_clean)
+                if a_dims > 0:
+                    return None
+                if a_base not in self.PRIMITIVE_TYPES and a_base not in self.WRAPPER_TO_PRIMITIVE:
+                    return None
+
         if arg_type is None or param_type in ("var", "desconhecido") or arg_type in ("var", "desconhecido"):
             return 2
 
-        p_clean = self._strip_leading_type_annotations(param_type) or param_type
-        a_clean = self._strip_leading_type_annotations(arg_type) or arg_type
+        a_base, a_dims = self._strip_type_dims_full(a_clean)
+        a_is_prim = (a_dims == 0) and (a_base in self.PRIMITIVE_TYPES)
+
+        # Verificações de compatibilidade de array (JLS §4.10.3 / §10.7)
+        if p_dims > 0 or a_dims > 0:
+            if a_clean == "null":
+                return 1 if p_dims > 0 else None
+            if p_dims > 0 and a_dims == 0:
+                return None
+            if p_dims == 0 and a_dims > 0:
+                if p_clean in ("Object", "Cloneable", "Serializable") or self._is_type_variable(p_base):
+                    return 1
+                return None
+            # Ambos são arrays (p_dims > 0 and a_dims > 0)
+            if p_dims != a_dims:
+                if p_dims < a_dims and p_base in ("Object", "Cloneable", "Serializable"):
+                    return 1
+                return None
+            # Mesma dimensão de array
+            p_prim_arr = p_base in self.PRIMITIVE_TYPES
+            a_prim_arr = a_base in self.PRIMITIVE_TYPES
+            if p_prim_arr != a_prim_arr:
+                return None
+            if p_prim_arr and a_prim_arr:
+                return 0 if p_base == a_base else None
+            # Ambos são arrays de tipos de referência
+            if p_base == a_base:
+                if p_clean == a_clean:
+                    return 0
+                compat = self._generic_args_compatible(a_clean, p_clean)
+                return 0 if compat is not False else None
+            if p_base == "Object":
+                return 1
+            if self._is_type_variable(p_base) or self._is_type_variable(a_base):
+                return 1
+            sub = self._is_subtype(a_clean, p_clean)
+            if sub is True:
+                return 1
+            if sub is None and not self._is_known_type(p_base) and not self._is_known_type(a_base):
+                return 2
+            return None
+
+        # Escalares (p_dims == 0 and a_dims == 0)
         p_simple = self._simple_base_name(p_clean) or p_clean
         a_simple = self._simple_base_name(a_clean) or a_clean
 
@@ -6126,10 +6368,7 @@ class SemanticAnalyzer:
             return 1
 
         if a_simple == "null":
-            return 1 if p_simple not in self.PRIMITIVE_TYPES else None
-
-        p_is_prim = p_simple in self.PRIMITIVE_TYPES
-        a_is_prim = a_simple in self.PRIMITIVE_TYPES
+            return 1 if not p_is_prim else None
 
         if phase == 1:
             # Fase 1 (Strict Invocation): apenas identidade, primitive widening ou subtipagem de referência
@@ -6236,6 +6475,12 @@ class SemanticAnalyzer:
                 if self._is_subtype(t1, t2) is True:
                     better_in_at_least_one = True
                     continue
+                if t2 == "Object" and t1 != "Object":
+                    better_in_at_least_one = True
+                    continue
+                if not self._is_type_variable(t1) and self._is_type_variable(t2):
+                    better_in_at_least_one = True
+                    continue
                 return False
             return False
         return better_in_at_least_one
@@ -6333,6 +6578,13 @@ class SemanticAnalyzer:
                     if self._is_sig_more_specific(other[0], cand[0]):
                         dominated = True
                         break
+                    # Se parâmetros são idênticos, método sobrescrito em subtipo domina método de supertipo
+                    if other[0]["params"] == cand[0]["params"]:
+                        o_owner = other[0].get("owner")
+                        c_owner = cand[0].get("owner")
+                        if o_owner and c_owner and o_owner != c_owner and self._is_subtype(o_owner, c_owner) is True:
+                            dominated = True
+                            break
                 if not dominated:
                     best_candidates.append(cand)
 
@@ -6340,12 +6592,54 @@ class SemanticAnalyzer:
                 min_score = min(c[1] for c in best_candidates)
                 best_scored = [c for c in best_candidates if c[1] == min_score]
                 if len(best_scored) > 1:
-                    self.errors.append(
-                        SemanticError(
-                            f"Invocação ambígua em '{call_desc}': múltiplos métodos sobrecarregados são igualmente aplicáveis (JLS §15.12.2.5).",
-                            line,
+                    # Filtra candidatos cujos parâmetros são comprovadamente incompatíveis com os argumentos passados
+                    filtered = []
+                    for cand_item in best_scored:
+                        sig, _, tmap = cand_item
+                        eff_p = [self._substitute_type_vars(p, tmap) or p for p in sig["params"]]
+                        incompatible = False
+                        for p, a_node, a_t in zip(eff_p, args, arg_types):
+                            if self._is_definitely_incompatible(p, a_node, a_t):
+                                incompatible = True
+                                break
+                        if not incompatible:
+                            filtered.append(cand_item)
+                    if filtered:
+                        best_scored = filtered
+
+                    if len(best_scored) > 1:
+                        # Preferência por tipos concretos sobre variáveis de tipo
+                        def count_type_vars(cand_item):
+                            sig, _, _ = cand_item
+                            return sum(1 for p in sig["params"] if self._is_type_variable(p))
+                        min_tvars = min(count_type_vars(c) for c in best_scored)
+                        concrete_cands = [c for c in best_scored if count_type_vars(c) == min_tvars]
+                        if len(concrete_cands) < len(best_scored):
+                            best_scored = concrete_cands
+
+                    if len(best_scored) > 1:
+                        # Preferência por declaração em subtipo quando supertipo também é herdado
+                        owners = {c[0].get("owner") for c in best_scored if c[0].get("owner")}
+                        if len(owners) > 1:
+                            kept = []
+                            for c in best_scored:
+                                c_owner = c[0].get("owner")
+                                if c_owner:
+                                    is_super = any(self._is_subtype(other_owner, c_owner) is True for other_owner in owners if other_owner != c_owner)
+                                    if not is_super:
+                                        kept.append(c)
+                                else:
+                                    kept.append(c)
+                            if kept:
+                                best_scored = kept
+
+                    if len(best_scored) > 1:
+                        self.errors.append(
+                            SemanticError(
+                                f"Invocação ambígua em '{call_desc}': múltiplos métodos sobrecarregados são igualmente aplicáveis (JLS §15.12.2.5).",
+                                line,
+                            )
                         )
-                    )
                     win_sig, _, win_map = best_scored[0]
                     eff_ret = self._substitute_type_vars(win_sig["ret"], win_map) or win_sig["ret"]
                     return win_sig, eff_ret, {k: self._substitute_type_vars(p, win_map) or p for k, p in enumerate(win_sig["params"])}
@@ -6610,6 +6904,12 @@ class SemanticAnalyzer:
                 if cur:
                     supers, _ = self._direct_supertypes(cur)
                     return supers[0] if supers else "Object"
+        qtarget = self._extract_qualified_name(node.target)
+        if qtarget and (
+            self._is_known_type(qtarget)
+            or (qtarget.split(".")[-1][0].isupper() and self._lookup_var_symbol(qtarget.split(".")[0]) is None)
+        ):
+            return qtarget
         return self.infer_type(node.target)
 
     def _check_lambda_with_target(self, node: LambdaExpression, target_type: Optional[str]) -> Optional[str]:
@@ -7436,7 +7736,14 @@ class SemanticAnalyzer:
         is_unqualified = node.target is None
 
         if node.target is not None:
-            if isinstance(node.target, Identifier) and node.target.name in ("this", "super"):
+            qname = self._extract_qualified_name(node.target)
+            if qname and (
+                self._is_known_type(qname)
+                or (qname.split(".")[-1][0].isupper() and self._lookup_var_symbol(qname.split(".")[0]) is None)
+            ):
+                recv_type = qname
+                recv_is_type = True
+            elif isinstance(node.target, Identifier) and node.target.name in ("this", "super"):
                 self._check_early_target_ref(
                     node.target.name,
                     line,
@@ -7546,6 +7853,9 @@ class SemanticAnalyzer:
         if recv_is_type:
             static_only = [m for m in methods if m["static"]]
             if not static_only:
+                if not is_declared and not is_known_m:
+                    self._record_unresolved(f"Método estático '{mname}' no tipo externo '{recv_type}' não resolvido.")
+                    return self._FlowResult()
                 self.errors.append(
                     SemanticError(
                         f"Método de instância '{mname}' não pode ser referenciado a partir do contexto estático '{recv_type}.{mname}(...)' (JLS §15.12.3).",
@@ -7730,9 +8040,23 @@ class SemanticAnalyzer:
 
         if isinstance(node, MemberAccess):
             line = getattr(node, "line", 1)
+            qname = self._extract_qualified_name(node)
+            if qname and (
+                self._is_known_type(qname)
+                or (qname.split(".")[-1][0].isupper() and self._lookup_var_symbol(qname.split(".")[0]) is None)
+            ):
+                return empty
+
             recv_is_type = False
             recv_type: Optional[str] = None
-            if isinstance(node.target, Identifier) and node.target.name in ("this", "super"):
+            qtarget = self._extract_qualified_name(node.target)
+            if qtarget and (
+                self._is_known_type(qtarget)
+                or (qtarget.split(".")[-1][0].isupper() and self._lookup_var_symbol(qtarget.split(".")[0]) is None)
+            ):
+                recv_is_type = True
+                recv_type = qtarget
+            elif isinstance(node.target, Identifier) and node.target.name in ("this", "super"):
                 self._check_early_target_ref(
                     node.target.name,
                     line,
