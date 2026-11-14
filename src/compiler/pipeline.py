@@ -4,7 +4,7 @@ Pipeline principal do compilador (análise léxica, sintática, tabela de símbo
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import List, Optional
 
 from .ast_nodes import Program
 from .lexer import Lexer, LexicalError
@@ -25,8 +25,6 @@ class AnalysisResult:
     lexical_errors: List[LexicalError] = field(default_factory=list)
     syntactic_error: Optional[SyntacticError] = None
     semantic_errors: List[str] = field(default_factory=list)
-    unresolved_checks: List[str] = field(default_factory=list)
-    classpath_coverage: Optional[Dict[str, Any]] = None
     success: bool = False
 
     @property
@@ -37,9 +35,6 @@ class AnalysisResult:
 def analyze_source(
     source: str,
     enable_preview_primitive_patterns: bool = False,
-    classpath: Optional[Sequence[str]] = None,
-    include_stdlib: bool = True,
-    max_class_major: Optional[int] = None,
 ) -> AnalysisResult:
     """Executa o pipeline completo do compilador sobre uma string e retorna um AnalysisResult."""
     if source is None:
@@ -75,76 +70,11 @@ def analyze_source(
     analyzer = SemanticAnalyzer(
         symbols,
         enable_preview_primitive_patterns=enable_preview_primitive_patterns,
-        classpath=classpath,
-        include_stdlib=include_stdlib,
-        max_class_major=max_class_major,
     )
     errors = analyzer.analyze(result.ast)
     result.symbol_table = symbols
     result.semantic_errors = errors
-    result.unresolved_checks = list(getattr(analyzer, "unresolved_checks", []))
-    result.classpath_coverage = analyzer.get_classpath_coverage()
 
-    result.success = not result.has_errors
-    return result
-
-
-def analyze_sources(
-    sources: List[str],
-    enable_preview_primitive_patterns: bool = False,
-    classpath: Optional[Sequence[str]] = None,
-    include_stdlib: bool = True,
-    max_class_major: Optional[int] = None,
-) -> AnalysisResult:
-    """Executa o pipeline do compilador sobre múltiplas unidades de compilação (ex: múltiplos pacotes)."""
-    joined = "\n\n// --- compilation unit ---\n\n".join(s or "" for s in (sources or []))
-    result = AnalysisResult(source=joined)
-    if not sources:
-        result.success = True
-        return result
-
-    units = []
-    all_tokens: List[Token] = []
-    for src in sources:
-        src_text = "" if src is None else src
-        lexer = Lexer(src_text)
-        try:
-            toks = lexer.tokenize()
-        except LexicalError as err:
-            result.lexical_error = err
-            result.lexical_errors = [err]
-            result.tokens = err.tokens or getattr(lexer, "tokens", [])
-            return result
-        if lexer.errors:
-            result.lexical_error = lexer.errors[0]
-            result.lexical_errors = list(lexer.errors)
-            return result
-        all_tokens.extend(toks)
-
-        parser = Parser(toks, enable_preview_primitive_patterns=enable_preview_primitive_patterns)
-        try:
-            ast = parser.parse()
-        except SyntacticError as err:
-            result.syntactic_error = err
-            return result
-        units.append(ast)
-
-    result.tokens = all_tokens
-    result.ast = units[0] if len(units) == 1 else units
-    symbols = SymbolTable()
-    symbols.register_from_tokens(all_tokens)
-    analyzer = SemanticAnalyzer(
-        symbols,
-        enable_preview_primitive_patterns=enable_preview_primitive_patterns,
-        classpath=classpath,
-        include_stdlib=include_stdlib,
-        max_class_major=max_class_major,
-    )
-    errors = analyzer.analyze_units(units)
-    result.symbol_table = symbols
-    result.semantic_errors = errors
-    result.unresolved_checks = list(getattr(analyzer, "unresolved_checks", []))
-    result.classpath_coverage = analyzer.get_classpath_coverage()
     result.success = not result.has_errors
     return result
 

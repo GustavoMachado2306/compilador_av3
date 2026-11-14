@@ -11,7 +11,7 @@ Implementa um analisador descendente recursivo capaz de processar:
 - Modo de compatibilidade com fragmentos didáticos de comandos.
 """
 
-from typing import List, Optional, Set, Any, Tuple
+from typing import List, Optional, Set, Tuple
 from .token import Token, TokenType
 from .ast_nodes import (
     ASTNode, CompilationUnit, PackageDeclaration, ImportDeclaration,
@@ -23,8 +23,7 @@ from .ast_nodes import (
     DoWhileStatement, ForStatement, EnhancedForStatement, SwitchStatement,
     SwitchCase, BreakStatement, ContinueStatement, ThrowStatement,
     AssertStatement, TryStatement, CatchClause, SynchronizedStatement,
-    BlockStatement, LocalClassOrInterfaceDeclaration, Statement,
-    LocalVariableType, LocalVariableDeclarationStatement, LabeledStatement,
+    LocalVariableType, LabeledStatement,
     StatementExpressionList, SwitchLabel, CaseConstantList, CaseLabel,
     DefaultLabel, SwitchBlockStatementGroup, SwitchRule, SwitchBlock,
     SwitchExpression, YieldStatement, CatchType, Resource,
@@ -35,7 +34,7 @@ from .ast_nodes import (
     ComponentPattern, Pattern, PatternVariable, TypePattern, ComponentPatternList,
     RecordPattern, MatchAllPattern, Guard, PatternCaseLabel,
     Annotation, MarkerAnnotation, SingleElementAnnotation, NormalAnnotation,
-    ElementValue, ElementValueList, ElementValueArrayInitializer,
+    ElementValue, ElementValueArrayInitializer,
     ElementValuePair, ElementValuePairList, ClassLiteral,
     AnnotationDefaultValue,
     AnnotationInterfaceElementDeclaration,

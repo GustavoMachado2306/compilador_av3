@@ -7,7 +7,6 @@ e preserva retrocompatibilidade para importações via `src.main`.
 from .compiler.pipeline import (
     AnalysisResult,
     analyze_source,
-    analyze_sources,
     read_source_file,
 )
 from .interfaces.cli import (
@@ -22,7 +21,6 @@ from .interfaces.cli import (
 __all__ = [
     "AnalysisResult",
     "analyze_source",
-    "analyze_sources",
     "read_source_file",
     "setup_console_encoding",
     "run_source_cli",

@@ -37,7 +37,6 @@ from .ast_nodes import (
     DoWhileStatement,
     EmptyStatement,
     EnhancedForStatement,
-    EnumConstant,
     EnumDeclaration,
     ExpressionStatement,
     FieldDeclaration,
@@ -48,7 +47,6 @@ from .ast_nodes import (
     InstanceOfExpression,
     InterfaceConstantDeclaration,
     InterfaceDeclaration,
-    InterfaceMethodDeclaration,
     LabeledStatement,
     LambdaExpression,
     Literal,
@@ -57,19 +55,14 @@ from .ast_nodes import (
     MethodCall,
     MethodDeclaration,
     MethodReference,
-    ModuleDeclaration,
     ObjectCreationExpression,
     PatternInstanceOfExpression,
     PatternVariable,
-    Program,
     RecordDeclaration,
     RecordPattern,
     ReturnStatement,
     StatementExpressionList,
     StaticInitializer,
-    SuperclassConstructorInvocation,
-    AlternateConstructorInvocation,
-    SwitchCase,
     SwitchExpression,
     SwitchRule,
     SwitchStatement,
@@ -163,25 +156,16 @@ class SemanticAnalyzer:
         self,
         symbol_table,
         enable_preview_primitive_patterns: bool = False,
-        classpath: Optional[Sequence[str]] = None,
-        include_stdlib: bool = True,
-        max_class_major: Optional[int] = None,
     ):
         self.symbols = symbol_table
         self.symbol_table = symbol_table
-        # Parâmetros legados aceitos como no-op para manter compatibilidade com main.py e testes
         self.enable_preview_primitive_patterns = enable_preview_primitive_patterns
-        self._classpath = list(classpath) if classpath is not None else []
-        self._include_stdlib = include_stdlib
-        self._max_class_major = max_class_major
 
         self.errors: List[SemanticError] = []
-        self.unresolved_checks: List[str] = []
         self._reset_state()
 
     def _reset_state(self) -> None:
         self.errors = []
-        self.unresolved_checks = []
         self._local_scopes: List[Dict[str, str]] = [{}]
         self._declared_types: Dict[str, Dict[str, Any]] = {}
         self._imported_names: Set[str] = set()
@@ -195,17 +179,8 @@ class SemanticAnalyzer:
         self._active_labels: Set[str] = set()
         self._inferred_types: Dict[int, str] = {}
 
-    def get_classpath_coverage(self) -> Dict[str, Any]:
-        """Retorna metadados compatíveis indicando o modo simplificado sem classpath binário."""
-        return {
-            "mode": "core",
-            "stdlib_loaded": False,
-            "classpath_entries": [],
-            "resolved_external_types": 0,
-        }
-
     # ------------------------------------------------------------------
-    # Pontos de entrada públicos
+    # Ponto de entrada público
     # ------------------------------------------------------------------
 
     def analyze(self, program: Optional[ASTNode]) -> List[SemanticError]:
@@ -220,25 +195,6 @@ class SemanticAnalyzer:
         else:
             for stmt in getattr(program, "statements", []) or []:
                 self.analyze_statement(stmt)
-
-        return self.errors
-
-    def analyze_units(self, units: Sequence[ASTNode]) -> List[SemanticError]:
-        """Executa a análise semântica conjunta sobre múltiplas CompilationUnits."""
-        self._reset_state()
-        if not units:
-            return self.errors
-
-        for unit in units:
-            if isinstance(unit, CompilationUnit):
-                self._preindex_unit(unit)
-
-        for unit in units:
-            if isinstance(unit, CompilationUnit):
-                self._analyze_compilation_unit(unit)
-            else:
-                for stmt in getattr(unit, "statements", []) or []:
-                    self.analyze_statement(stmt)
 
         return self.errors
 

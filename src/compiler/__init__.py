@@ -3,7 +3,7 @@
 from .ast_nodes import Program
 from .lexer import Lexer, LexicalError
 from .parser import Parser, SyntacticError
-from .pipeline import AnalysisResult, analyze_source, analyze_sources, read_source_file
+from .pipeline import AnalysisResult, analyze_source, read_source_file
 from .semantic import SemanticAnalyzer, SemanticError
 from .symbol_table import SymbolTable
 from .token import Token, TokenType
@@ -21,7 +21,6 @@ __all__ = [
     "SemanticError",
     "AnalysisResult",
     "analyze_source",
-    "analyze_sources",
     "read_source_file",
 ]
 
