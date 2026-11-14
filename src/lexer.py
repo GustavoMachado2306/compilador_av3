@@ -212,13 +212,6 @@ class Lexer:
             return self.source[idx]
         return ""
 
-    def _advance(self) -> str:
-        """Consome o caractere atual e avança a coluna e a posição."""
-        ch = self.source[self.pos]
-        self.pos += 1
-        self.column += 1
-        return ch
-
     def _match(self, expected: str) -> bool:
         """Verifica se a sequência esperada coincide com os próximos caracteres."""
         if self.source.startswith(expected, self.pos):
@@ -489,10 +482,6 @@ class Lexer:
         tokens.append(Token(TokenType.EOF, "", self.line, self.column))
         self.tokens = tokens
         return tokens
-
-    def get_errors(self) -> List[LexicalError]:
-        """Retorna a lista de erros léxicos acumulados durante a varredura."""
-        return self.errors
 
     # -------------------------------------------------------------------------
     # 3.3 RECONHECIMENTO DE NÚMEROS E VALIDAÇÃO DE SUFIXOS E UNDERSCORES
@@ -858,13 +847,6 @@ class Lexer:
                 start_col,
                 tokens=current_tokens
             )
-
-        # -----------------------------------------------------------------
-        # REGRA 1: Validação de Hexadecimal Inteiro ANTES de Float/Double
-        # -----------------------------------------------------------------
-        if HEX_INT_REGEX.match(lexeme):
-            tok_type = TokenType.LONG if lexeme.endswith(('l', 'L')) else TokenType.INT
-            return Token(tok_type, lexeme, start_line, start_col)
 
         # -----------------------------------------------------------------
         # REGRA 2: Ponto Flutuante (Float / Double)

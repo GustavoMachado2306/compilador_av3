@@ -1,5 +1,4 @@
 import json
-import socket
 import threading
 import urllib.parse
 import webbrowser

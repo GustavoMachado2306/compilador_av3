@@ -14,7 +14,7 @@ Implementa um analisador descendente recursivo capaz de processar:
 from typing import List, Optional, Set, Any, Tuple
 from .token import Token, TokenType
 from .ast_nodes import (
-    ASTNode, Program, CompilationUnit, PackageDeclaration, ImportDeclaration,
+    ASTNode, CompilationUnit, PackageDeclaration, ImportDeclaration,
     ClassDeclaration, InterfaceDeclaration, EnumDeclaration, EnumConstant,
     FieldDeclaration, MethodDeclaration, ConstructorDeclaration, Parameter,
     TypeReference, Block, ReturnStatement, Declaration, LocalVariableDeclaration,
@@ -23,7 +23,6 @@ from .ast_nodes import (
     DoWhileStatement, ForStatement, EnhancedForStatement, SwitchStatement,
     SwitchCase, BreakStatement, ContinueStatement, ThrowStatement,
     AssertStatement, TryStatement, CatchClause, SynchronizedStatement,
-    UnsupportedStatement,
     BlockStatement, LocalClassOrInterfaceDeclaration, Statement,
     LocalVariableType, LocalVariableDeclarationStatement, LabeledStatement,
     StatementExpressionList, SwitchLabel, CaseConstantList, CaseLabel,
@@ -38,8 +37,8 @@ from .ast_nodes import (
     Annotation, MarkerAnnotation, SingleElementAnnotation, NormalAnnotation,
     ElementValue, ElementValueList, ElementValueArrayInitializer,
     ElementValuePair, ElementValuePairList, ClassLiteral,
-    AnnotationInterfaceElementModifier, AnnotationDefaultValue,
-    AnnotationInterfaceMemberDeclaration, AnnotationInterfaceElementDeclaration,
+    AnnotationDefaultValue,
+    AnnotationInterfaceElementDeclaration,
     AnnotationInterfaceBody, AnnotationInterfaceDeclaration,
     WildcardType, TypeParameter,
     OrdinaryCompilationUnit, ModularCompilationUnit, CompactCompilationUnit,
@@ -49,11 +48,11 @@ from .ast_nodes import (
     VariableDeclaratorId, VariableDeclarator, ReceiverParameter, FormalParameter,
     VariableArityParameter, ExplicitConstructorInvocation, AlternateConstructorInvocation,
     SuperclassConstructorInvocation, ConstructorBody, InstanceInitializer, StaticInitializer,
-    InterfaceExtends, InterfacePermits, InterfaceBody, InterfaceMemberDeclaration,
+    InterfaceBody,
     InterfaceConstantDeclaration, InterfaceMethodDeclaration,
     EnumConstantBody, EnumConstantList, EnumBodyDeclarations, EnumBody,
-    RecordComponentModifier, RecordComponent, VariableArityRecordComponent,
-    RecordComponentList, RecordHeader, RecordBodyDeclaration,
+    RecordComponent, VariableArityRecordComponent,
+    RecordComponentList, RecordHeader,
     NormalCanonicalConstructor, CompactConstructorDeclaration, NonCanonicalRecordConstructor,
     RecordBody, RecordDeclaration
 )
@@ -478,25 +477,6 @@ class Parser:
         if allow_missing_name and nxt.type in (TokenType.LPAREN, TokenType.LBRACE):
             return True
         return False
-
-    def parse_modifiers(self, allow_default: bool = False, allow_sealed: bool = True) -> List[str]:
-        """Lê modificadores contíguos (public, static, final, default, sealed, non-sealed, etc.)."""
-        mods = []
-        while True:
-            if self.peek().type in MODIFIER_TOKENS:
-                mods.append(self.advance().lexeme)
-            elif allow_default and self.check(TokenType.KEYWORD_DEFAULT):
-                mods.append(self.advance().lexeme)
-            elif allow_sealed and self._is_non_sealed_ahead():
-                self.advance() # non
-                self.advance() # -
-                self.advance() # sealed
-                mods.append("non-sealed")
-            elif allow_sealed and self._is_sealed_modifier_ahead():
-                mods.append(self.advance().lexeme)
-            else:
-                break
-        return mods
 
     def _parse_annotations_and_modifiers(self, allow_default: bool = False, allow_sealed: bool = True) -> Tuple[List[ASTNode], List[str]]:
         """Lê anotações e modificadores possivelmente intercalados."""
@@ -2109,33 +2089,6 @@ class Parser:
                 break
             annotations.append(self._parse_single_annotation())
         return annotations
-
-    def _parse_annotation_arguments(self) -> Any:
-        """Processa argumentos de anotação dentro dos parênteses: (valor) ou (k=v, ...)."""
-        if self.check(TokenType.RPAREN):
-            return None
-        if self.check(TokenType.LBRACE):
-            return self.parse_array_initializer()
-        if self.check(TokenType.IDENTIFIER) and self.peek_offset(1).type == TokenType.ASSIGN:
-            pairs = {}
-            while not self.check(TokenType.RPAREN) and not self.check(TokenType.EOF):
-                k_tok = self.expect(TokenType.IDENTIFIER, "Era esperado nome de elemento na anotação")
-                self.expect(TokenType.ASSIGN, "Era esperado '=' após o nome do elemento")
-                if self.check(TokenType.LBRACE):
-                    v = self.parse_array_initializer()
-                elif self.check(TokenType.AT):
-                    v = self._parse_optional_annotations()[0]
-                else:
-                    v = self.expression()
-                pairs[k_tok.lexeme] = v
-                if self.check(TokenType.COMMA):
-                    self.advance()
-                else:
-                    break
-            return pairs
-        if self.check(TokenType.AT):
-            return self._parse_optional_annotations()[0]
-        return self.expression()
 
     def parse_type_parameters(self) -> List[TypeParameter]:
         """

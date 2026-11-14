@@ -86,8 +86,6 @@ class Program(ASTNode):
     statements: list = field(default_factory=list)
 
     def pretty(self) -> str:
-        if not self.statements:
-            return "Program"
         return _format_children("Program", self.statements)
 
 
@@ -122,11 +120,7 @@ class CompilationUnit(Program):
         return not self.is_modular and not self.is_compact
 
     def pretty(self) -> str:
-        # Se for arquivo completamente vazio, retorna "Program" para compatibilidade com test_23
-        if not self.package and not self.imports and not self.type_declarations and not self.statements and not self.module_declaration:
-            return "Program"
-
-        # Se for um fragmento antigo (apenas comandos, sem pacote/imports/tipos/modulo)
+        # Se for arquivo vazio ou fragmento antigo (apenas comandos, sem pacote/imports/tipos/modulo)
         if not self.package and not self.imports and not self.type_declarations and not self.module_declaration:
             return _format_children("Program", self.statements)
 
@@ -139,7 +133,7 @@ class CompilationUnit(Program):
         children.extend(self.type_declarations)
         children.extend(self.statements)
 
-        return _format_children("CompilationUnit", children)
+        return _format_children(self.__class__.__name__, children)
 
 
 # =============================================================================
@@ -270,14 +264,6 @@ class ElementValueList(ASTNode):
     line: int = 1
     column: int = 1
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "node": "ElementValueList",
-            "values": [v.to_dict() for v in self.values],
-            "line": self.line,
-            "column": self.column,
-        }
-
     def pretty(self) -> str:
         return ", ".join(v.pretty() for v in self.values)
 
@@ -290,15 +276,6 @@ class ElementValuePair(ASTNode):
     line: int = 1
     column: int = 1
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "node": "ElementValuePair",
-            "name": self.name,
-            "value": self.value.to_dict(),
-            "line": self.line,
-            "column": self.column,
-        }
-
     def pretty(self) -> str:
         return f"{self.name} = {self.value.pretty()}"
 
@@ -309,14 +286,6 @@ class ElementValuePairList(ASTNode):
     pairs: List[ElementValuePair] = field(default_factory=list)
     line: int = 1
     column: int = 1
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "node": "ElementValuePairList",
-            "pairs": [p.to_dict() for p in self.pairs],
-            "line": self.line,
-            "column": self.column,
-        }
 
     def pretty(self) -> str:
         return ", ".join(p.pretty() for p in self.pairs)
@@ -366,9 +335,6 @@ class MarkerAnnotation(Annotation):
             "line": self.line,
             "column": self.column,
         }
-
-    def pretty(self) -> str:
-        return f"@{self.name}"
 
 
 @dataclass
@@ -640,8 +606,6 @@ class ClassDeclaration(LocalClassOrInterfaceDeclaration):
         impl = f" implements {', '.join(t.pretty() for t in self.implements_types)}" if self.implements_types else ""
         perm = f" permits {', '.join(t.pretty() for t in self.permits_types)}" if self.permits_types else ""
         header = f"ClassDeclaration: {mods}{self.name}{tparams}{ext}{impl}{perm}".strip()
-        if not self.members:
-            return header
         return _format_children(header, self.members)
 
 
@@ -699,8 +663,6 @@ class InterfaceBody(ASTNode):
         }
 
     def pretty(self) -> str:
-        if not self.members:
-            return "InterfaceBody"
         return _format_children("InterfaceBody", self.members)
 
 
@@ -773,8 +735,6 @@ class InterfaceDeclaration(LocalClassOrInterfaceDeclaration):
         ext = f" extends {', '.join(t.pretty() for t in self.extends_types)}" if self.extends_types else ""
         perm = f" permits {', '.join(t.pretty() for t in self.permits_types)}" if self.permits_types else ""
         header = f"InterfaceDeclaration: {annos}{mods}{self.name}{tparams}{ext}{perm}".strip()
-        if not self.members:
-            return header
         return _format_children(header, self.members)
 
 
@@ -794,8 +754,6 @@ class EnumConstantBody(ASTNode):
         }
 
     def pretty(self) -> str:
-        if not self.members:
-            return "EnumConstantBody"
         return _format_children("EnumConstantBody", self.members)
 
 
@@ -827,9 +785,7 @@ class EnumConstant(ASTNode):
         annos = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
         args = f"({', '.join(a.pretty() if hasattr(a, 'pretty') else str(a) for a in self.arguments)})" if self.arguments else ""
         header = f"EnumConstant: {annos}{self.name}{args}".strip()
-        if self.body is not None:
-            return _format_children(header, [self.body])
-        return header
+        return _format_children(header, [self.body])
 
 
 @dataclass
@@ -839,15 +795,6 @@ class EnumConstantList(ASTNode):
     has_trailing_comma: bool = False
     line: int = 1
     column: int = 1
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "node": "EnumConstantList",
-            "constants": [c.to_dict() for c in self.constants],
-            "has_trailing_comma": self.has_trailing_comma,
-            "line": self.line,
-            "column": self.column,
-        }
 
     def pretty(self) -> str:
         if not self.constants:
@@ -873,8 +820,6 @@ class EnumBodyDeclarations(ASTNode):
         }
 
     def pretty(self) -> str:
-        if not self.members:
-            return "EnumBodyDeclarations"
         return _format_children("EnumBodyDeclarations", self.members)
 
 
@@ -894,23 +839,12 @@ class EnumBody(ASTNode):
     def members(self) -> List[ASTNode]:
         return self.body_declarations.members if self.body_declarations else []
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "node": "EnumBody",
-            "constant_list": self.constant_list.to_dict() if self.constant_list else None,
-            "body_declarations": self.body_declarations.to_dict() if self.body_declarations else None,
-            "line": self.line,
-            "column": self.column,
-        }
-
     def pretty(self) -> str:
         children = []
         if self.constant_list and self.constant_list.constants:
             children.extend(self.constant_list.constants)
         if self.body_declarations and self.body_declarations.members:
             children.extend(self.body_declarations.members)
-        if not children:
-            return "EnumBody"
         return _format_children("EnumBody", children)
 
 
@@ -962,8 +896,6 @@ class EnumDeclaration(LocalClassOrInterfaceDeclaration):
         impl = f" implements {', '.join(t.pretty() for t in self.implements_types)}" if self.implements_types else ""
         header = f"EnumDeclaration: {annos}{mods}{self.name}{impl}".strip()
         all_children = list(self.constants) + list(self.members)
-        if not all_children:
-            return header
         return _format_children(header, all_children)
 
 
@@ -976,18 +908,7 @@ class OrdinaryCompilationUnit(CompilationUnit):
     Representa uma unidade de compilação ordinária (JLS §7.3):
     [PackageDeclaration] {ImportDeclaration} {TopLevelClassOrInterfaceDeclaration}
     """
-    def pretty(self) -> str:
-        if not self.package and not self.imports and not self.type_declarations and not self.statements:
-            return "Program"
-        if not self.package and not self.imports and not self.type_declarations:
-            return _format_children("Program", self.statements)
-        children = []
-        if self.package:
-            children.append(self.package)
-        children.extend(self.imports)
-        children.extend(self.type_declarations)
-        children.extend(self.statements)
-        return _format_children("OrdinaryCompilationUnit", children)
+    pass
 
 
 @dataclass
@@ -1158,8 +1079,6 @@ class ModuleDeclaration(ASTNode):
         annos = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
         open_str = "open " if self.is_open else ""
         header = f"ModuleDeclaration: {annos}{open_str}{self.name}".strip()
-        if not self.directives:
-            return header
         return _format_children(header, self.directives)
 
 
@@ -1367,8 +1286,6 @@ class Block(Statement):
         return self.statements
 
     def pretty(self) -> str:
-        if not self.statements:
-            return "Block"
         return _format_children("Block", self.statements)
 
 
@@ -1492,11 +1409,9 @@ class FieldDeclaration(ASTNode):
         annos = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
         mods = (" ".join(self.modifiers) + " ") if self.modifiers else ""
         decls_str = ", ".join(d.pretty() for d in self.declarators)
-        header = f"FieldDeclaration: {annos}{mods}{self.type_ref.pretty()} {decls_str}".strip()
+        header = f"{self.__class__.__name__}: {annos}{mods}{self.type_ref.pretty()} {decls_str}".strip()
         inits = [d.initializer for d in self.declarators if d.initializer is not None]
-        if inits:
-            return _format_children(header, inits)
-        return header
+        return _format_children(header, inits)
 
 
 @dataclass
@@ -1568,7 +1483,7 @@ class MethodDeclaration(ASTNode):
             )
         else:
             dims_str = "[]" * self.dims
-        header = f"MethodDeclaration: {annos}{mods}{tparams}{self.return_type.pretty()} {self.name}({params_str}){dims_str}{thr_str}".strip()
+        header = f"{self.__class__.__name__}: {annos}{mods}{tparams}{self.return_type.pretty()} {self.name}({params_str}){dims_str}{thr_str}".strip()
         if self.body is not None:
             return _format_children(header, [self.body])
         return header + " (abstrato / sem corpo)"
@@ -1641,8 +1556,6 @@ class ConstructorBody(ASTNode):
             children.append(self.constructor_invocation)
         if self.epilogue:
             children.append(_format_children("Epilogue", self.epilogue))
-        if not children:
-            return "ConstructorBody"
         return _format_children("ConstructorBody", children)
 
 
@@ -1674,9 +1587,7 @@ class ConstructorDeclaration(ASTNode):
         params_str = ", ".join(all_params_repr)
         thr_str = f" throws {', '.join(t.pretty() for t in self.throws_types)}" if self.throws_types else ""
         header = f"ConstructorDeclaration: {annos}{mods}{tparams}{self.name}({params_str}){thr_str}".strip()
-        if self.body is not None:
-            return _format_children(header, [self.body])
-        return header
+        return _format_children(header, [self.body])
 
 
 # =============================================================================
@@ -1707,16 +1618,6 @@ class InterfaceConstantDeclaration(FieldDeclaration, InterfaceMemberDeclaration,
         d["effective_modifiers"] = self.effective_modifiers
         return d
 
-    def pretty(self) -> str:
-        annos = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
-        mods = (" ".join(self.modifiers) + " ") if self.modifiers else ""
-        decls_str = ", ".join(d.pretty() for d in self.declarators)
-        header = f"InterfaceConstantDeclaration: {annos}{mods}{self.type_ref.pretty()} {decls_str}".strip()
-        inits = [d.initializer for d in self.declarators if d.initializer is not None]
-        if inits:
-            return _format_children(header, inits)
-        return header
-
 
 @dataclass
 class AnnotationInterfaceElementModifier(ASTNode):
@@ -1724,14 +1625,6 @@ class AnnotationInterfaceElementModifier(ASTNode):
     name: str
     line: int = 1
     column: int = 1
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "node": "AnnotationInterfaceElementModifier",
-            "name": self.name,
-            "line": self.line,
-            "column": self.column,
-        }
 
     def pretty(self) -> str:
         return self.name
@@ -1743,14 +1636,6 @@ class AnnotationDefaultValue(ASTNode):
     value: ElementValue
     line: int = 1
     column: int = 1
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "node": "AnnotationDefaultValue",
-            "value": self.value.to_dict(),
-            "line": self.line,
-            "column": self.column,
-        }
 
     def pretty(self) -> str:
         return f"default {self.value.pretty()}"
@@ -1969,28 +1854,6 @@ class InterfaceMethodDeclaration(MethodDeclaration, InterfaceMemberDeclaration):
         d["implicit_modifiers"] = self.implicit_modifiers
         return d
 
-    def pretty(self) -> str:
-        mods = (" ".join(self.modifiers) + " ") if self.modifiers else ""
-        annos = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
-        tparams = f"<{', '.join(p.pretty() for p in self.type_parameters)}> " if self.type_parameters else ""
-        all_params_repr = []
-        if self.receiver_parameter:
-            all_params_repr.append(self.receiver_parameter.pretty())
-        all_params_repr.extend(p.pretty() for p in self.parameters)
-        params_str = ", ".join(all_params_repr)
-        thr_str = f" throws {', '.join(t.pretty() for t in self.throws_types)}" if self.throws_types else ""
-        if len(self.dims_annotations) == self.dims and any(self.dims_annotations):
-            dims_str = " " + " ".join(
-                (" ".join(a.pretty() for a in da) + " []") if da else "[]"
-                for da in self.dims_annotations
-            )
-        else:
-            dims_str = "[]" * self.dims
-        header = f"InterfaceMethodDeclaration: {annos}{mods}{tparams}{self.return_type.pretty()} {self.name}({params_str}){dims_str}{thr_str}".strip()
-        if self.body is not None:
-            return _format_children(header, [self.body])
-        return header + " (abstrato / sem corpo)"
-
 
 @dataclass
 class RecordComponentModifier(ASTNode):
@@ -2095,14 +1958,6 @@ class RecordComponentList(ASTNode):
     line: int = 1
     column: int = 1
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "node": "RecordComponentList",
-            "components": [c.to_dict() for c in self.components],
-            "line": self.line,
-            "column": self.column,
-        }
-
     def pretty(self) -> str:
         if not self.components:
             return "RecordComponentList (vazia)"
@@ -2178,9 +2033,7 @@ class NormalCanonicalConstructor(ConstructorDeclaration, RecordBodyDeclaration):
         annos = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
         params_str = ", ".join(p.pretty() for p in self.parameters)
         header = f"NormalCanonicalConstructor: {annos}{mods}{self.name}({params_str})".strip()
-        if self.body is not None:
-            return _format_children(header, [self.body])
-        return header
+        return _format_children(header, [self.body])
 
 
 @dataclass
@@ -2209,9 +2062,7 @@ class CompactConstructorDeclaration(ConstructorDeclaration, RecordBodyDeclaratio
         mods = (" ".join(self.modifiers) + " ") if self.modifiers else ""
         annos = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
         header = f"CompactConstructorDeclaration: {annos}{mods}{self.name} (compacto)".strip()
-        if self.body is not None:
-            return _format_children(header, [self.body])
-        return header
+        return _format_children(header, [self.body])
 
 
 @dataclass
@@ -2236,9 +2087,7 @@ class NonCanonicalRecordConstructor(ConstructorDeclaration, RecordBodyDeclaratio
         annos = (" ".join(a.pretty() for a in self.annotations) + " ") if self.annotations else ""
         params_str = ", ".join(p.pretty() for p in self.parameters)
         header = f"NonCanonicalRecordConstructor: {annos}{mods}{self.name}({params_str})".strip()
-        if self.body is not None:
-            return _format_children(header, [self.body])
-        return header
+        return _format_children(header, [self.body])
 
 
 @dataclass
@@ -2281,8 +2130,6 @@ class RecordBody(ASTNode):
     def pretty(self) -> str:
         tag = " (construtor canônico implícito)" if self.has_implicit_canonical_constructor else " (construtor canônico explícito)"
         header = f"RecordBody{tag}"
-        if not self.declarations:
-            return header
         return _format_children(header, self.declarations)
 
 
@@ -2357,8 +2204,6 @@ class RecordDeclaration(LocalClassOrInterfaceDeclaration):
         impl = f" implements {', '.join(t.pretty() for t in self.implements_types)}" if self.implements_types else ""
         tag = " [canonical implícito]" if self.has_implicit_canonical_constructor else ""
         header = f"RecordDeclaration: {annos}{mods}{self.name}{tparams}({comps_str}){impl}{tag}".strip()
-        if not self.members:
-            return header
         return _format_children(header, self.members)
 
 
@@ -2430,9 +2275,7 @@ class LocalVariableDeclaration(Declaration, BlockStatement):
             return _format_children(header, self.declarators)
         dims_str = "[]" * self.dims if self.dims else ""
         header = f"LocalVariableDeclaration: {annos}{mods}{t_name} {self.name}{dims_str}".strip()
-        if self.initializer is not None:
-            return _format_children(header, [self.initializer])
-        return header
+        return _format_children(header, [self.initializer])
 
 
 LocalVariableDeclarationStatement = LocalVariableDeclaration
@@ -2490,9 +2333,7 @@ class ReturnStatement(Statement):
     column: int = 1
 
     def pretty(self) -> str:
-        if self.expression is not None:
-            return _format_children("ReturnStatement", [self.expression])
-        return "ReturnStatement"
+        return _format_children("ReturnStatement", [self.expression])
 
 
 @dataclass
@@ -2832,9 +2673,7 @@ class CaseLabel(SwitchLabel):
         if self.has_default:
             parts.append("default")
         desc = f"CaseLabel ({', '.join(parts)})"
-        if self.guard is not None:
-            return _format_children(desc, [self.guard])
-        return desc
+        return _format_children(desc, [self.guard])
 
 
 @dataclass
@@ -3358,9 +3197,7 @@ class ArrayCreationExpression(ASTNode):
                 children.append(_format_children(f"Dimensao[{i}]", [d]))
         if self.initializer is not None:
             children.append(self.initializer)
-        if children:
-            return _format_children(header, children)
-        return header
+        return _format_children(header, children)
 
 
 @dataclass

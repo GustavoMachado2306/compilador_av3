@@ -68,6 +68,7 @@ def analyze_source(
 
     # 3. Tabela de Símbolos e Análise Semântica
     symbols = SymbolTable()
+    symbols.register_from_tokens(result.tokens)
     analyzer = SemanticAnalyzer(
         symbols,
         enable_preview_primitive_patterns=enable_preview_primitive_patterns,
@@ -128,6 +129,7 @@ def analyze_sources(
     result.tokens = all_tokens
     result.ast = units[0] if len(units) == 1 else units
     symbols = SymbolTable()
+    symbols.register_from_tokens(all_tokens)
     analyzer = SemanticAnalyzer(
         symbols,
         enable_preview_primitive_patterns=enable_preview_primitive_patterns,
