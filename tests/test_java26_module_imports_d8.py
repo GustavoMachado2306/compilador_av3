@@ -3,12 +3,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.lexer import Lexer
+from src.compiler.lexer import Lexer
 from src.main import analyze_source
-from src.parser import Parser
-from src.semantic import SemanticAnalyzer
-from src.symbol_table import SymbolTable
-from src.ast_nodes import SingleTypeImport, TypeImportOnDemand, SingleModuleImport
+from src.compiler.parser import Parser
+from src.compiler.semantic import SemanticAnalyzer
+from src.compiler.symbol_table import SymbolTable
+from src.compiler.ast_nodes import SingleTypeImport, TypeImportOnDemand, SingleModuleImport
 
 
 def _build_synthetic_module_info(mod_name: str, exported_pkgs, transitive_reqs=()):

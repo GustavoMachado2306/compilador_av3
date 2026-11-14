@@ -6,7 +6,7 @@ escopo léxico, sombreamento de campos vs redeclaração local e recuperação d
 
 import unittest
 from src.main import analyze_source
-from src.ast_nodes import (
+from src.compiler.ast_nodes import (
     Block, LocalVariableDeclaration, ExpressionStatement, Assignment,
     BinaryOp, UnaryOp, ClassDeclaration, MethodDeclaration,
     ConstructorDeclaration, InstanceInitializer, StaticInitializer,

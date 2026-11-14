@@ -7,7 +7,7 @@ e uso contextual da palavra-chave 'yield'.
 
 import unittest
 from src.main import analyze_source
-from src.ast_nodes import (
+from src.compiler.ast_nodes import (
     SwitchStatement, SwitchBlock, SwitchBlockStatementGroup, SwitchRule,
     CaseLabel, DefaultLabel, CaseConstantList, SwitchExpression, YieldStatement,
     Block, ThrowStatement

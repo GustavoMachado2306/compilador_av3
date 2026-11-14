@@ -1,6 +1,6 @@
 import unittest
 from src.main import analyze_source
-from src.ast_nodes import (
+from src.compiler.ast_nodes import (
     Assignment,
     BinaryOp,
     CastExpression,

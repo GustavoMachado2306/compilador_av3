@@ -7,7 +7,7 @@ rotulados e não rotulados, e erros sintáticos/semânticos associados.
 
 import unittest
 from src.main import analyze_source
-from src.ast_nodes import (
+from src.compiler.ast_nodes import (
     WhileStatement, DoWhileStatement, ForStatement, EnhancedForStatement,
     LabeledStatement, BreakStatement, ContinueStatement, StatementExpressionList,
     LocalVariableDeclaration

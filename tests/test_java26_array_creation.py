@@ -1,6 +1,6 @@
 import unittest
 from src.main import analyze_source
-from src.ast_nodes import ArrayCreationExpression, ArrayInitializer
+from src.compiler.ast_nodes import ArrayCreationExpression, ArrayInitializer
 
 
 class TestJava26ArrayCreationS83(unittest.TestCase):

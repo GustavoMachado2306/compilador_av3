@@ -5,10 +5,10 @@ Referência Normativa: JLS Java SE 26, Capítulos 8 (§8.10–§8.10.3) e 19.
 """
 
 import unittest
-from src.lexer import Lexer
-from src.parser import Parser, SyntacticError
+from src.compiler.lexer import Lexer
+from src.compiler.parser import Parser, SyntacticError
 from src.main import analyze_source
-from src.ast_nodes import (
+from src.compiler.ast_nodes import (
     CompilationUnit, ClassDeclaration, InterfaceDeclaration, EnumDeclaration,
     RecordDeclaration, RecordHeader, RecordComponentList, RecordComponent,
     VariableArityRecordComponent, RecordComponentModifier, RecordBody,

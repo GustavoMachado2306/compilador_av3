@@ -37,9 +37,9 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from src.lexer import Lexer
-from src.parser import Parser, SyntacticError
-from src.ast_nodes import (
+from src.compiler.lexer import Lexer
+from src.compiler.parser import Parser, SyntacticError
+from src.compiler.ast_nodes import (
     CompilationUnit, PackageDeclaration, ImportDeclaration,
     ClassDeclaration, InterfaceDeclaration, EnumDeclaration,
     FieldDeclaration, MethodDeclaration, ConstructorDeclaration,
@@ -377,7 +377,7 @@ class TestEstruturaArquivosJava(unittest.TestCase):
         self.assertTrue(res.symbol_table.exists("getNome"))
 
     def test_27_parser_ast_literais_numericos_distintos(self):
-        from src.ast_nodes import Literal
+        from src.compiler.ast_nodes import Literal
         source = (
             "class T {\n"
             "    void m() {\n"
@@ -425,7 +425,7 @@ class TestEstruturaArquivosJava(unittest.TestCase):
         self.assertEqual(bin_rel.right.kind, "FLOAT")
 
     def test_28_parser_ast_fatorial_ternario_com_1L(self):
-        from src.ast_nodes import Literal
+        from src.compiler.ast_nodes import Literal
         source = (
             "class T {\n"
             "    public static long fatorial(int n) {\n"
@@ -443,7 +443,7 @@ class TestEstruturaArquivosJava(unittest.TestCase):
         self.assertEqual(cond.else_expr.right.arguments[0].right.kind, "NUM")
 
     def test_29_ast_retrocompatibilidade_literal_num(self):
-        from src.ast_nodes import Literal
+        from src.compiler.ast_nodes import Literal
         lit = Literal("42", "NUM")
         self.assertEqual(lit.value, "42")
         self.assertEqual(lit.kind, "NUM")

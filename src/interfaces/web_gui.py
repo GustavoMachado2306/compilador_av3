@@ -5,10 +5,10 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from .main import analyze_source, read_source_file
+from ..compiler.pipeline import analyze_source, read_source_file
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 EXAMPLES_DIR = PROJECT_ROOT / "examples"
 
 

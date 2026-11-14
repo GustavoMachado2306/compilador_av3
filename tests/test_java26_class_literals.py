@@ -1,6 +1,6 @@
 import unittest
 from src.main import analyze_source
-from src.ast_nodes import ClassLiteral
+from src.compiler.ast_nodes import ClassLiteral
 
 
 class TestJava26ClassLiteralsS85(unittest.TestCase):

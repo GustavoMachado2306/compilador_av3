@@ -5,7 +5,7 @@ var em componentes, '_' (MatchAll vs unnamed TypePattern), proibições de annot
 
 import unittest
 from src.main import analyze_source
-from src.ast_nodes import RecordPattern, TypePattern, MatchAllPattern, PatternInstanceOfExpression
+from src.compiler.ast_nodes import RecordPattern, TypePattern, MatchAllPattern, PatternInstanceOfExpression
 
 
 class TestJava26RecordPatterns(unittest.TestCase):

@@ -6,7 +6,7 @@ desambiguação de generics/arrays/annotations, compatibilidade de tipos e incon
 
 import unittest
 from src.main import analyze_source
-from src.ast_nodes import (
+from src.compiler.ast_nodes import (
     InstanceOfExpression, PatternInstanceOfExpression, TypePattern, RecordPattern, BinaryOp
 )
 

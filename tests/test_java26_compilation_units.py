@@ -5,10 +5,10 @@ Referência Normativa: JLS Java SE 26, Capítulos 7 e 19.
 """
 
 import unittest
-from src.lexer import Lexer
-from src.parser import Parser, SyntacticError
+from src.compiler.lexer import Lexer
+from src.compiler.parser import Parser, SyntacticError
 from src.main import analyze_source
-from src.ast_nodes import (
+from src.compiler.ast_nodes import (
     CompilationUnit, OrdinaryCompilationUnit, ModularCompilationUnit,
     CompactCompilationUnit, PackageDeclaration, ImportDeclaration,
     SingleTypeImport, TypeImportOnDemand, SingleStaticImport,

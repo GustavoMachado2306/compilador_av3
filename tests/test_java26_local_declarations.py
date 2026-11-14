@@ -6,7 +6,7 @@ todas as regras de validação e rejeição de 'var', e variáveis não nomeadas
 
 import unittest
 from src.main import analyze_source
-from src.ast_nodes import (
+from src.compiler.ast_nodes import (
     LocalVariableDeclaration, VariableDeclarator, LocalVariableType,
     ArrayCreationExpression, ArrayInitializer, Annotation, MarkerAnnotation
 )

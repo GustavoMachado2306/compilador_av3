@@ -16,7 +16,7 @@ except (ImportError, Exception):
     _TK_BASE = object
     _TK_CANVAS = object
 
-from .main import analyze_source, read_source_file, AnalysisResult
+from ..compiler.pipeline import analyze_source, read_source_file, AnalysisResult
 
 
 class LineNumbers(_TK_CANVAS):

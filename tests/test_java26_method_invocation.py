@@ -1,6 +1,6 @@
 import unittest
 from src.main import analyze_source
-from src.ast_nodes import MethodCall
+from src.compiler.ast_nodes import MethodCall
 
 
 class TestJava26MethodInvocationS83(unittest.TestCase):

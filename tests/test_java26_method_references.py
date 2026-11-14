@@ -1,6 +1,6 @@
 import unittest
 from src.main import analyze_source
-from src.ast_nodes import MethodReference
+from src.compiler.ast_nodes import MethodReference
 
 
 class TestJava26MethodReferencesS8(unittest.TestCase):

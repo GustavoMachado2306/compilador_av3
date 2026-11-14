@@ -4,10 +4,10 @@ e Preview JEP 530 (Tipos Primitivos em Patterns, instanceof e switch).
 """
 
 import unittest
-from src.lexer import Lexer
-from src.parser import Parser
-from src.semantic import SemanticAnalyzer
-from src.symbol_table import SymbolTable
+from src.compiler.lexer import Lexer
+from src.compiler.parser import Parser
+from src.compiler.semantic import SemanticAnalyzer
+from src.compiler.symbol_table import SymbolTable
 from src.main import analyze_source
 
 

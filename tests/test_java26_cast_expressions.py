@@ -1,6 +1,6 @@
 import unittest
 from src.main import analyze_source
-from src.ast_nodes import CastExpression, BinaryOp
+from src.compiler.ast_nodes import CastExpression, BinaryOp
 
 
 class TestJava26CastExpressionsS82(unittest.TestCase):

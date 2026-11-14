@@ -160,15 +160,21 @@ compilador_av3/
 │   └── exemplo_expressoes_s8.java              # Exemplo integrado da Etapa S8 (precedência, casts, sobrecarga, lambdas, method refs, switch expression)
 ├── src/
 │   ├── __init__.py
-│   ├── token.py                                # Enum de tokens e dataclass Token
-│   ├── lexer.py                                # Analisador léxico Java completo (Fase A)
-│   ├── symbol_table.py                         # Tabela de símbolos com escopos e categorias
-│   ├── parser.py                               # Analisador sintático (Fases B–D e Etapas S1–S8)
-│   ├── ast_nodes.py                            # Nós da AST com pretty-printing hierárquico e to_dict()
-│   ├── semantic.py                             # Validador semântico (escopos, tipagem S8, flow-scoping S7, dominância e exaustividade)
-│   ├── main.py                                 # Pipeline unificado e CLI (arquitetura tripla)
-│   ├── gui.py                                  # Interface gráfica Tkinter com fallback automático
-│   └── web_gui.py                              # Interface Web Local zero-dependências (http.server)
+│   ├── main.py                                 # Entrypoint unificado (compatível com CLI, GUI e imports públicos)
+│   ├── compiler/                               # Núcleo do compilador
+│   │   ├── __init__.py
+│   │   ├── token.py                            # Enum de tokens e dataclass Token
+│   │   ├── lexer.py                            # Analisador léxico Java completo (Fase A)
+│   │   ├── symbol_table.py                     # Tabela de símbolos com escopos e categorias
+│   │   ├── parser.py                           # Analisador sintático (Fases B–D e Etapas S1–S8)
+│   │   ├── ast_nodes.py                        # Nós da AST com pretty-printing hierárquico e to_dict()
+│   │   ├── semantic.py                         # Analisador semântico básico (escopos, tipos e verificações essenciais)
+│   │   └── pipeline.py                         # Pipeline unificado (AnalysisResult, analyze_source, analyze_sources)
+│   └── interfaces/                             # Interfaces de usuário
+│       ├── __init__.py
+│       ├── cli.py                              # Interface de linha de comando (CLI e modo interativo)
+│       ├── gui.py                              # Interface gráfica Tkinter com fallback automático
+│       └── web_gui.py                          # Interface Web Local zero-dependências (http.server)
 └── tests/
     ├── test_compiler.py                        # 73 testes: testes didáticos e de robustez (regressão)
     ├── test_lexer_java.py                      # 58 testes: suíte de testes dedicada ao léxico Java
@@ -247,7 +253,7 @@ Na raiz do projeto (`compilador_av3/`), execute:
 ```bash
 python -m src.main
 # ou
-python -m src.gui
+python -m src.interfaces.gui
 ```
 Tenta abrir a interface gráfica nativa (`tkinter`). Se o `tkinter` não estiver instalado ou não houver servidor gráfico disponível, inicia automaticamente a **Interface Web Local** no navegador padrão.
 
@@ -257,7 +263,7 @@ Para abrir diretamente no navegador web (Windows, Linux ou macOS sem depender do
 ```bash
 python -m src.main --web
 # ou
-python -m src.web_gui
+python -m src.interfaces.web_gui
 ```
 
 ### 3. Modo Terminal / CLI
@@ -266,6 +272,7 @@ Para executar diretamente no terminal (inclusive via SSH/terminal puro):
 ```bash
 python -m src.main --cli
 python -m src.main --cli examples/ExpressoesJava.java
+python -m src.interfaces.cli --cli examples/ExpressoesJava.java
 python -m src.main <caminho_do_arquivo.java>
 ```
 

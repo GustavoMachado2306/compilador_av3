@@ -10,11 +10,11 @@ import unittest
 from pathlib import Path
 from typing import List
 
-from src.ast_nodes import FieldDeclaration
+from src.compiler.ast_nodes import FieldDeclaration
 from src.classpath_resolver import ACC_PUBLIC, ACC_SUPER
-from src.lexer import Lexer
+from src.compiler.lexer import Lexer
 from src.main import analyze_source
-from src.parser import Parser
+from src.compiler.parser import Parser
 
 
 def _build_minimal_generic_class_bytes(internal_name: str, signature: str) -> bytes:

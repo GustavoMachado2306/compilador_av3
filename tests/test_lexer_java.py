@@ -18,8 +18,8 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from src.token import Token, TokenType
-from src.lexer import Lexer, LexicalError
+from src.compiler.token import Token, TokenType
+from src.compiler.lexer import Lexer, LexicalError
 
 
 class TestLexerEspacosEComentarios(unittest.TestCase):
@@ -497,7 +497,7 @@ class TestLexerLiteraisJavaAvancados(unittest.TestCase):
         self.assertNotIn(TokenType.DOT, [t.type for t in tokens])
 
     def test_regex_float_double_compilada(self):
-        from src.lexer import FLOAT_DOUBLE_REGEX
+        from src.compiler.lexer import FLOAT_DOUBLE_REGEX
         self.assertIsNotNone(FLOAT_DOUBLE_REGEX.match("3.1415"))
         self.assertIsNotNone(FLOAT_DOUBLE_REGEX.match("2.0"))
         self.assertIsNotNone(FLOAT_DOUBLE_REGEX.match(".5"))
@@ -552,7 +552,7 @@ class TestLexerLiteraisJavaAvancados(unittest.TestCase):
 
     def test_regex_hex_int_compilada(self):
         """Valida que HEX_INT_REGEX reconhece inteiros hexadecimais válidos e rejeita floats."""
-        from src.lexer import HEX_INT_REGEX, classify_number
+        from src.compiler.lexer import HEX_INT_REGEX, classify_number
         self.assertIsNotNone(HEX_INT_REGEX.match("0x0F"))
         self.assertIsNotNone(HEX_INT_REGEX.match("0X0F"))
         self.assertIsNotNone(HEX_INT_REGEX.match("0xFF"))
@@ -570,9 +570,9 @@ class TestLexerLiteraisJavaAvancados(unittest.TestCase):
 
     def test_atribuicao_semantica_hexadecimal_int(self):
         """Valida que int x = 0x0F; é semanticamente aceito como int sem disparar falso erro de float."""
-        from src.parser import Parser
-        from src.semantic import SemanticAnalyzer
-        from src.symbol_table import SymbolTable
+        from src.compiler.parser import Parser
+        from src.compiler.semantic import SemanticAnalyzer
+        from src.compiler.symbol_table import SymbolTable
         tokens = Lexer("int x = 0x0F;").tokenize()
         ast = Parser(tokens).parse()
         symbols = SymbolTable()
@@ -581,7 +581,7 @@ class TestLexerLiteraisJavaAvancados(unittest.TestCase):
 
     def test_classificacao_long_e_demais_literais_numericos(self):
         """Valida INT, LONG, FLOAT, DOUBLE e alias LONG_LITERAL em todas as bases."""
-        from src.lexer import classify_number
+        from src.compiler.lexer import classify_number
         self.assertIs(TokenType.LONG_LITERAL, TokenType.LONG)
 
         casos = [

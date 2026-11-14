@@ -4,9 +4,9 @@ e contratos construtivos da AST em `src/ast_nodes.py` (Etapa 2).
 """
 
 import unittest
-from src.lexer import Lexer
-from src.parser import Parser
-from src.ast_nodes import (
+from src.compiler.lexer import Lexer
+from src.compiler.parser import Parser
+from src.compiler.ast_nodes import (
     ASTNode, Program, CompilationUnit, OrdinaryCompilationUnit,
     ModularCompilationUnit, CompactCompilationUnit,
     PackageDeclaration, ImportDeclaration, ModuleDeclaration, RequiresDirective,

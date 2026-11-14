@@ -9,12 +9,12 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from src.token import Token, TokenType
-from src.lexer import Lexer, LexicalError
-from src.parser import Parser, SyntacticError
-from src.ast_nodes import Program, Declaration, Assignment, BinaryOp, Literal, Identifier
-from src.symbol_table import SymbolTable
-from src.semantic import SemanticAnalyzer, SemanticError
+from src.compiler.token import Token, TokenType
+from src.compiler.lexer import Lexer, LexicalError
+from src.compiler.parser import Parser, SyntacticError
+from src.compiler.ast_nodes import Program, Declaration, Assignment, BinaryOp, Literal, Identifier
+from src.compiler.symbol_table import SymbolTable
+from src.compiler.semantic import SemanticAnalyzer, SemanticError
 from src.main import read_source_file, run_file, analyze_source, AnalysisResult
 
 
@@ -835,7 +835,7 @@ class TestIntegracaoGUIEAPI(unittest.TestCase):
         # Testa instanciação da GUI e execução de métodos sem abrir janela modal
         try:
             import tkinter as tk
-            from src.gui import CompiladorGUI
+            from src.interfaces.gui import CompiladorGUI
             app = CompiladorGUI()
             app.update_idletasks()
 
@@ -1013,7 +1013,7 @@ class TestArquiteturaTriplaEWebGUI(unittest.TestCase):
         import json
         import threading
         import urllib.request
-        from src.web_gui import create_web_server
+        from src.interfaces.web_gui import create_web_server
 
         server, url = create_web_server(host="127.0.0.1", preferred_port=0)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1081,9 +1081,9 @@ class TestArquiteturaTriplaEWebGUI(unittest.TestCase):
 
     def test_fallback_automatico_quando_tkinter_indisponivel(self):
         from unittest.mock import patch
-        import src.gui as gui_mod
+        import src.interfaces.gui as gui_mod
         import src.main as main_mod
-        import src.web_gui as web_gui_mod
+        import src.interfaces.web_gui as web_gui_mod
 
         with patch.object(gui_mod, "TKINTER_AVAILABLE", False):
             with patch.object(web_gui_mod, "start_web_gui") as mock_web:
@@ -1098,7 +1098,7 @@ class TestArquiteturaTriplaEWebGUI(unittest.TestCase):
     def test_main_cli_flags(self):
         from unittest.mock import patch
         import src.main as main_mod
-        import src.web_gui as web_gui_mod
+        import src.interfaces.web_gui as web_gui_mod
 
         # Flag --web inicia start_web_gui
         with patch.object(web_gui_mod, "start_web_gui") as mock_web:

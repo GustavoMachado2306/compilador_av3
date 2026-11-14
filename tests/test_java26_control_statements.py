@@ -6,7 +6,7 @@ StatementNoShortIf, assert, throw, synchronized, return e yield.
 
 import unittest
 from src.main import analyze_source
-from src.ast_nodes import (
+from src.compiler.ast_nodes import (
     Block, EmptyStatement, ExpressionStatement, Assignment, UnaryOp,
     MethodCall, ObjectCreationExpression, IfStatement, WhileStatement,
     AssertStatement, ThrowStatement, SynchronizedStatement, ReturnStatement,

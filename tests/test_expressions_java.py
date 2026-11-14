@@ -41,10 +41,10 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from src.token import TokenType
-from src.lexer import Lexer
-from src.parser import Parser, SyntacticError
-from src.ast_nodes import (
+from src.compiler.token import TokenType
+from src.compiler.lexer import Lexer
+from src.compiler.parser import Parser, SyntacticError
+from src.compiler.ast_nodes import (
     CompilationUnit, ClassDeclaration, MethodDeclaration, Block,
     ReturnStatement, ExpressionStatement, IfStatement, WhileStatement,
     ForStatement, BinaryOp, UnaryOp, Assignment, Literal, Identifier,

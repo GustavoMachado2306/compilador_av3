@@ -1,6 +1,6 @@
 import unittest
 from src.main import analyze_source
-from src.ast_nodes import LambdaExpression
+from src.compiler.ast_nodes import LambdaExpression
 
 
 class TestJava26LambdaExpressionsS8(unittest.TestCase):

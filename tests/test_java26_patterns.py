@@ -5,9 +5,9 @@ e Formas Sintáticas da Gramática Java SE 26 (JLS §14.30.1).
 
 import unittest
 from src.main import analyze_source
-from src.parser import Parser
-from src.lexer import Lexer
-from src.ast_nodes import (
+from src.compiler.parser import Parser
+from src.compiler.lexer import Lexer
+from src.compiler.ast_nodes import (
     CompilationUnit, TypePattern, RecordPattern, MatchAllPattern, Guard,
     PatternCaseLabel, PatternInstanceOfExpression, PatternVariable, SwitchStatement
 )
