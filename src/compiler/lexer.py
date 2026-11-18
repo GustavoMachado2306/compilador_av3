@@ -136,6 +136,131 @@ SPECIAL_LITERALS = {
     "null": TokenType.NULL_LITERAL,
 }
 
+# =============================================================================
+# SEÇÃO 1.1: CLASSIFICAÇÃO CENTRALIZADA DE PALAVRAS RESERVADAS E CONTEXTUAIS
+# =============================================================================
+KEYWORD_CLASSIFICATIONS = {
+    # Tipos primitivos e tipo especial void
+    "byte": "tipo_primitivo",
+    "short": "tipo_primitivo",
+    "char": "tipo_primitivo",
+    "int": "tipo_primitivo",
+    "long": "tipo_primitivo",
+    "float": "tipo_primitivo",
+    "double": "tipo_primitivo",
+    "boolean": "tipo_primitivo",
+    "void": "tipo_vazio",
+
+    # Declarações e estrutura
+    "class": "declaracao_classe",
+    "interface": "declaracao_interface",
+    "enum": "declaracao_enum",
+    "package": "declaracao_pacote",
+    "import": "importacao",
+    "extends": "heranca",
+    "implements": "heranca",
+    "new": "instanciacao",
+
+    # Condicionais e seleção switch
+    "if": "condicional",
+    "else": "condicional",
+    "switch": "condicional",
+    "case": "padrao_switch",
+    "default": "padrao_switch",
+
+    # Repetição
+    "for": "repeticao",
+    "while": "repeticao",
+    "do": "repeticao",
+
+    # Controle de fluxo e retorno
+    "break": "controle_fluxo",
+    "continue": "controle_fluxo",
+    "return": "controle_retorno",
+
+    # Tratamento de exceções e asserção
+    "try": "tratamento_excecao",
+    "catch": "tratamento_excecao",
+    "finally": "tratamento_excecao",
+    "throw": "tratamento_excecao",
+    "throws": "tratamento_excecao",
+    "assert": "tratamento_excecao",
+
+    # Modificadores de acesso e demais modificadores
+    "public": "modificador_acesso",
+    "private": "modificador_acesso",
+    "protected": "modificador_acesso",
+    "static": "modificador",
+    "final": "modificador",
+    "abstract": "modificador",
+    "native": "modificador",
+    "synchronized": "modificador",
+    "transient": "modificador",
+    "volatile": "modificador",
+    "strictfp": "modificador",
+
+    # Referências de objeto e operador de tipo
+    "this": "referencia_objeto",
+    "super": "referencia_objeto",
+    "instanceof": "operador_tipo",
+
+    # Palavra reservada legada sem uso ativo na sintaxe Java
+    "const": "reservada_legada",
+}
+
+SPECIAL_LITERAL_CLASSIFICATIONS = {
+    "true": "literal_booleano",
+    "false": "literal_booleano",
+    "null": "literal_nulo",
+}
+
+CONTEXTUAL_KEYWORD_CLASSIFICATIONS = {
+    # Inferência de tipo (var)
+    "var": "inferencia_tipo",
+
+    # Declarações de record e hierarquia selada
+    "record": "declaracao_record",
+    "sealed": "modificador",
+    "non-sealed": "modificador",
+    "permits": "heranca",
+
+    # Retorno em switch expression e guarda de pattern
+    "yield": "controle_retorno",
+    "when": "padrao_switch",
+
+    # Sistema de módulos (JPMS) e import module
+    "module": "modulo",
+    "open": "modulo",
+    "opens": "modulo",
+    "requires": "modulo",
+    "transitive": "modulo",
+    "exports": "modulo",
+    "to": "modulo",
+    "uses": "modulo",
+    "provides": "modulo",
+    "with": "modulo",
+}
+
+WORD_CLASSIFICATIONS = {
+    **KEYWORD_CLASSIFICATIONS,
+    **SPECIAL_LITERAL_CLASSIFICATIONS,
+    **CONTEXTUAL_KEYWORD_CLASSIFICATIONS,
+}
+
+
+def classify_keyword(lexeme: str, include_contextual: bool = False) -> str:
+    """
+    Retorna a classificação funcional de uma palavra reservada, literal reservado
+    ou palavra-chave contextual reconhecida pelo compilador.
+    """
+    if lexeme in KEYWORD_CLASSIFICATIONS:
+        return KEYWORD_CLASSIFICATIONS[lexeme]
+    if lexeme in SPECIAL_LITERAL_CLASSIFICATIONS:
+        return SPECIAL_LITERAL_CLASSIFICATIONS[lexeme]
+    if include_contextual and lexeme in CONTEXTUAL_KEYWORD_CLASSIFICATIONS:
+        return CONTEXTUAL_KEYWORD_CLASSIFICATIONS[lexeme]
+    return "outro"
+
 
 # =============================================================================
 # SEÇÃO 2: ESTRUTURA DE ERRO LÉXICO PADRONIZADA

@@ -273,8 +273,8 @@ class SemanticAnalyzer:
             dims = int(extra_dims or 0)
 
         if base == "var":
-            if register_line is not None and hasattr(self.symbols, "register_type"):
-                self.symbols.register_type("var", register_line, category="palavra_reservada")
+            if register_line is not None and hasattr(self.symbols, "register_keyword"):
+                self.symbols.register_keyword("var", register_line, contextual=True)
             return "var" + ("[]" * dims)
 
         full = f"{base}{'[]' * dims}"
@@ -814,8 +814,8 @@ class SemanticAnalyzer:
         if declarators:
             base_ref = getattr(stmt, "type_ref", None) or getattr(stmt, "type_name", None)
             is_var = bool(getattr(stmt, "is_var", False)) or (getattr(base_ref, "name", None) == "var")
-            if is_var and hasattr(self.symbols, "register_type"):
-                self.symbols.register_type("var", line, category="palavra_reservada")
+            if is_var and hasattr(self.symbols, "register_keyword"):
+                self.symbols.register_keyword("var", line, contextual=True)
             for decl in declarators:
                 d_id = getattr(decl, "id", None)
                 v_name = getattr(d_id, "name", None) if d_id else None
@@ -837,8 +837,8 @@ class SemanticAnalyzer:
         is_var = bool(getattr(stmt, "is_var", False)) or getattr(stmt, "type_name", None) == "var"
         init = getattr(stmt, "initializer", None)
         if is_var:
-            if hasattr(self.symbols, "register_type"):
-                self.symbols.register_type("var", line, category="palavra_reservada")
+            if hasattr(self.symbols, "register_keyword"):
+                self.symbols.register_keyword("var", line, contextual=True)
             v_type = self._infer_initializer_type(init)
         else:
             raw_type = getattr(stmt, "type_ref", None) or getattr(stmt, "type_name", None)

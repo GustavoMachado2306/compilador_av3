@@ -300,9 +300,10 @@ class TestSemanticCore(unittest.TestCase):
             self.assertEqual(names.count(kw), 1, msg=f"Palavra reservada '{kw}' duplicada na tabela")
             self.assertEqual(by_name[kw]["category"], "palavra_reservada")
 
-        # Tipos primitivos e void têm tipo='tipo'; demais palavras reservadas não são identificadores comuns
-        for kw_tipo in ("int", "double", "boolean", "void"):
-            self.assertEqual(by_name[kw_tipo]["type"], "tipo")
+        # Tipos primitivos têm tipo='tipo_primitivo' e void tem tipo='tipo_vazio'
+        for kw_tipo in ("int", "double", "boolean"):
+            self.assertEqual(by_name[kw_tipo]["type"], "tipo_primitivo")
+        self.assertEqual(by_name["void"]["type"], "tipo_vazio")
         self.assertEqual(by_name["String"]["category"], "tipo")
 
         # Identificadores declarados diferenciados por categoria

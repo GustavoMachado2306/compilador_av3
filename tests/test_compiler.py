@@ -344,7 +344,7 @@ class TestCompiladorOficial(unittest.TestCase):
         self.assertIsNotNone(sym_int)
         self.assertEqual(sym_int["name"], "int")
         self.assertEqual(sym_int["category"], "palavra_reservada")
-        self.assertEqual(sym_int["type"], "tipo")
+        self.assertEqual(sym_int["type"], "tipo_primitivo")
         self.assertEqual(sym_int["line"], "-")
         self.assertEqual(sym_int["order"], 1)
 
@@ -918,7 +918,7 @@ class TestIntegracaoGUIEAPI(unittest.TestCase):
         self.assertEqual(all_syms[0]["order"], 1)
         self.assertEqual(all_syms[0]["name"], "int")
         self.assertEqual(all_syms[0]["category"], "palavra_reservada")
-        self.assertEqual(all_syms[0]["type"], "tipo")
+        self.assertEqual(all_syms[0]["type"], "tipo_primitivo")
         self.assertEqual(all_syms[0]["line"], "-")
 
         # Ordem 2: String
